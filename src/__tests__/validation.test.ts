@@ -1,5 +1,5 @@
 import request from "supertest";
-import app from "../index";
+import app from "../index.js";
 
 describe("Input validation middleware", () => {
   it("should allow valid slot creation", async () => {

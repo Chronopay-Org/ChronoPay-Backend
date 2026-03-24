@@ -1,11 +1,17 @@
 import express from "express";
-import cors from "cors";
-import { validateRequiredFields } from "./middleware/validation";
+import { validateRequiredFields } from "./middleware/validation.js";
+import { createCORSMiddleware } from "./middleware/cors.js";
+import { getCORSConfig, validateCORSConfig } from "./config/cors.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
-app.use(cors());
+// Initialize CORS configuration from environment
+const corsConfig = getCORSConfig();
+validateCORSConfig(corsConfig);
+
+// Apply CORS middleware with allowlist validation
+app.use(createCORSMiddleware(corsConfig));
 app.use(express.json());
 
 import swaggerUi from "swagger-ui-express";
