@@ -1,10 +1,13 @@
 import express from "express";
 import cors from "cors";
 import { validateRequiredFields } from "./middleware/validation";
+import { tracingMiddleware } from "./tracing/middleware";
+import { withSpan } from "./tracing/hooks";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
+app.use(tracingMiddleware);
 app.use(cors());
 app.use(express.json());
 
@@ -33,17 +36,27 @@ app.get("/api/v1/slots", (_req, res) => {
 app.post(
   "/api/v1/slots",
   validateRequiredFields(["professional", "startTime", "endTime"]),
-  (req, res) => {
+  async (req, res) => {
     const { professional, startTime, endTime } = req.body;
+
+    // Simulate business logic wrapped in a tracing span
+    const slot = await withSpan(
+      "create-slot",
+      { professional, startTime, endTime },
+      async () => {
+        // Business logic would go here
+        return {
+          id: 1,
+          professional,
+          startTime,
+          endTime,
+        };
+      },
+    );
 
     res.status(201).json({
       success: true,
-      slot: {
-        id: 1,
-        professional,
-        startTime,
-        endTime,
-      },
+      slot,
     });
   },
 );
