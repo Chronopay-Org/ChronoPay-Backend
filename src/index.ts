@@ -6,6 +6,7 @@ import {
   errorLoggerMiddleware,
 } from "./middleware/requestLogger.js";
 import { validateRequiredFields } from "./middleware/validation";
+import rateLimiter from "./middleware/rateLimiter.js";
 
 import { loadEnvConfig, type EnvConfig } from "./config/env.js";
 import {

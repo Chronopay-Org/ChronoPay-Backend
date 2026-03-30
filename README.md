@@ -102,6 +102,56 @@ Additional reviewer-focused notes live in:
   - Example:
     - `/api/v1/slots?page=2&limit=5`
 
+## Rate Limiting
+
+All API endpoints are protected by per-IP rate limiting using
+[`express-rate-limit`](https://github.com/express-rate-limit/express-rate-limit).
+
+### Default behavior
+
+| Setting       | Default    | Description                                     |
+|---------------|------------|-------------------------------------------------|
+| Window        | 15 minutes | Rolling time window per IP address              |
+| Max requests  | 100        | Maximum requests allowed within the window      |
+| Response code | `429`      | HTTP status returned when limit is exceeded     |
+
+### Configuration
+
+Override defaults with environment variables:
+
+| Variable               | Description                             | Example         |
+|------------------------|-----------------------------------------|-----------------|
+| `RATE_LIMIT_WINDOW_MS` | Window duration in milliseconds         | `900000` (15 m) |
+| `RATE_LIMIT_MAX`       | Max requests per window per IP          | `100`           |
+
+### 429 response format
+
+When the rate limit is exceeded the API returns the standard error envelope:
+
+```json
+{
+  "success": false,
+  "error": "Too many requests, please try again later."
+}
+```
+
+### Headers
+
+All responses include a `RateLimit` header (RFC draft-7 combined format) that
+exposes the current limit, remaining count, and reset time. Legacy
+`X-RateLimit-*` headers are disabled.
+
+### Trust proxy (production deployments)
+
+When the API runs behind a reverse proxy (Nginx, a load balancer, cloud
+gateway), set `TRUST_PROXY=true` in your environment. Without it, Express reads
+`req.ip` from the TCP socket — which will be the proxy's address — causing all
+clients to share a single rate-limit counter.
+
+Do **not** set `TRUST_PROXY=true` when the API is directly internet-exposed
+without a proxy: clients could spoof `X-Forwarded-For` and bypass per-IP
+rate limiting.
+
 ## Contributing
 
 1. Fork the repo and create a branch from `main`.
