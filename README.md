@@ -167,6 +167,18 @@ On every push and pull request to `main`, GitHub Actions runs:
 - **Build**: `npm run build`
 - **Tests**: `npm test`
 
+## Environment Variables
+
+| Variable    | Required | Description |
+|-------------|----------|-------------|
+| `REDIS_URL` | Yes      | Redis connection URL used for idempotency key storage |
+
+```env
+REDIS_URL=redis://localhost:6379
+```
+
+> Idempotency keys are stored in Redis with a 24-hour TTL. Without Redis the server will start, but idempotency-protected endpoints (`POST /api/v1/slots`) will fail.
+
 ## License
 
 MIT
