@@ -83,10 +83,20 @@ Additional reviewer-focused notes live in:
 | `npm run dev`   | Run dev server with tsx watch  |
 | `npm test`      | Run Jest tests                 |
 
-## API (stub)
+## API (slot listing)
 
 - `GET /health` — Health check; returns `{ status: "ok", service: "chronopay-backend" }`
-- `GET /api/v1/slots` — List time slots (currently returns empty array)
+- `GET /api/v1/slots` — List time slots with pagination
+  - Query parameters:
+    - `page` (integer, default `1`, min `1`)
+    - `limit` (integer, default `10`, min `1`, max `100`)
+  - Response:
+    - `{ data: Slot[], page, limit, total }`
+  - Error responses:
+    - `400` for invalid page/limit
+    - `500` for backend errors
+  - Example:
+    - `/api/v1/slots?page=2&limit=5`
 
 ## Contributing
 
