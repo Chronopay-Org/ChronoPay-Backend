@@ -1,0 +1,5 @@
+src/__tests__/db.test.ts(70,37): error TS2345: Argument of type '{ rowCount: number; }' is not assignable to parameter of type 'never'.
+src/__tests__/db.test.ts(85,37): error TS2345: Argument of type 'Error' is not assignable to parameter of type 'never'.
+src/__tests__/db.test.ts(102,37): error TS2345: Argument of type '{ rowCount: number; rows: never[]; }' is not assignable to parameter of type 'never'.
+src/__tests__/db.test.ts(119,37): error TS2345: Argument of type 'Error' is not assignable to parameter of type 'never'.
+src/__tests__/db.test.ts(138,35): error TS2345: Argument of type 'undefined' is not assignable to parameter of type 'never'.

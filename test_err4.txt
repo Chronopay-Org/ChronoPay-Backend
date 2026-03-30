@@ -1,0 +1,74 @@
+
+> chronopay-backend@0.1.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --coverage
+
+ts-jest[config] (WARN) [94mmessage[0m[90m TS151002: [0mUsing hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+(node:19240) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS src/__tests__/db.test.ts (9.28 s)
+  ● Console
+
+    console.log
+      [dotenv@17.3.1] injecting env (1) from .env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+
+      at _log (node_modules/dotenv/lib/main.js:139:11)
+
+    console.log
+      [dotenv@17.3.1] injecting env (0) from .env -- tip: ⚡️ secrets for agents: https://dotenvx.com/as2
+
+      at _log (node_modules/dotenv/lib/main.js:139:11)
+
+    console.log
+      [dotenv@17.3.1] injecting env (0) from .env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+
+      at _log (node_modules/dotenv/lib/main.js:139:11)
+
+    console.log
+      [dotenv@17.3.1] injecting env (0) from .env -- tip: ⚡️ secrets for agents: https://dotenvx.com/as2
+
+      at _log (node_modules/dotenv/lib/main.js:139:11)
+
+    console.log
+      Closing PostgreSQL connection pool...
+
+      at log (src/db/pool.ts:47:11)
+
+    console.log
+      PostgreSQL connection pool closed.
+
+      at log (src/db/pool.ts:49:11)
+
+PASS src/__tests__/validation.test.ts
+  ● Console
+
+    console.log
+      [dotenv@17.3.1] injecting env (2) from .env -- tip: ⚙️  enable debug logging with { debug: true }
+
+      at _log (node_modules/dotenv/lib/main.js:139:11)
+
+
+  ●  Cannot log after tests are done. Did you forget to wait for something async in your test?
+    Attempted to log "FATAL: Failed to connect to PostgreSQL database on startup. { message: 'Unknown error' }".
+
+    [0m [90m 66 |[39m     }
+     [90m 67 |[39m   } [36mcatch[39m (error) {
+    [31m[1m>[22m[39m[90m 68 |[39m     console[33m.[39merror([32m"FATAL: Failed to connect to PostgreSQL database on startup."[39m[33m,[39m {
+     [90m    |[39m             [31m[1m^[22m[39m
+     [90m 69 |[39m       message[33m:[39m error [36minstanceof[39m [33mError[39m [33m?[39m error[33m.[39mmessage [33m:[39m [32m"Unknown error"[39m[33m,[39m
+     [90m 70 |[39m       [90m// Exclude sensitive data by ONLY logging the generic message/stack[39m
+     [90m 71 |[39m     })[33m;[39m[0m
+
+      at console.error (node_modules/@jest/console/build/BufferedConsole.js:127:10)
+      at error (src/db/pool.ts:68:13)
+
+  ●  process.exit called with "1"
+
+    [0m [90m 70 |[39m       [90m// Exclude sensitive data by ONLY logging the generic message/stack[39m
+     [90m 71 |[39m     })[33m;[39m
+    [31m[1m>[22m[39m[90m 72 |[39m     process[33m.[39mexit([35m1[39m)[33m;[39m
+     [90m    |[39m             [31m[1m^[22m[39m
+     [90m 73 |[39m   }
+     [90m 74 |[39m }[33m;[39m
+     [90m 75 |[39m[0m
+
+      at exit (src/db/pool.ts:72:13)
