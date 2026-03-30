@@ -1,16 +1,5 @@
 import request from "supertest";
 import app from "../index.js";
-import { SignJWT } from "jose";
-
-const TEST_SECRET = "test-secret-for-validation-tests";
-
-async function makeToken(): Promise<string> {
-  return new SignJWT({ sub: "test-user" })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime("1h")
-    .sign(new TextEncoder().encode(TEST_SECRET));
-}
 
 describe("Input validation middleware", () => {
   let token: string;

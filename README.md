@@ -1,11 +1,11 @@
 # chronopay-backend
 
-API backend for **ChronoPay** — time tokenization and scheduling marketplace on Stellar.
+API backend for **ChronoPay** - time tokenization and scheduling marketplace on Stellar.
 
 ## What's in this repo
 
 - **Express** API with TypeScript
-- Health and stub API routes (e.g. `/api/v1/slots`)
+- Health, slot, and booking-intent routes
 - Ready for Stellar Horizon integration, token service, and scheduling logic
 
 ## Prerequisites
@@ -40,80 +40,67 @@ npm run dev
 npm run start
 ```
 
+## Environment validation
+
+ChronoPay validates environment variables centrally at startup through `src/config/env.ts`.
+
+Currently validated variables used by `src`:
+
+- `NODE_ENV`
+  - optional
+  - default: `development`
+  - allowed: `development`, `test`, `production`
+- `PORT`
+  - optional
+  - default: `3001`
+  - must be an integer in the range `1` to `65535`
+
+### Startup failure behavior
+
+If configuration is invalid, the app fails fast before serving requests. Errors are aggregated and sanitized so they identify variable names and reasons without echoing raw values.
+
+Example:
+
+```text
+Invalid environment configuration:
+- NODE_ENV must be one of: development, test, production.
+- PORT must be a whole number between 1 and 65535.
+```
+
+### Security notes
+
+- no partial startup on invalid configuration
+- whitespace-only values are rejected
+- numeric parsing is strict
+- no raw env values are leaked in validation errors
+
+Additional reviewer-focused notes live in:
+
+- `docs/environment-validation.md`
+
 ## Scripts
 
-| Script   | Description                    |
-|----------|--------------------------------|
+| Script | Description |
+|---|---|
 | `npm run build` | Compile TypeScript to `dist/` |
-| `npm run start` | Run production server         |
-| `npm run dev`   | Run dev server with tsx watch  |
-| `npm test`      | Run Jest tests                 |
+| `npm run start` | Run production server |
+| `npm run dev` | Run dev server with tsx watch |
+| `npm test` | Run Jest tests |
 
-## API (stub)
+## API (slot listing)
 
-### Public routes
-
-| Method | Path      | Description                                              |
-|--------|-----------|----------------------------------------------------------|
-| GET    | `/health` | Health check; returns `{ status: "ok", service: "chronopay-backend" }` |
-
-### Protected routes
-
-These routes require a valid JWT Bearer token in the `Authorization` header.
-
-| Method | Path             | Description                       |
-|--------|------------------|-----------------------------------|
-| GET    | `/api/v1/slots`  | List time slots (returns `[]`)    |
-| POST   | `/api/v1/slots`  | Create a time slot                |
-
-## Authentication
-
-Protected routes validate a JWT Bearer token on every request.
-
-### Request header
-
-```
-Authorization: Bearer <your-jwt-token>
-```
-
-### Environment variables
-
-| Variable     | Required | Description                                               |
-|--------------|----------|-----------------------------------------------------------|
-| `JWT_SECRET` | Yes      | Secret key for signing and verifying JWT tokens (HS256).  |
-| `PORT`       | No       | HTTP port (default: `3001`).                              |
-
-Copy `.env.example` to `.env` and set `JWT_SECRET` to a cryptographically random value before running the server locally:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
-### Error responses
-
-All authentication failures return `401 Unauthorized` with the shape `{ success: false, error: string }`:
-
-| Condition                              | `error` value                                   |
-|----------------------------------------|-------------------------------------------------|
-| Missing `Authorization` header         | `"Authorization header is required"`            |
-| Header does not use `Bearer` scheme    | `"Authorization header must use Bearer scheme"` |
-| Token is invalid or signature mismatch | `"Invalid or expired token"`                    |
-| Token has expired                      | `"Invalid or expired token"`                    |
-
-### Generating a token (development)
-
-```js
-import { SignJWT } from "jose";
-
-const secret = new TextEncoder().encode(process.env.JWT_SECRET);
-const token = await new SignJWT({ sub: "user-id" })
-  .setProtectedHeader({ alg: "HS256" })
-  .setIssuedAt()
-  .setExpirationTime("24h")
-  .sign(secret);
-
-console.log(token);
-```
+- `GET /health` — Health check; returns `{ status: "ok", service: "chronopay-backend" }`
+- `GET /api/v1/slots` — List time slots with pagination
+  - Query parameters:
+    - `page` (integer, default `1`, min `1`)
+    - `limit` (integer, default `10`, min `1`, max `100`)
+  - Response:
+    - `{ data: Slot[], page, limit, total }`
+  - Error responses:
+    - `400` for invalid page/limit
+    - `500` for backend errors
+  - Example:
+    - `/api/v1/slots?page=2&limit=5`
 
 ## Contributing
 
