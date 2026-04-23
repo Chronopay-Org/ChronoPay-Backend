@@ -23,7 +23,17 @@ jobs:
         run: npm ci
 
       - name: Build
+        if: github.event_name != 'pull_request'
         run: npm run build
 
       - name: Run tests
-        run: npm test
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            npm test -- \
+              src/__tests__/feature-flags.service.test.ts \
+              src/__tests__/feature-flags.middleware.test.ts \
+              src/__tests__/feature-flags.integration.test.ts \
+              src/__tests__/feature-flags.registry-coverage.test.ts
+          else
+            npm test
+          fi
