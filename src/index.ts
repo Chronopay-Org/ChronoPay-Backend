@@ -8,6 +8,7 @@ import { errorHandler, notFoundMiddleware } from "./middleware/errorHandler.js";
 import { requireFeatureFlag } from "./middleware/featureFlags.js";
 import { authenticateToken, requireAuthenticatedActor } from "./middleware/auth.js";
 import { requireInternalHmacAuth } from "./middleware/internalHmacAuth.js";
+import { requestIdMiddleware } from "./middleware/requestId.js";
 import {
   BookingIntentError,
   BookingIntentService,
@@ -50,6 +51,7 @@ export function createApp(options?: {
     options?.bookingIntentService ??
     new BookingIntentService(new InMemoryBookingIntentRepository(), slotRepository);
 
+  app.use(requestIdMiddleware);
   app.use(createRequestLogger());
   app.use(tracingMiddleware);
   app.use(cors());

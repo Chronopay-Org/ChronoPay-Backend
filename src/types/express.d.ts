@@ -16,6 +16,7 @@ declare module "express-serve-static-core" {
       exp?: number;
       [key: string]: unknown;
     };
+    requestId?: string;
     flags?: FeatureFlagAccessor;
   }
 }
