@@ -14,7 +14,8 @@ export function featureFlagContextMiddleware(
 export function requireFeatureFlag(flag: FeatureFlagName) {
   return (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!req.flags.isEnabled(flag)) {
+      const flags = req.flags ?? getFeatureFlagAccessor();
+      if (!flags.isEnabled(flag)) {
         return res.status(503).json({
           success: false,
           code: "FEATURE_DISABLED",

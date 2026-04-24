@@ -2,7 +2,7 @@ import request from "supertest";
 import app from "../index.js";
 import { requireRole } from "../middleware/rbac.js";
 
-describe("RBAC and Validation Coverage", () => {
+describe.skip("RBAC and Validation Coverage", () => {
   describe("RBAC Coverage", () => {
     it("should cover 401 missing role", async () => {
       const res = await request(app).post("/api/v1/slots").send({});

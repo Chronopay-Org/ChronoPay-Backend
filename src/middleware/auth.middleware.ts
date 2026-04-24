@@ -92,7 +92,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
     }
 
     // Attach user to request
-    req.user = user;
+    req.user = user as Request["user"];
     next();
   } catch (error) {
     return res.status(500).json({
@@ -117,7 +117,7 @@ export function authorize(...allowedRoles: UserRole[]) {
       });
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
+    if (!allowedRoles.includes(req.user.role as UserRole)) {
       return res.status(403).json({
         success: false,
         error: "Insufficient permissions",
