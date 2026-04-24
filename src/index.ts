@@ -6,53 +6,18 @@ import {
   createRequestLogger,
   errorLoggerMiddleware,
 } from "./middleware/requestLogger.js";
-import { validateRequiredFields } from "./middleware/validation";
+import { validateRequiredFields } from "./middleware/validation.js";
 import rateLimiter from "./middleware/rateLimiter.js";
 
-import { loadEnvConfig, type EnvConfig } from "./config/env.js";
+import { loadEnvConfig } from "./config/env.js";
 import {
-  requireAuthenticatedActor,
-  type AuthenticatedRequest,
-} from "./middleware/auth.js";
-import { validateRequiredFields } from "./middleware/validation.js";
-import {
-  BookingIntentError,
   BookingIntentService,
-  parseCreateBookingIntentBody,
 } from "./modules/booking-intents/booking-intent-service.js";
 import { InMemoryBookingIntentRepository } from "./modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
+import { errorHandler, notFoundMiddleware } from "./middleware/errorHandler.js";
 
-// Request logging middleware (must be first)
-app.use(createRequestLogger());
-
-// Initialize CORS configuration from environment
-const corsConfig = getCORSConfig();
-validateCORSConfig(corsConfig);
-
-// Apply CORS middleware with allowlist validation
-app.use(createCORSMiddleware(corsConfig));
-app.use(express.json());
-app.use(metricsMiddleware);
-
-/**
- * @api {get} /metrics Get Prometheus metrics
- * @apiName GetMetrics
- * @apiGroup Monitoring
- * @apiDescription Exposes application metrics in Prometheus format.
- */
-app.get("/metrics", async (_req, res) => {
-  try {
-    res.set("Content-Type", register.contentType);
-    res.end(await register.metrics());
-  } catch (err) {
-    res.status(500).end(err);
-  }
-});
-
-interface AppListener {
-  listen(port: number, callback?: () => void): unknown;
-}
+const config = loadEnvConfig();
 
 export function createApp(options?: {
   slotRepository?: InMemorySlotRepository;
@@ -66,17 +31,7 @@ export function createApp(options?: {
 
   app.use(cors());
   app.use(express.json());
-
-  const swaggerOptions = {
-    swaggerDefinition: {
-      openapi: "3.0.0",
-      info: { title: "ChronoPay API", version: "1.0.0" },
-    },
-    apis: ["./src/routes/*.ts"], // adjust if needed
-  };
-
-  const specs = swaggerJsdoc(swaggerOptions);
-  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs));
+  app.use(createRequestLogger());
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", service: "chronopay-backend" });
@@ -104,110 +59,23 @@ export function createApp(options?: {
     },
   );
 
-const options = {
-  definition: {
-    openapi: "3.0.0",
-    info: { title: "ChronoPay API", version: "1.0.0" },
-    components: {
-      securitySchemes: {
-        bearerAuth: {
-          type: "http",
-          scheme: "bearer",
-          bearerFormat: "JWT",
-        },
-      },
-    },
-  },
-  apis: ["./src/index.ts"], // adjust if needed
-};
+  app.use(notFoundMiddleware);
+  app.use(errorLoggerMiddleware);
+  app.use(errorHandler);
 
-const specs = swaggerJsdoc(swaggerOptions);
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs));
+  return app;
+}
 
-/**
- * @swagger
- * /health:
- *   get:
- *     summary: Health check endpoint
- *     description: Returns the health status of the service
- *     responses:
- *       200:
- *         description: Service is healthy
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: string
- *                   example: ok
- *                 service:
- *                   type: string
- *                   example: chronopay-backend
- *                 timestamp:
- *                   type: string
- *                   example: 2023-10-01T12:00:00.000Z
- *                 version:
- *                   type: string
- *                   example: 1.0.0
- */
-app.get("/health", (_req, res) => {
-  const healthStatus = { status: "ok", service: "chronopay-backend" };
-  logInfo("Health check endpoint called", { endpoint: "/health" });
-  res.json(healthStatus);
-});
-
-app.get("/api/v1/slots", (_req, res) => {
-  logInfo("Slots endpoint called", { endpoint: "/api/v1/slots" });
-  res.json({ slots: [] });
-});
-
-// Error handling middleware (must be last)
-app.use(errorLoggerMiddleware);
-app.post(
-  "/api/v1/slots",
-  authenticateToken, // auth first: reject unauthenticated requests before validation
-  validateRequiredFields(["professional", "startTime", "endTime"]),
-  async (req, res) => {
-    const { professional, startTime, endTime } = req.body;
-
-    const slot = {
-      id: Date.now(),
-      professional,
-      startTime,
-      endTime,
-    };
-
-    scheduleReminders(slot.id, startTime);
-
-    res.status(201).json({
-      success: true,
-      slot,
-    });
-  },
-);
-
-// 404 handler for unmatched routes
-app.use(notFoundMiddleware);
-
-// Global error handler
-app.use(errorHandler);
+const app = createApp();
 
 if (process.env.NODE_ENV !== "test") {
-  startScheduler();
-
+  const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     logInfo(`ChronoPay API listening on http://localhost:${PORT}`, {
       port: PORT,
       environment: process.env.NODE_ENV || "development",
     });
   });
-}
-
-const app = createApp();
-
-if (config.nodeEnv !== "test") {
-  startServer(app, config);
 }
 
 export default app;

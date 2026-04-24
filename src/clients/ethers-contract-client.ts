@@ -2,6 +2,8 @@ import { ethers } from "ethers";
 import { IContractClient } from "./contract-client.interface.js";
 import { ContractInteractionArgs, ContractCallResult, TransactionResult } from "./types.js";
 import { ContractService } from "../services/contract.service.js";
+import { withTimeout, withRetry } from "../utils/outbound-helper.js";
+import { timeoutConfig } from "../config/timeouts.js";
 
 /**
  * Ethers.js implementation of the IContractClient.
@@ -41,15 +43,25 @@ export class EthersContractClient implements IContractClient {
   async call<T>(args: ContractInteractionArgs): Promise<ContractCallResult<T>> {
     const contract = this.createContract(args.address, args.abi, this.provider);
     
-    const description = `Contract call: ${args.method} at ${args.address}`;
-    
-    const data = await this.contractService.call(description, async () => {
-      // Accessing the method dynamically; ethers.Contract handles this via Proxy
-      const method = contract.getFunction(args.method);
-      return await method(...args.args);
-    });
+    const data = await withRetry(
+      async (attempt) => {
+        return await withTimeout(
+          async () => {
+            const method = contract.getFunction(args.method);
+            return await method(...args.args);
+          },
+          timeoutConfig.http.contractMs,
+          "blockchain-rpc"
+        );
+      },
+      { serviceName: "blockchain-rpc" }
+    );
 
-    const blockNumber = await this.provider.getBlockNumber();
+    const blockNumber = await withTimeout(
+      async () => await this.provider.getBlockNumber(),
+      timeoutConfig.http.contractMs,
+      "blockchain-rpc"
+    );
 
     return {
       data,
@@ -71,16 +83,29 @@ export class EthersContractClient implements IContractClient {
 
     const contract = this.createContract(args.address, args.abi, this.signer);
     
-    const description = `Contract transaction: ${args.method} at ${args.address}`;
-    
-    const txResponse = await this.contractService.sendTransaction(description, async () => {
-      const method = contract.getFunction(args.method);
-      return await method(...args.args, args.options || {});
-    });
+    const txResponse = await withRetry(
+      async (attempt) => {
+        return await withTimeout(
+          async () => {
+            const method = contract.getFunction(args.method);
+            return await method(...args.args, args.options || {});
+          },
+          timeoutConfig.http.contractMs,
+          "blockchain-rpc"
+        );
+      },
+      { serviceName: "blockchain-rpc" }
+    );
 
     return {
       hash: txResponse.hash,
-      wait: async (confirmations?: number) => await txResponse.wait(confirmations),
+      wait: async (confirmations?: number) => {
+        return await withTimeout(
+          async () => await txResponse.wait(confirmations),
+          timeoutConfig.http.contractMs,
+          "blockchain-rpc"
+        );
+      },
     };
   }
 
