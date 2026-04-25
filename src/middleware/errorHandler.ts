@@ -19,7 +19,7 @@ import {
   ErrorRequestHandler,
   RequestHandler,
 } from "express";
-import { AppError, isAppError, getStatusCode } from "../errors/AppError.js";
+import { AppError, isAppError, getStatusCode, ContentNegotiationError } from "../errors/AppError.js";
 
 /**
  * Configuration options for error handling middleware
@@ -93,6 +93,16 @@ export function createErrorHandler(
   ): void => {
     // Log the error
     logError(err, req);
+
+    // Handle ContentNegotiationError with flat error envelope
+    if (err instanceof ContentNegotiationError) {
+      res.status(err.statusCode).json({
+        success: false,
+        code: err.code,
+        error: err.message,
+      });
+      return;
+    }
 
     // Determine if this is an operational error (expected)
     const isOperational = isAppError(err) && err.isOperational;

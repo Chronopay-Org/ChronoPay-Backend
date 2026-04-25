@@ -8,11 +8,14 @@ import {
   notFoundHandler,
 } from "./middleware/errorHandling.js";
 import { validateRequiredFields } from "./middleware/validation.js";
+import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 
 export interface AppFactoryOptions {
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
+  enableContentNegotiation?: boolean;
+  contentNegotiationExcludePaths?: string[];
 }
 
 function registerSwaggerDocs(app: express.Express) {
@@ -69,6 +72,16 @@ export function createApp(options: AppFactoryOptions = {}) {
   const app = express();
 
   app.use(cors());
+
+  // Content negotiation BEFORE express.json() to reject invalid Content-Type early
+  if (options.enableContentNegotiation !== false) {
+    app.use(
+      createContentNegotiationMiddleware({
+        excludePaths: options.contentNegotiationExcludePaths,
+      }),
+    );
+  }
+
   app.use(express.json({ limit: "100kb" }));
 
   if (options.enableDocs !== false) {
@@ -95,6 +108,12 @@ export function createApp(options: AppFactoryOptions = {}) {
       throw new Error("Intentional test fault");
     });
   }
+
+  // Ensure all API responses declare Content-Type: application/json
+  app.use((_req, res, next) => {
+    res.setHeader("Content-Type", "application/json");
+    next();
+  });
 
   app.use(notFoundHandler);
   app.use(jsonParseErrorHandler);
