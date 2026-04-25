@@ -525,6 +525,16 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(securityHeaders);
 
   app.use(cors());
+
+  // Content negotiation BEFORE express.json() to reject invalid Content-Type early
+  if (options.enableContentNegotiation !== false) {
+    app.use(
+      createContentNegotiationMiddleware({
+        excludePaths: options.contentNegotiationExcludePaths,
+      }),
+    );
+  }
+
   app.use(express.json({ limit: "100kb" }));
   app.use(createRequestLogger());
 
@@ -560,6 +570,12 @@ export function createApp(options: AppFactoryOptions = {}) {
       throw new Error("Intentional test fault");
     });
   }
+
+  // Ensure all API responses declare Content-Type: application/json
+  app.use((_req, res, next) => {
+    res.setHeader("Content-Type", "application/json");
+    next();
+  });
 
   app.use(notFoundHandler);
   app.use(jsonParseErrorHandler);
