@@ -159,7 +159,7 @@ export class SlotService {
       throw new SlotValidationError("startTime and endTime must be finite numbers");
     }
     if (input.startTime >= input.endTime) {
-      throw new SlotValidationError("startTime must be before endTime");
+      throw new SlotValidationError("endTime must be greater than startTime");
     }
 
     const slot: SlotRecord = {
@@ -201,7 +201,7 @@ export class SlotService {
       throw new SlotValidationError("startTime and endTime must be finite numbers");
     }
     if (newStart >= newEnd) {
-      throw new SlotValidationError("startTime must be before endTime");
+      throw new SlotValidationError("endTime must be greater than startTime");
     }
 
     const updated: SlotRecord = {
@@ -222,3 +222,6 @@ export class SlotService {
     this.cache?.invalidate(SLOTS_CACHE_KEY);
   }
 }
+
+// Singleton instance used by route handlers and tests
+export const slotService = new SlotService();
