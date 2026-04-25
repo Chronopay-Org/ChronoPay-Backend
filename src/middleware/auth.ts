@@ -80,6 +80,7 @@ export function requireAuthenticatedActor(
     const rawRole = req.header("x-chronopay-role");
 
     if (!rawUserId || rawUserId.trim().length === 0) {
+      emitAuthAudit(req, "AUTH_MISSING", 401);
       return res.status(401).json({
         success: false,
         error: "Authentication required.",
@@ -88,6 +89,8 @@ export function requireAuthenticatedActor(
 
     const role = parseRole(rawRole);
     if (!allowedRoles.includes(role)) {
+      // Safe to log the resolved role — it is a controlled enum value, not a raw header.
+      emitAuthAudit(req, "AUTH_FORBIDDEN", 403, { role });
       return res.status(403).json({
         success: false,
         error: "Role is not authorized for this action.",
