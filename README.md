@@ -96,6 +96,46 @@ Additional reviewer-focused notes live in:
 | `npm run start` | Run production server |
 | `npm run dev` | Run dev server with tsx watch |
 | `npm test` | Run Jest tests |
+| `npm run migrate` | Database migration CLI (see below) |
+
+## Database Migrations
+
+ChronoPay includes a migration framework with drift detection and safety checks.
+
+### Quick Commands
+
+```bash
+# Check migration status
+npm run migrate status
+
+# Validate migrations (no DB needed)
+npm run migrate validate
+
+# Check for drift and naming issues
+npm run migrate drift-check
+
+# Apply pending migrations
+npm run migrate up
+
+# Roll back last migration
+npm run migrate down
+```
+
+### Drift Detection
+
+Before deploying to any environment, run drift check to ensure schema consistency:
+
+```bash
+npm run migrate drift-check
+```
+
+This detects:
+- Orphaned migrations (applied but not in registry)
+- Name mismatches between code and database
+- Out-of-order application
+- Naming convention violations
+
+See [docs/database/migrations.md](docs/database/migrations.md) for complete documentation.
 
 ## API (slot listing)
 
