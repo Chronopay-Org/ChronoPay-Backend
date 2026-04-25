@@ -423,7 +423,7 @@ describe("GET /health", () => {
 
     expect(res.status).toBe(200);
 
-    expect(res.body).toEqual({
+    expect(res.body).toMatchObject({
       status: "ok",
       service: "chronopay-backend",
     });

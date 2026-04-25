@@ -5,7 +5,7 @@ import { requireRole } from "../middleware/rbac.js";
 describe("RBAC and Validation Coverage", () => {
   describe("RBAC Coverage", () => {
     it("should cover 401 missing role", async () => {
-      const res = await request(app).post("/api/v1/slots").send({});
+      const res = await request(app).post("/api/v1/slots").set("x-user-role", "").send({});
       expect(res.status).toBe(401);
     });
 
