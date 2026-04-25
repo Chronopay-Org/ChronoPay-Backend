@@ -1,72 +1,18 @@
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import { logInfo } from "./utils/logger.js";
+export { createApp } from "./app.js";
+export { resetSlotStore as __resetSlotsForTests } from "./routes/slots.js";
+import { createApp } from "./app.js";
+import { loadEnvConfig, type EnvConfig } from "./config/env.js";
 
-import {
-  createRequestLogger,
-  errorLoggerMiddleware,
-} from "./middleware/requestLogger.js";
-
-import { validateRequiredFields } from "./middleware/validation.js";
-import rateLimiter from "./middleware/rateLimiter.js";
-
-import {
-  BookingIntentService,
-} from "./modules/booking-intents/booking-intent-service.js";
-import { InMemoryBookingIntentRepository } from "./modules/booking-intents/booking-intent-repository.js";
-import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
-
-export function createApp() {
-  const app = express();
-
-  const slotRepository = new InMemorySlotRepository();
-  const bookingIntentService = new BookingIntentService(
-    new InMemoryBookingIntentRepository(),
-    slotRepository
-  );
-
-  // Middlewares
-  app.use(createRequestLogger());
-  app.use(cors());
-  app.use(express.json());
-
-  // Health
-  app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "chronopay-backend" });
+export function startServer(
+  server: { listen: (port: number, callback?: () => void) => unknown },
+  config: EnvConfig,
+) {
+  return server.listen(config.port, () => {
+    console.log(`ChronoPay API listening on http://localhost:${config.port}`);
   });
+}
 
-  // Get slots
-  app.get("/api/v1/slots", (_req, res) => {
-    res.json({ slots: slotRepository.list() });
-  });
-
-  // Create slot
-  app.post(
-    "/api/v1/slots",
-    validateRequiredFields(["professional", "startTime", "endTime"]),
-    (req, res) => {
-      const { professional, startTime, endTime } = req.body;
-
-      res.status(201).json({
-        success: true,
-        slot: {
-          id: Date.now(),
-          professional,
-          startTime,
-          endTime,
-        },
-      });
-    }
-  );
-
-  // Error middleware
-  app.use(errorLoggerMiddleware);
-
-  return app;
-} // ✅ THIS WAS MISSING
-
-// Start server
+const config = loadEnvConfig();
 const app = createApp();
 
 const PORT = process.env.PORT || 3000;

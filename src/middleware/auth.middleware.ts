@@ -2,10 +2,10 @@
  * Authentication Middleware
  *
  * Provides JWT-based authentication and authorization middleware.
- * This is a mock implementation that can be replaced with a real JWT verification system.
  */
 
 import { Request, Response, NextFunction } from "express";
+import { verifyJwt, VerifiedJwtPayload } from "../utils/jwt.js";
 
 export enum UserRole {
   USER = "user",
@@ -16,81 +16,54 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   role: UserRole;
+  [key: string]: unknown;
 }
 
 declare global {
   namespace Express {
     interface Request {
-      user?: AuthenticatedUser;
+      user?: VerifiedJwtPayload;
     }
   }
 }
 
-const mockUsers: Map<string, AuthenticatedUser> = new Map([
-  ["user-1", { id: "user-1", email: "user1@example.com", role: UserRole.USER }],
-  ["user-2", { id: "user-2", email: "user2@example.com", role: UserRole.USER }],
-  ["admin-1", { id: "admin-1", email: "admin@example.com", role: UserRole.ADMIN }],
-]);
-
-function validateMockToken(token: string): AuthenticatedUser | null {
-  const userId = token.replace("Bearer ", "");
-  return mockUsers.get(userId) || null;
-}
-
+/**
+ * Authentication middleware
+ * Verifies the JWT token and attaches the decoded payload to the request
+ */
 export function authenticate(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({ success: false, error: "Unauthorized" });
+  }
+
+  const [bearer, token] = authHeader.split(" ");
+  if (bearer !== "Bearer" || !token) {
+    return res.status(401).json({ success: false, error: "Unauthorized" });
+  }
+
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader) {
-      return res.status(401).json({
-        success: false,
-        error: "Authentication required",
-        message: "No authorization header provided",
-      });
-    }
-
-    if (!authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({
-        success: false,
-        error: "Invalid authentication format",
-        message: "Authorization header must be in format: Bearer <token>",
-      });
-    }
-
-    const user = validateMockToken(authHeader);
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: "Invalid or expired token",
-        message: "The provided token is invalid or has expired",
-      });
-    }
-
-    (req as any).user = user;
-    return next();
-  } catch {
-    return res.status(500).json({
-      success: false,
-      error: "Authentication error",
-      message: "An error occurred during authentication",
-    });
+    const decoded = verifyJwt(token);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ success: false, error: "Unauthorized" });
   }
 }
 
-export function authorize(...allowedRoles: UserRole[]) {
+/**
+ * Authorization middleware factory
+ * Checks if the authenticated user has the required role
+ */
+export function authorize(...allowedRoles: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const user = req.user as AuthenticatedUser | undefined;
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: "Authentication required",
-        message: "User must be authenticated to access this resource",
-      });
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
     }
 
-    if (!allowedRoles.includes(user.role)) {
+    const userRole = req.user.role as UserRole;
+    if (!allowedRoles.includes(userRole)) {
       return res.status(403).json({
         success: false,
         error: "Insufficient permissions",
@@ -106,50 +79,25 @@ export function authorizeOwnerOrAdmin(
   getResourceUserId: (req: Request) => string | null,
 ) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const user = req.user as AuthenticatedUser | undefined;
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: "Authentication required",
-        message: "User must be authenticated to access this resource",
-      });
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
     }
 
-    if (user.role === UserRole.ADMIN) {
+    const userRole = req.user.role;
+    if (userRole === "admin") {
       return next();
     }
 
     const resourceUserId = getResourceUserId(req);
-
     if (!resourceUserId) {
-      return res.status(404).json({
-        success: false,
-        error: "Resource not found",
-        message: "The requested resource does not exist",
-      });
+      return res.status(404).json({ success: false, error: "Resource not found" });
     }
 
-    if (user.id !== resourceUserId) {
-      return res.status(403).json({
-        success: false,
-        error: "Access denied",
-        message: "You can only access your own resources",
-      });
+    const userId = req.user.sub || req.user.id;
+    if (userId !== resourceUserId) {
+      return res.status(403).json({ success: false, error: "Access denied" });
     }
 
     return next();
   };
-}
-
-export function addMockUser(user: AuthenticatedUser): void {
-  mockUsers.set(user.id, user);
-}
-
-export function clearMockUsers(): void {
-  mockUsers.clear();
-}
-
-export function getMockUsers(): Map<string, AuthenticatedUser> {
-  return new Map(mockUsers);
 }

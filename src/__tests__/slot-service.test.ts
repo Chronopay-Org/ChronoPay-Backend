@@ -13,7 +13,7 @@ describe("SlotService", () => {
     service = new SlotService(() => new Date(currentTime));
   });
 
-  it("creates slots and returns a sorted list", () => {
+  it("creates slots and returns a sorted list", async () => {
     const first = service.createSlot({
       professional: "alice",
       startTime: 1000,
@@ -28,11 +28,11 @@ describe("SlotService", () => {
       endTime: 4000,
     });
 
-    const list = service.listSlots();
+    const list = (await service.listSlots()).slots;
 
     expect(list.map((slot) => slot.id)).toEqual([first.id, second.id]);
     list[0].professional = "tampered";
-    expect(service.listSlots()[0].professional).toBe("alice");
+    expect((await service.listSlots()).slots[0].professional).toBe("alice");
   });
 
   it("throws when updating with invalid payload type", () => {
@@ -75,7 +75,7 @@ describe("SlotService", () => {
     expect(() => service.updateSlot(999, { endTime: 1000 })).toThrow(SlotNotFoundError);
   });
 
-  it("resets all state", () => {
+  it("resets all state", async () => {
     service.createSlot({
       professional: "alice",
       startTime: 1000,
@@ -84,7 +84,7 @@ describe("SlotService", () => {
 
     service.reset();
 
-    expect(service.listSlots()).toEqual([]);
+    expect((await service.listSlots()).slots).toEqual([]);
     const recreated = service.createSlot({
       professional: "alice",
       startTime: 1000,

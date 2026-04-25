@@ -25,30 +25,103 @@ import {
 const checkoutRouter = Router();
 
 /**
- * POST /api/v1/checkout/sessions
- * 
- * Creates a new checkout session
- * 
- * Request:
- *   - payment.amount: number (positive integer, smallest currency unit)
- *   - payment.currency: "USD" | "EUR" | "GBP" | "XLM"
- *   - payment.paymentMethod: "credit_card" | "bank_transfer" | "crypto"
- *   - customer.customerId: string (UUID or alphanumeric)
- *   - customer.email: string (valid email)
- *   - metadata?: object (optional tracking data)
- *   - successUrl?: string (optional redirect on success)
- *   - cancelUrl?: string (optional redirect on cancel)
- * 
- * Response (201):
- *   - success: true
- *   - session: CheckoutSession with id, status, timestamps
- *   - checkoutUrl?: string (URL for direct payment)
- * 
- * Error Responses:
- *   - 400: Invalid input (amount, currency, email, etc.)
- *   - 401: Unauthorized (if AUTH required)
- *   - 503: Session limit reached
- *   - 500: Internal server error
+ * @openapi
+ * /api/v1/checkout/sessions:
+ *   post:
+ *     summary: Create a new checkout session
+ *     description: >
+ *       Creates a new checkout session for payment processing. Supports multiple
+ *       payment methods and currencies. Optional JWT authentication for enhanced
+ *       tracking and user association.
+ *     tags: [Checkout]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
+ *       - [] # Optional authentication
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [payment, customer]
+ *             properties:
+ *               payment:
+ *                 type: object
+ *                 required: [amount, currency, paymentMethod]
+ *                 properties:
+ *                   amount:
+ *                     type: integer
+ *                     minimum: 1
+ *                     description: Amount in smallest currency unit (e.g., cents)
+ *                   currency:
+ *                     type: string
+ *                     enum: [USD, EUR, GBP, XLM]
+ *                   paymentMethod:
+ *                     type: string
+ *                     enum: [credit_card, bank_transfer, crypto]
+ *               customer:
+ *                 type: object
+ *                 required: [customerId, email]
+ *                 properties:
+ *                   customerId:
+ *                     type: string
+ *                     pattern: '^[a-zA-Z0-9-]+$'
+ *                     description: UUID or alphanumeric customer identifier
+ *                   email:
+ *                     type: string
+ *                     format: email
+ *               metadata:
+ *                 type: object
+ *                 description: Optional tracking data
+ *               successUrl:
+ *                 type: string
+ *                 format: uri
+ *                 description: Optional redirect URL on successful payment
+ *               cancelUrl:
+ *                 type: string
+ *                 format: uri
+ *                 description: Optional redirect URL on cancelled payment
+ *     responses:
+ *       201:
+ *         description: Checkout session created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 session:
+ *                   type: object
+ *                   description: Checkout session details
+ *                 checkoutUrl:
+ *                   type: string
+ *                   format: uri
+ *                   description: Direct payment URL
+ *       400:
+ *         description: Invalid input data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *       503:
+ *         description: Session limit reached
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
  */
 checkoutRouter.post(
   "/sessions",
@@ -72,22 +145,68 @@ checkoutRouter.post(
 );
 
 /**
- * GET /api/v1/checkout/sessions/:sessionId
- * 
- * Retrieves a checkout session by ID
- * 
- * Parameters:
- *   - sessionId: string (UUID format)
- * 
- * Response (200):
- *   - success: true
- *   - session: CheckoutSession with current status
- * 
- * Error Responses:
- *   - 400: Invalid session ID format
- *   - 404: Session not found
- *   - 410: Session expired
- *   - 500: Internal server error
+ * @openapi
+ * /api/v1/checkout/sessions/{sessionId}:
+ *   get:
+ *     summary: Retrieve a checkout session
+ *     description: >
+ *       Retrieves a checkout session by ID. Returns current status and all
+ *       session details. No authentication required for basic session lookup.
+ *     tags: [Checkout]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
+ *       - [] # Optional authentication
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Session ID (UUID format)
+ *     responses:
+ *       200:
+ *         description: Session retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 session:
+ *                   type: object
+ *                   description: Checkout session details
+ *       400:
+ *         description: Invalid session ID format
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *       404:
+ *         description: Session not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       410:
+ *         description: Session expired
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
  */
 checkoutRouter.get(
   "/sessions/:sessionId",
@@ -110,26 +229,83 @@ checkoutRouter.get(
 );
 
 /**
- * POST /api/v1/checkout/sessions/:sessionId/complete
- * 
- * Marks a checkout session as completed (payment successful)
- * 
- * Parameters:
- *   - sessionId: string (UUID format)
- * 
- * Request (optional):
- *   - paymentToken?: string (confirmation token from payment processor)
- * 
- * Response (200):
- *   - success: true
- *   - session: CheckoutSession with COMPLETED status
- * 
- * Error Responses:
- *   - 400: Invalid session ID format
- *   - 404: Session not found
- *   - 409: Session in invalid state (already completed/failed/cancelled)
- *   - 410: Session expired
- *   - 500: Internal server error
+ * @openapi
+ * /api/v1/checkout/sessions/{sessionId}/complete:
+ *   post:
+ *     summary: Mark checkout session as completed
+ *     description: >
+ *       Marks a checkout session as completed (payment successful). Requires
+ *       authentication to prevent unauthorized completion attempts.
+ *     tags: [Checkout]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
+ *       - adminTokenAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Session ID (UUID format)
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               paymentToken:
+ *                 type: string
+ *                 description: Confirmation token from payment processor
+ *     responses:
+ *       200:
+ *         description: Session marked as completed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 session:
+ *                   type: object
+ *                   description: Updated checkout session with COMPLETED status
+ *       400:
+ *         description: Invalid session ID format
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *       404:
+ *         description: Session not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       409:
+ *         description: Session in invalid state (already completed/failed/cancelled)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       410:
+ *         description: Session expired
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
  */
 checkoutRouter.post(
   "/sessions/:sessionId/complete",
@@ -157,26 +333,83 @@ checkoutRouter.post(
 );
 
 /**
- * POST /api/v1/checkout/sessions/:sessionId/fail
- * 
- * Marks a checkout session as failed (payment failed)
- * 
- * Parameters:
- *   - sessionId: string (UUID format)
- * 
- * Request (optional):
- *   - reason?: string (reason for failure)
- * 
- * Response (200):
- *   - success: true
- *   - session: CheckoutSession with FAILED status
- * 
- * Error Responses:
- *   - 400: Invalid session ID format
- *   - 404: Session not found
- *   - 409: Session in invalid state
- *   - 410: Session expired
- *   - 500: Internal server error
+ * @openapi
+ * /api/v1/checkout/sessions/{sessionId}/fail:
+ *   post:
+ *     summary: Mark checkout session as failed
+ *     description: >
+ *       Marks a checkout session as failed (payment failed). Requires authentication
+ *       to prevent unauthorized status changes.
+ *     tags: [Checkout]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
+ *       - adminTokenAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Session ID (UUID format)
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason:
+ *                 type: string
+ *                 description: Reason for payment failure
+ *     responses:
+ *       200:
+ *         description: Session marked as failed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 session:
+ *                   type: object
+ *                   description: Updated checkout session with FAILED status
+ *       400:
+ *         description: Invalid session ID format
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *       404:
+ *         description: Session not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       409:
+ *         description: Session in invalid state
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       410:
+ *         description: Session expired
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
  */
 checkoutRouter.post(
   "/sessions/:sessionId/fail",
@@ -201,23 +434,74 @@ checkoutRouter.post(
 );
 
 /**
- * POST /api/v1/checkout/sessions/:sessionId/cancel
- * 
- * Cancels a checkout session
- * 
- * Parameters:
- *   - sessionId: string (UUID format)
- * 
- * Response (200):
- *   - success: true
- *   - session: CheckoutSession with CANCELLED status
- * 
- * Error Responses:
- *   - 400: Invalid session ID format
- *   - 404: Session not found
- *   - 409: Session in invalid state (already completed/failed/cancelled)
- *   - 410: Session expired
- *   - 500: Internal server error
+ * @openapi
+ * /api/v1/checkout/sessions/{sessionId}/cancel:
+ *   post:
+ *     summary: Cancel a checkout session
+ *     description: >
+ *       Cancels a checkout session. Can be called by the session owner or
+ *       authenticated admin users.
+ *     tags: [Checkout]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
+ *       - adminTokenAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Session ID (UUID format)
+ *     responses:
+ *       200:
+ *         description: Session cancelled successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 session:
+ *                   type: object
+ *                   description: Updated checkout session with CANCELLED status
+ *       400:
+ *         description: Invalid session ID format
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *       404:
+ *         description: Session not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       409:
+ *         description: Session in invalid state (already completed/failed/cancelled)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       410:
+ *         description: Session expired
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
  */
 checkoutRouter.post(
   "/sessions/:sessionId/cancel",

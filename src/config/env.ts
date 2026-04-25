@@ -3,14 +3,7 @@ export type NodeEnv = "development" | "test" | "production";
 export interface EnvConfig {
   nodeEnv: NodeEnv;
   port: number;
-  timeoutMs: number;
-  rateLimitWindowMs: number;
-  rateLimitMax: number;
-  trustProxy: boolean;
-  webhookSecret?: string;
-  jwtIssuer?: string;
-  jwtAudience?: string;
-  corsAllowedOrigins: string[];
+  redisUrl: string;
 }
 
 export class EnvValidationError extends Error {
@@ -28,6 +21,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
 
   const nodeEnv = parseNodeEnv(env.NODE_ENV, issues);
   const port = parsePort(env.PORT, issues);
+  const redisUrl = parseRedisUrl(env.REDIS_URL, issues);
 
   const timeoutMs = parsePositiveInteger(env.REQUEST_TIMEOUT_MS, "REQUEST_TIMEOUT_MS", 30_000, issues);
   const rateLimitWindowMs = parsePositiveInteger(
@@ -51,14 +45,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   return {
     nodeEnv,
     port,
-    timeoutMs,
-    rateLimitWindowMs,
-    rateLimitMax,
-    trustProxy,
-    webhookSecret,
-    jwtIssuer,
-    jwtAudience,
-    corsAllowedOrigins,
+    redisUrl,
   };
 }
 
@@ -124,32 +111,46 @@ function parseIntegerInRange(
   return parsed;
 }
 
-function parseBoolean(
-  rawValue: string | undefined,
-  key: string,
-  defaultValue: boolean,
-  issues: string[],
-): boolean {
-  if (rawValue === undefined) return defaultValue;
+function parseRedisUrl(rawValue: string | undefined, issues: string[]): string {
+  if (rawValue === undefined) {
+    issues.push("REDIS_URL is required.");
+    return "redis://localhost:6379";
+  }
 
-  const value = rawValue.trim().toLowerCase();
-  if (value === "true") return true;
-  if (value === "false") return false;
+  const value = rawValue.trim();
 
-  issues.push(`${key} must be either true or false.`);
-  return defaultValue;
-}
+  if (value.length === 0) {
+    issues.push("REDIS_URL must be a non-empty value.");
+    return "redis://localhost:6379";
+  }
 
-function parseOptionalString(rawValue: string | undefined): string | undefined {
-  const value = rawValue?.trim();
-  return value ? value : undefined;
-}
+  try {
+    const url = new URL(value);
+    const allowedSchemes = ["redis:", "rediss:"];
 
-function parseStringList(rawValue: string | undefined): string[] {
-  if (!rawValue) return [];
+    if (!allowedSchemes.includes(url.protocol)) {
+      issues.push("REDIS_URL must use one of the supported schemes: redis, rediss.");
+      return "redis://localhost:6379";
+    }
 
-  return rawValue
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
+    if (!url.hostname) {
+      issues.push("REDIS_URL must include a host.");
+      return "redis://localhost:6379";
+    }
+
+    if (url.username || url.password) {
+      issues.push("REDIS_URL must not contain embedded credentials.");
+      return "redis://localhost:6379";
+    }
+
+    if (/\s/.test(value)) {
+      issues.push("REDIS_URL must not contain whitespace.");
+      return "redis://localhost:6379";
+    }
+
+    return value;
+  } catch {
+    issues.push("REDIS_URL must be a valid URL.");
+    return "redis://localhost:6379";
+  }
 }
