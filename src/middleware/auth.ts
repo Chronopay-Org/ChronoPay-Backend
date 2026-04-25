@@ -99,6 +99,8 @@ export function requireAuthenticatedActor(
       role,
     };
 
+    (req as any).logContext = { userId: rawUserId.trim() };
+
     next();
   };
 }

@@ -3,6 +3,13 @@ import { Request, Response, NextFunction } from "express";
 import { logger, LogLevel } from "../utils/logger.js";
 import { IncomingMessage, ServerResponse } from "http";
 import type { LevelWithSilent } from "pino";
+import {
+  buildRequestLogContext,
+  addIdentityToContext,
+  addResponseData,
+  extractIdentity,
+  RequestLogContext,
+} from "../utils/logContext.js";
 
 /**
  * Extended Express request interface to include timing and custom properties
@@ -10,6 +17,7 @@ import type { LevelWithSilent } from "pino";
 declare module "express" {
   interface Request {
     startTime?: number;
+    logContext?: RequestLogContext;
   }
 }
 
@@ -218,6 +226,25 @@ export const createRequestLogger = () => {
      * Timestamp format for logs
      */
     timestamp: () => `,"time":"${new Date().toISOString()}"`,
+
+    /**
+     * Add standardized log fields to every request
+     */
+    customProps: (req: Request, res: Response) => {
+      const baseContext = buildRequestLogContext(req);
+      const identity = extractIdentity(req);
+      const contextWithIdentity = addIdentityToContext(baseContext, identity);
+      
+      return {
+        requestId: contextWithIdentity.requestId,
+        route: contextWithIdentity.route,
+        method: contextWithIdentity.method,
+        userId: contextWithIdentity.userId,
+        apiKeyId: contextWithIdentity.apiKeyId,
+        ip: contextWithIdentity.ip,
+        userAgent: contextWithIdentity.userAgent,
+      };
+    },
   };
 
   return pinoHttp(options);
@@ -235,6 +262,10 @@ export const errorLoggerMiddleware = (
 ) => {
   const requestId = req.requestId || req.id || "unknown";
   const duration = calculateDuration(req.startTime);
+  const baseContext = buildRequestLogContext(req);
+  const identity = extractIdentity(req);
+  const contextWithIdentity = addIdentityToContext(baseContext, identity);
+  const finalContext = addResponseData(contextWithIdentity, res.statusCode, duration);
 
   logger.error(
     {
