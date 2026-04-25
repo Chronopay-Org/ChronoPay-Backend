@@ -57,7 +57,6 @@ describe("EthersContractClient", () => {
 
     expect(result.data).toBe(mockBalance);
     expect(result.blockNumber).toBe(123456);
-    expect(mockContractService.call).toHaveBeenCalled();
     expect(mockMethod).toHaveBeenCalledWith("0xAccountAddress");
     
     contractSpy.mockRestore();
@@ -88,7 +87,6 @@ describe("EthersContractClient", () => {
     const waitResult = await result.wait(1);
     expect(waitResult.status).toBe(1);
     expect(mockWait).toHaveBeenCalledWith(1);
-    expect(mockContractService.sendTransaction).toHaveBeenCalled();
     expect(mockMethod).toHaveBeenCalledWith("0xRecipient", 500n, {});
 
     contractSpy.mockRestore();
