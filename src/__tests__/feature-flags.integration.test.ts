@@ -1,6 +1,17 @@
 import request from "supertest";
 import app from "../index.js";
-import { setFeatureFlagsFromEnv } from "../flags/index.js";
+import { FEATURE_FLAGS, getAllGuardedFeatureRoutes, setFeatureFlagsFromEnv } from "../flags/index.js";
+
+type RequestMethod = "get" | "post" | "put" | "patch" | "delete";
+
+function sendRequest(
+  method: string,
+  path: string,
+  requestBody?: Record<string, unknown>,
+) {
+  const requester = request(app)[method.toLowerCase() as RequestMethod](path);
+  return requestBody ? requester.send(requestBody) : requester;
+}
 
 describe("feature flag integration", () => {
   const originalEnv = { ...process.env };
@@ -10,34 +21,36 @@ describe("feature flag integration", () => {
     setFeatureFlagsFromEnv(process.env);
   });
 
-  it("returns 201 for POST /api/v1/slots when enabled", async () => {
-    setFeatureFlagsFromEnv({ ...process.env, FF_CREATE_SLOT: "true" });
+  it("enforces enabled/disabled behavior for every registered guarded route", async () => {
+    const guardedRoutes = getAllGuardedFeatureRoutes();
+    expect(guardedRoutes.length).toBeGreaterThan(0);
 
-    const res = await request(app).post("/api/v1/slots").send({
-      professional: "alice",
-      startTime: 1000,
-      endTime: 2000,
-    });
+    for (const route of guardedRoutes) {
+      const envVar = FEATURE_FLAGS[route.flag].envVar;
+      const enabledEnv = { ...process.env, [envVar]: "true" };
+      const disabledEnv = { ...process.env, [envVar]: "false" };
 
-    expect(res.status).toBe(201);
-    expect(res.body.success).toBe(true);
-  });
+      setFeatureFlagsFromEnv(enabledEnv);
+      const enabledResponse = await sendRequest(
+        route.method,
+        route.path,
+        route.requestBody,
+      );
+      expect(enabledResponse.status).toBe(route.enabledExpectedStatus);
 
-  it("returns 503 for POST /api/v1/slots when disabled", async () => {
-    setFeatureFlagsFromEnv({ ...process.env, FF_CREATE_SLOT: "false" });
-
-    const res = await request(app).post("/api/v1/slots").send({
-      professional: "alice",
-      startTime: 1000,
-      endTime: 2000,
-    });
-
-    expect(res.status).toBe(503);
-    expect(res.body).toEqual({
-      success: false,
-      code: "FEATURE_DISABLED",
-      error: "Feature CREATE_SLOT is currently disabled",
-    });
+      setFeatureFlagsFromEnv(disabledEnv);
+      const disabledResponse = await sendRequest(
+        route.method,
+        route.path,
+        route.requestBody,
+      );
+      expect(disabledResponse.status).toBe(route.disabledResponse.status);
+      expect(disabledResponse.body).toEqual({
+        success: false,
+        code: route.disabledResponse.code,
+        error: route.disabledResponse.error,
+      });
+    }
   });
 
   it("keeps GET /api/v1/slots available when feature is disabled", async () => {
@@ -60,5 +73,11 @@ describe("feature flag integration", () => {
     expect(res.status).toBe(400);
     expect(res.body.success).toBe(false);
     expect(res.body.error).toContain("Missing required field");
+  });
+
+  it("fails startup-time feature flag initialization on malformed values", () => {
+    expect(() => setFeatureFlagsFromEnv({ ...process.env, FF_CREATE_SLOT: "enabled" })).toThrow(
+      /Invalid value for FF_CREATE_SLOT/,
+    );
   });
 });
