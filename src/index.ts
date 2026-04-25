@@ -1,28 +1,25 @@
-import "dotenv/config";
-import { loadEnvConfig, type EnvConfig } from "./config/env.js";
+export { createApp } from "./app.js";
+export { resetSlotStore as __resetSlotsForTests } from "./routes/slots.js";
 import { createApp } from "./app.js";
-import { startScheduler } from "./scheduler/reminderScheduler.js";
-import { logInfo } from "./utils/logger.js";
+import { loadEnvConfig, type EnvConfig } from "./config/env.js";
 
-const config: EnvConfig = loadEnvConfig();
+export function startServer(
+  server: { listen: (port: number, callback?: () => void) => unknown },
+  config: EnvConfig,
+) {
+  return server.listen(config.port, () => {
+    console.log(`ChronoPay API listening on http://localhost:${config.port}`);
+  });
+}
 
-const app = createApp({
-  enableContentNegotiation: true,
-  contentNegotiationExcludePaths: [
-    // Add webhook paths here if needed in the future
-    // e.g., "/api/v1/webhooks"
-  ],
-});
+const config = loadEnvConfig();
+const app = createApp();
 
-if (config.nodeEnv !== "test") {
-  const PORT = config.port;
-  startScheduler();
+const PORT = process.env.PORT || 3000;
 
+if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {
-    logInfo(`ChronoPay API listening on http://localhost:${PORT}`, {
-      port: PORT,
-      environment: config.nodeEnv || "development",
-    });
+    logInfo(`Server running on port ${PORT}`);
   });
 }
 

@@ -29,16 +29,60 @@ export function isValidEmail(email: string): boolean {
 
 /**
  * Validates payment amount
- * @param amount - Amount in smallest unit (cents/stroops)
- * @returns true if amount is valid (positive integer, reasonable limit)
+ * @param amount - Amount in smallest unit (integer) or decimal string
+ * @returns true if amount is valid
  */
 export function isValidAmount(amount: unknown): boolean {
-  if (typeof amount !== "number") return false;
-  if (!Number.isInteger(amount)) return false;
-  if (amount <= 0) return false;
-  // Max limit: 1 billion in smallest units (prevents overflow)
-  if (amount > 1e9) return false;
-  return true;
+  // If number, must be positive integer and within safe range
+  if (typeof amount === "number") {
+    if (!Number.isInteger(amount)) return false;
+    if (amount <= 0) return false;
+    // Max limit: 100 trillion in smallest units (prevents overflow while allowing large amounts)
+    if (amount > 1e14) return false;
+    return true;
+  }
+
+  // If string, must be a valid positive decimal string
+  if (typeof amount === "string") {
+    // Regex for positive decimal numbers (e.g., "10.50", "100", "0.0000001")
+    const decimalRegex = /^\d+(\.\d+)?$/;
+    if (!decimalRegex.test(amount)) return false;
+    
+    const num = parseFloat(amount);
+    if (num <= 0) return false;
+    if (num > 1e14) return false;
+    
+    // Check for excessive precision (Stellar allows up to 7 decimal places)
+    const parts = amount.split(".");
+    if (parts.length === 2 && parts[1].length > 7) return false;
+    
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Validates Stellar asset identifier
+ * @param asset - Asset identifier (AssetCode:Issuer or 'native')
+ * @returns true if asset identifier is valid
+ */
+export function isValidAsset(asset: unknown): boolean {
+  if (typeof asset !== "string") return false;
+  if (asset === "native") return true;
+
+  // Asset format: AssetCode:IssuerAddress
+  // AssetCode: 1-12 alphanumeric characters
+  // IssuerAddress: 56 characters (Stellar public key format: starting with G)
+  const assetParts = asset.split(":");
+  if (assetParts.length !== 2) return false;
+
+  const [code, issuer] = assetParts;
+  
+  const codeRegex = /^[a-zA-Z0-9]{1,12}$/;
+  const issuerRegex = /^G[A-Z2-7]{55}$/;
+
+  return codeRegex.test(code) && issuerRegex.test(issuer);
 }
 
 /**
@@ -103,10 +147,22 @@ export function validateCreateCheckoutSession() {
       if (!isValidAmount(payment.amount)) {
         throw new CheckoutError(
           CheckoutErrorCode.INVALID_AMOUNT,
-          "Amount must be a positive integer (in smallest currency unit)",
+          "Amount must be a positive integer or valid decimal string (max 7 decimal places)",
           400,
           { field: "payment.amount", provided: payment.amount },
         );
+      }
+
+      // Validate asset if provided (required for crypto payment method)
+      if (payment.paymentMethod === "crypto" || payment.asset) {
+        if (!isValidAsset(payment.asset)) {
+          throw new CheckoutError(
+            CheckoutErrorCode.INVALID_ASSET,
+            "Invalid Stellar asset identifier. Must be 'native' or 'AssetCode:Issuer'",
+            400,
+            { field: "payment.asset", provided: payment.asset },
+          );
+        }
       }
 
       // Validate currency
