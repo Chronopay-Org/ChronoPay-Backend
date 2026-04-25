@@ -22,6 +22,7 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   role: UserRole;
+  [key: string]: unknown;
 }
 
 /**
@@ -117,7 +118,8 @@ export function authorize(...allowedRoles: UserRole[]) {
       });
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
+    const userRole = req.user.role as UserRole;
+    if (!allowedRoles.includes(userRole)) {
       return res.status(403).json({
         success: false,
         error: "Insufficient permissions",

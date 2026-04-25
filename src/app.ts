@@ -9,11 +9,15 @@ import {
   notFoundHandler,
 } from "./middleware/errorHandling.js";
 import { validateRequiredFields } from "./middleware/validation.js";
+import type { SlotRepository } from "./modules/slots/slot-repository.js";
+import type { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
 
 export interface AppFactoryOptions {
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
+  slotRepository?: SlotRepository;
+  bookingIntentService?: BookingIntentService;
 }
 
 function registerSwaggerDocs(app: express.Express) {
