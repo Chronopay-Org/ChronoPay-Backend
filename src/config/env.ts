@@ -22,14 +22,9 @@ export type IdempotencyRedisEncryptionConfig =
 export interface EnvConfig {
   nodeEnv: NodeEnv;
   port: number;
-  idempotencyRedisEncryption: IdempotencyRedisEncryptionConfig;
+  redisUrl: string;
 }
 
-/**
- * Error raised when process environment variables fail validation.
- * The message is safe to surface during startup because it only contains
- * variable names and validation reasons, never raw values.
- */
 export class EnvValidationError extends Error {
   readonly issues: string[];
 
@@ -40,18 +35,27 @@ export class EnvValidationError extends Error {
   }
 }
 
-/**
- * Parse and validate environment variables once at startup.
- *
- * @param env Raw environment map, usually process.env.
- * @returns Typed validated configuration for the application runtime.
- * @throws EnvValidationError When one or more variables are missing or invalid.
- */
 export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   const issues: string[] = [];
+
   const nodeEnv = parseNodeEnv(env.NODE_ENV, issues);
   const port = parsePort(env.PORT, issues);
-  const idempotencyRedisEncryption = parseIdempotencyRedisEncryptionConfig(env, issues);
+  const redisUrl = parseRedisUrl(env.REDIS_URL, issues);
+
+  const timeoutMs = parsePositiveInteger(env.REQUEST_TIMEOUT_MS, "REQUEST_TIMEOUT_MS", 30_000, issues);
+  const rateLimitWindowMs = parsePositiveInteger(
+    env.RATE_LIMIT_WINDOW_MS,
+    "RATE_LIMIT_WINDOW_MS",
+    15 * 60 * 1000,
+    issues,
+  );
+  const rateLimitMax = parsePositiveInteger(env.RATE_LIMIT_MAX, "RATE_LIMIT_MAX", 100, issues);
+  const trustProxy = parseBoolean(env.TRUST_PROXY, "TRUST_PROXY", false, issues);
+
+  const webhookSecret = parseOptionalString(env.WEBHOOK_SECRET);
+  const jwtIssuer = parseOptionalString(env.JWT_ISSUER);
+  const jwtAudience = parseOptionalString(env.JWT_AUDIENCE);
+  const corsAllowedOrigins = parseStringList(env.CORS_ALLOWED_ORIGINS);
 
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
@@ -60,77 +64,12 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   return {
     nodeEnv,
     port,
-    idempotencyRedisEncryption,
-  };
-}
-
-function parseIdempotencyRedisEncryptionConfig(
-  env: NodeJS.ProcessEnv,
-  issues: string[],
-): IdempotencyRedisEncryptionConfig {
-  const enabled = parseBooleanFlag(
-    env.IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED,
-    "IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED",
-    false,
-    issues,
-  );
-
-  if (!enabled) {
-    return {
-      enabled: false,
-      algorithm: "aes-256-gcm",
-      activeKey: null,
-      decryptionKeys: [],
-    };
-  }
-
-  const activeKeyId = parseKeyId(
-    env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID,
-    "IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID",
-    issues,
-  );
-  const activeKeyValue = parseEncryptionKey(
-    env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY,
-    "IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY",
-    issues,
-  );
-  const previousKeys = parsePreviousKeys(
-    env.IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS,
-    issues,
-  );
-
-  if (!activeKeyId || !activeKeyValue) {
-    return {
-      enabled: false,
-      algorithm: "aes-256-gcm",
-      activeKey: null,
-      decryptionKeys: [],
-    };
-  }
-
-  if (previousKeys.some((key) => key.id === activeKeyId)) {
-    issues.push(
-      "IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS must not repeat IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID.",
-    );
-  }
-
-  const activeKey: EncryptionKey = {
-    id: activeKeyId,
-    value: activeKeyValue,
-  };
-
-  return {
-    enabled: true,
-    algorithm: "aes-256-gcm",
-    activeKey,
-    decryptionKeys: [activeKey, ...previousKeys],
+    redisUrl,
   };
 }
 
 function parseNodeEnv(rawValue: string | undefined, issues: string[]): NodeEnv {
-  if (rawValue === undefined) {
-    return "development";
-  }
+  if (rawValue === undefined) return "development";
 
   const value = rawValue.trim();
   const allowedValues: NodeEnv[] = ["development", "test", "production"];
@@ -149,152 +88,88 @@ function parseNodeEnv(rawValue: string | undefined, issues: string[]): NodeEnv {
 }
 
 function parsePort(rawValue: string | undefined, issues: string[]): number {
-  if (rawValue === undefined) {
-    return 3001;
-  }
+  return parseIntegerInRange(rawValue, "PORT", 3001, 1, 65535, issues);
+}
+
+function parsePositiveInteger(
+  rawValue: string | undefined,
+  key: string,
+  defaultValue: number,
+  issues: string[],
+): number {
+  return parseIntegerInRange(rawValue, key, defaultValue, 1, Number.MAX_SAFE_INTEGER, issues);
+}
+
+function parseIntegerInRange(
+  rawValue: string | undefined,
+  key: string,
+  defaultValue: number,
+  min: number,
+  max: number,
+  issues: string[],
+): number {
+  if (rawValue === undefined) return defaultValue;
 
   const value = rawValue.trim();
   if (value.length === 0) {
-    issues.push("PORT must be a non-empty integer when provided.");
-    return 3001;
+    issues.push(`${key} must be a non-empty integer when provided.`);
+    return defaultValue;
   }
 
   if (!/^\d+$/.test(value)) {
-    issues.push("PORT must be a whole number between 1 and 65535.");
-    return 3001;
+    issues.push(`${key} must be a whole number between ${min} and ${max}.`);
+    return defaultValue;
   }
 
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
-    issues.push("PORT must be a whole number between 1 and 65535.");
-    return 3001;
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    issues.push(`${key} must be a whole number between ${min} and ${max}.`);
+    return defaultValue;
   }
 
   return parsed;
 }
 
-function parseBooleanFlag(
-  rawValue: string | undefined,
-  variableName: string,
-  defaultValue: boolean,
-  issues: string[],
-): boolean {
+function parseRedisUrl(rawValue: string | undefined, issues: string[]): string {
   if (rawValue === undefined) {
-    return defaultValue;
-  }
-
-  const value = rawValue.trim().toLowerCase();
-  if (value === "true") {
-    return true;
-  }
-
-  if (value === "false") {
-    return false;
-  }
-
-  issues.push(`${variableName} must be either 'true' or 'false' when provided.`);
-  return defaultValue;
-}
-
-function parseKeyId(
-  rawValue: string | undefined,
-  variableName: string,
-  issues: string[],
-): string | null {
-  if (rawValue === undefined) {
-    issues.push(`${variableName} is required when IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED=true.`);
-    return null;
+    issues.push("REDIS_URL is required.");
+    return "redis://localhost:6379";
   }
 
   const value = rawValue.trim();
-  if (!/^[A-Za-z0-9._-]{1,64}$/.test(value)) {
-    issues.push(
-      `${variableName} must contain only letters, numbers, dots, underscores, or hyphens.`,
-    );
-    return null;
-  }
 
-  return value;
-}
-
-function parseEncryptionKey(
-  rawValue: string | undefined,
-  variableName: string,
-  issues: string[],
-): Buffer | null {
-  if (rawValue === undefined) {
-    issues.push(`${variableName} is required when IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED=true.`);
-    return null;
-  }
-
-  const value = rawValue.trim();
   if (value.length === 0) {
-    issues.push(`${variableName} must be a non-empty base64 string when provided.`);
-    return null;
+    issues.push("REDIS_URL must be a non-empty value.");
+    return "redis://localhost:6379";
   }
 
   try {
-    const decoded = Buffer.from(value, "base64");
-    if (decoded.length !== 32 || decoded.toString("base64") !== value) {
-      issues.push(`${variableName} must decode to exactly 32 bytes of base64 data.`);
-      return null;
+    const url = new URL(value);
+    const allowedSchemes = ["redis:", "rediss:"];
+
+    if (!allowedSchemes.includes(url.protocol)) {
+      issues.push("REDIS_URL must use one of the supported schemes: redis, rediss.");
+      return "redis://localhost:6379";
     }
 
-    return decoded;
+    if (!url.hostname) {
+      issues.push("REDIS_URL must include a host.");
+      return "redis://localhost:6379";
+    }
+
+    if (url.username || url.password) {
+      issues.push("REDIS_URL must not contain embedded credentials.");
+      return "redis://localhost:6379";
+    }
+
+    if (/\s/.test(value)) {
+      issues.push("REDIS_URL must not contain whitespace.");
+      return "redis://localhost:6379";
+    }
+
+    return value;
   } catch {
-    issues.push(`${variableName} must be valid base64 data.`);
-    return null;
+    issues.push("REDIS_URL must be a valid URL.");
+    return "redis://localhost:6379";
   }
-}
-
-function parsePreviousKeys(
-  rawValue: string | undefined,
-  issues: string[],
-): EncryptionKey[] {
-  if (rawValue === undefined || rawValue.trim().length === 0) {
-    return [];
-  }
-
-  const keys: EncryptionKey[] = [];
-  const seenIds = new Set<string>();
-
-  for (const entry of rawValue.split(",")) {
-    const trimmedEntry = entry.trim();
-    if (trimmedEntry.length === 0) {
-      continue;
-    }
-
-    const separatorIndex = trimmedEntry.indexOf(":");
-    if (separatorIndex <= 0 || separatorIndex === trimmedEntry.length - 1) {
-      issues.push(
-        "IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS entries must use the format key-id:base64-key.",
-      );
-      continue;
-    }
-
-    const keyId = parseKeyId(
-      trimmedEntry.slice(0, separatorIndex),
-      "IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS",
-      issues,
-    );
-    const keyValue = parseEncryptionKey(
-      trimmedEntry.slice(separatorIndex + 1),
-      "IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS",
-      issues,
-    );
-
-    if (!keyId || !keyValue) {
-      continue;
-    }
-
-    if (seenIds.has(keyId)) {
-      issues.push("IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS must not contain duplicate key ids.");
-      continue;
-    }
-
-    seenIds.add(keyId);
-    keys.push({ id: keyId, value: keyValue });
-  }
-
-  return keys;
 }
