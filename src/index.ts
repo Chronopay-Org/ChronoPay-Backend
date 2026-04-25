@@ -1,93 +1,25 @@
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import { logInfo } from "./utils/logger.js";
-import {
-  createRequestLogger,
-  errorLoggerMiddleware,
-} from "./middleware/requestLogger.js";
-import { validateRequiredFields } from "./middleware/validation.js";
-import rateLimiter from "./middleware/rateLimiter.js";
-
+export { createApp } from "./app.js";
+export { resetSlotStore as __resetSlotsForTests } from "./routes/slots.js";
+import { createApp } from "./app.js";
 import { loadEnvConfig, type EnvConfig } from "./config/env.js";
-import {
-  requireAuthenticatedActor,
-  type AuthenticatedRequest,
-} from "./middleware/auth.js";
-import {
-  BookingIntentError,
-  BookingIntentService,
-  parseCreateBookingIntentBody,
-} from "./modules/booking-intents/booking-intent-service.js";
-import { InMemoryBookingIntentRepository } from "./modules/booking-intents/booking-intent-repository.js";
-import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
 
-interface AppListener {
-  listen(port: number, callback?: () => void): unknown;
+export function startServer(
+  server: { listen: (port: number, callback?: () => void) => unknown },
+  config: EnvConfig,
+) {
+  return server.listen(config.port, () => {
+    console.log(`ChronoPay API listening on http://localhost:${config.port}`);
+  });
 }
 
-export function createApp(options?: {
-  slotRepository?: InMemorySlotRepository;
-  bookingIntentService?: BookingIntentService;
-}) {
-  const app = express();
-  const slotRepository = options?.slotRepository ?? new InMemorySlotRepository();
-  const bookingIntentService =
-    options?.bookingIntentService ??
-    new BookingIntentService(new InMemoryBookingIntentRepository(), slotRepository);
-
-  // Request logging middleware (must be first)
-  app.use(createRequestLogger());
-  
-  app.use(cors());
-  app.use(express.json());
-
-  app.get("/health", (_req, res) => {
-    const healthStatus = { status: "ok", service: "chronopay-backend" };
-    logInfo("Health check endpoint called", { endpoint: "/health" });
-    res.json(healthStatus);
-  });
-
-  app.get("/api/v1/slots", (_req, res) => {
-    logInfo("Slots endpoint called", { endpoint: "/api/v1/slots" });
-    res.json({ slots: slotRepository.list() });
-  });
-
-  app.post(
-    "/api/v1/slots",
-    validateRequiredFields(["professional", "startTime", "endTime"]),
-    async (req, res) => {
-      const { professional, startTime, endTime } = req.body;
-
-      const slot = {
-        id: Date.now(),
-        professional,
-        startTime,
-        endTime,
-      };
-
-      res.status(201).json({
-        success: true,
-        slot,
-      });
-    },
-  );
-
-  // Error handling middleware (must be last)
-  app.use(errorLoggerMiddleware);
-
-  return app;
-}
-
+const config = loadEnvConfig();
 const app = createApp();
 
+const PORT = process.env.PORT || 3000;
+
 if (process.env.NODE_ENV !== "test") {
-  const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
-    logInfo(`ChronoPay API listening on http://localhost:${PORT}`, {
-      port: PORT,
-      environment: process.env.NODE_ENV || "development",
-    });
+    logInfo(`Server running on port ${PORT}`);
   });
 }
 
