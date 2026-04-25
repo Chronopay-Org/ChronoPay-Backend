@@ -14,6 +14,7 @@ import {
   validateCreateCheckoutSession,
   validateSessionIdParam,
 } from "../middleware/checkout-validation.js";
+import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import {
   CheckoutError,
   CheckoutErrorCode,
@@ -126,6 +127,7 @@ const checkoutRouter = Router();
 checkoutRouter.post(
   "/sessions",
   validateCreateCheckoutSession(),
+  idempotencyMiddleware,
   (req: Request, res: Response) => {
     try {
       const authToken = req.headers.authorization?.replace("Bearer ", "");

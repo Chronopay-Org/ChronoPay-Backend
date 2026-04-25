@@ -20,6 +20,7 @@
 
 import { Router, Request, Response } from "express";
 import { validateRequiredFields } from "../middleware/validation.js";
+import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import {
   getCachedSlots,
   setCachedSlots,
@@ -187,6 +188,7 @@ router.get("/", async (_req: Request, res: Response): Promise<void> => {
 router.post(
   "/",
   validateRequiredFields(["professional", "startTime", "endTime"]),
+  idempotencyMiddleware,
   async (req: Request, res: Response): Promise<void> => {
     const { professional, startTime, endTime } = req.body as {
       professional: string;

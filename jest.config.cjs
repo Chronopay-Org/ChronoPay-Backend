@@ -22,4 +22,5 @@ module.exports = {
   transform: { "^.+\\.tsx?$": ["ts-jest", { useESM: true }] },
   testMatch: ["**/__tests__/**/*.test.ts"],
   clearMocks: true,
+  setupFilesAfterEnv: ["<rootDir>/src/__tests__/setup/resetRedis.ts"],
 };
