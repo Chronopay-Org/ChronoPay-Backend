@@ -1,4 +1,4 @@
-import { Registry, collectDefaultMetrics, Histogram } from "prom-client";
+import { Registry, collectDefaultMetrics, Histogram, Counter } from "prom-client";
 import { Request, Response, NextFunction } from "express";
 
 /**
@@ -25,6 +25,49 @@ if (!httpRequestDurationMicroseconds) {
 }
 
 export { httpRequestDurationMicroseconds };
+
+// ─── Slot cache metrics ───────────────────────────────────────────────────────
+
+/**
+ * Counter incremented on every slot-list cache HIT.
+ */
+export const slotCacheHits = new Counter({
+  name: "slot_cache_hits_total",
+  help: "Total number of slot list cache hits",
+  registers: [register],
+});
+
+/**
+ * Counter incremented on every slot-list cache MISS (origin fetch triggered).
+ */
+export const slotCacheMisses = new Counter({
+  name: "slot_cache_misses_total",
+  help: "Total number of slot list cache misses",
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time a concurrent request is coalesced into an
+ * existing in-flight fetch (stampede prevented).
+ */
+export const slotCacheStampedeBlocked = new Counter({
+  name: "slot_cache_stampede_blocked_total",
+  help: "Total number of concurrent requests coalesced by single-flight stampede protection",
+  registers: [register],
+});
+
+/** Convenience helpers used by slotCache.ts */
+export function recordCacheHit(): void {
+  slotCacheHits.inc();
+}
+
+export function recordCacheMiss(): void {
+  slotCacheMisses.inc();
+}
+
+export function recordStampedeBlocked(): void {
+  slotCacheStampedeBlocked.inc();
+}
 
 /**
  * Express middleware to track HTTP request duration.
