@@ -209,6 +209,7 @@ describe.skip("Idempotency Middleware (integration)", () => {
       success: false,
       error: "Conflict: This transaction is actively running.",
     });
+    expect(next).not.toHaveBeenCalled();
   });
 
   it("stores processing and completed states as encrypted envelopes when enabled", async () => {
