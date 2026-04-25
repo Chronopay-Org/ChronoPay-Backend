@@ -27,7 +27,7 @@ const mockClient = { query: mockQueryFn, release: mockReleaseFn } as unknown as 
 
 let mockConnectFn: jest.MockedFunction<() => Promise<PoolClient>>;
 let mockEndFn: jest.MockedFunction<() => Promise<void>>;
-let mockOnFn: jest.MockedFunction<() => void>;
+let mockOnFn: jest.MockedFunction<(event: string, listener: (err: Error) => void) => void>;
 let mockPoolInstance: Pool;
 
 const FAKE_URL = "postgresql://user:pass@localhost:5432/test";

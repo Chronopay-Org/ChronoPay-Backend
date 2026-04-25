@@ -4,7 +4,7 @@ import {
   runWithTraceContext,
   getTraceContext,
   TraceContext,
-} from "./context";
+} from "./context.js";
 
 /**
  * Standard HTTP header keys for distributed tracing.

@@ -135,6 +135,20 @@ export class ServiceUnavailableError extends AppError {
 }
 
 /**
+ * Content Negotiation Error (415/406)
+ * Used for Content-Type or Accept header validation failures
+ */
+export class ContentNegotiationError extends AppError {
+  constructor(
+    statusCode: 415 | 406,
+    code: string,
+    message: string,
+  ) {
+    super(message, statusCode, code, true);
+  }
+}
+
+/**
  * Type guard to check if error is an AppError
  */
 export function isAppError(error: unknown): error is AppError {

@@ -24,11 +24,29 @@ export function jsonParseErrorHandler(
 }
 
 export function genericErrorHandler(
-  _err: unknown,
+  err: unknown,
   _req: Request,
   res: Response,
   _next: NextFunction,
 ) {
+  if (
+    err instanceof Error &&
+    "statusCode" in err &&
+    "code" in err
+  ) {
+    const e = err as any;
+    if (
+      (e.statusCode === 415 || e.statusCode === 406) &&
+      (e.code === "UNSUPPORTED_MEDIA_TYPE" || e.code === "NOT_ACCEPTABLE")
+    ) {
+      return res.status(e.statusCode).json({
+        success: false,
+        code: e.code,
+        error: e.message,
+      });
+    }
+  }
+
   return res.status(500).json({
     success: false,
     error: "Internal server error",

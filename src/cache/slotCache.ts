@@ -8,7 +8,11 @@
  *
  * Cache key schema
  * ────────────────
- *   slots:all          → serialised array of all slots
+ *   slots:all          → serialised array of all slots (legacy, deprecated)
+ *   slots:page:<num>   → paginated slot lists (page 1, 2, 3, etc.)
+ *
+ * Security: Cache keys contain only numeric page numbers and resource names.
+ * No PII or sensitive data is included in cache keys.
  *
  * Stampede protection
  * ───────────────────
@@ -31,6 +35,8 @@ import { recordCacheHit, recordCacheMiss, recordStampedeBlocked } from "../metri
 
 export const SLOT_CACHE_KEYS = {
   all: "slots:all",
+  page: (pageNum: number) => `slots:page:${pageNum}`,
+  pattern: "slots:page:*",
 } as const;
 
 
@@ -41,13 +47,90 @@ export interface Slot {
   endTime: string;
 }
 
-// ─── Single-flight registry ───────────────────────────────────────────────────
-// Maps cache key → in-flight Promise so concurrent cold-cache requests coalesce.
-const _inFlight = new Map<string, Promise<Slot[]>>();
+export interface PaginatedSlotsResult {
+  slots: Slot[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
 
 /**
- * Retrieve the cached slot list.
+ * Retrieve cached slots for a specific page.
  *
+ * @param page - Page number (1-indexed)
+ * @returns Parsed paginated result on cache HIT, or `null` on MISS / error.
+ */
+export async function getCachedSlotsPage(page: number): Promise<PaginatedSlotsResult | null> {
+  const redis = getRedisClient();
+  if (!redis) return null;
+
+  try {
+    const key = SLOT_CACHE_KEYS.page(page);
+    const raw = await redis.get(key);
+    if (raw === null) return null;
+    return JSON.parse(raw) as PaginatedSlotsResult;
+  } catch (err) {
+    console.warn("[slotCache] getCachedSlotsPage error:", (err as Error).message);
+    return null;
+  }
+}
+
+/**
+ * Write paginated slots to cache with the configured TTL.
+ *
+ * @param page - Page number (1-indexed)
+ * @param result - Paginated result to serialise and store.
+ */
+export async function setCachedSlotsPage(page: number, result: PaginatedSlotsResult): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  try {
+    const key = SLOT_CACHE_KEYS.page(page);
+    await redis.set(
+      key,
+      JSON.stringify(result),
+      "EX",
+      SLOT_CACHE_TTL_SECONDS,
+    );
+  } catch (err) {
+    console.warn("[slotCache] setCachedSlotsPage error:", (err as Error).message);
+  }
+}
+
+/**
+ * Invalidate all paginated slot cache entries.
+ *
+ * Called after any write operation (POST, PUT, DELETE) so that the next GET
+ * reflects the updated state. Uses KEYS pattern matching to delete all page keys.
+ *
+ * Security: The pattern "slots:page:*" only matches our own cache keys and
+ * does not include user input or PII.
+ */
+export async function invalidateSlotsCache(): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  try {
+    // Delete all paginated slot cache keys
+    const keys = await redis.keys(SLOT_CACHE_KEYS.pattern);
+    if (keys.length > 0) {
+      await Promise.all(keys.map(key => redis.del(key)));
+    }
+    
+    // Also delete legacy key for backward compatibility
+    await redis.del(SLOT_CACHE_KEYS.all);
+  } catch (err) {
+    console.warn("[slotCache] invalidateSlotsCache error:", (err as Error).message);
+  }
+}
+
+/**
+ * Retrieve the cached slot list (legacy, for backward compatibility).
+ *
+ * @deprecated Use getCachedSlotsPage instead for paginated access.
  * @returns Parsed slot array on cache HIT, or `null` on MISS / error.
  */
 export async function getCachedSlots(): Promise<Slot[] | null> {
@@ -65,8 +148,9 @@ export async function getCachedSlots(): Promise<Slot[] | null> {
 }
 
 /**
- * Write the slot list to the cache with the configured TTL.
+ * Write the slot list to the cache with the configured TTL (legacy).
  *
+ * @deprecated Use setCachedSlotsPage instead for paginated access.
  * @param slots  - Array of slot objects to serialise and store.
  */
 export async function setCachedSlots(slots: Slot[]): Promise<void> {
@@ -83,84 +167,4 @@ export async function setCachedSlots(slots: Slot[]): Promise<void> {
   } catch (err) {
     console.warn("[slotCache] setCachedSlots error:", (err as Error).message);
   }
-}
-
-/**
- * Invalidate the slot list cache entry.
- *
- * Called after any write operation (POST, PUT, DELETE) so that the next GET
- * reflects the updated state.
- */
-export async function invalidateSlotsCache(): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) return;
-
-  try {
-    await redis.del(SLOT_CACHE_KEYS.all);
-  } catch (err) {
-    console.warn("[slotCache] invalidateSlotsCache error:", (err as Error).message);
-  }
-}
-
-/**
- * Single-flight cache-or-fetch for the slot list.
- *
- * - Cache HIT  → returns cached data immediately; increments hit counter.
- * - Cache MISS, no in-flight request → calls `fetcher`, writes result to cache,
- *   increments miss counter.
- * - Cache MISS, in-flight request already running → joins the existing Promise
- *   instead of issuing a second origin call; increments stampede-blocked counter.
- *
- * @param fetcher  - Async function that loads slots from the origin (DB / store).
- * @returns `{ slots, cacheStatus }` where cacheStatus is "HIT", "MISS", or "STAMPEDE_BLOCKED".
- */
-export async function getOrFetchSlots(
-  fetcher: () => Promise<Slot[]>,
-): Promise<{ slots: Slot[]; cacheStatus: "HIT" | "MISS" | "STAMPEDE_BLOCKED" }> {
-  const key = SLOT_CACHE_KEYS.all;
-
-  // ── 1. Try cache ────────────────────────────────────────────────────────────
-  const cached = await getCachedSlots();
-  if (cached !== null) {
-    recordCacheHit();
-    return { slots: cached, cacheStatus: "HIT" };
-  }
-
-  // ── 2. Check for an in-flight request (stampede protection) ─────────────────
-  const existing = _inFlight.get(key);
-  if (existing) {
-    recordStampedeBlocked();
-    const slots = await existing;
-    return { slots, cacheStatus: "STAMPEDE_BLOCKED" };
-  }
-
-  // ── 3. We are the first — run the fetch and share the Promise ────────────────
-  recordCacheMiss();
-  const fetchPromise = fetcher().then(async (slots) => {
-    await setCachedSlots(slots);
-    return slots;
-  }).finally(() => {
-    _inFlight.delete(key);
-  });
-
-  _inFlight.set(key, fetchPromise);
-
-  const slots = await fetchPromise;
-  return { slots, cacheStatus: "MISS" };
-}
-
-/**
- * Exposed for testing: returns the current in-flight map size.
- * @internal
- */
-export function _getInFlightCount(): number {
-  return _inFlight.size;
-}
-
-/**
- * Exposed for testing: clears the in-flight map (use in beforeEach/afterEach).
- * @internal
- */
-export function _clearInFlight(): void {
-  _inFlight.clear();
 }
