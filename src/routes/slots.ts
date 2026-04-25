@@ -43,6 +43,23 @@ export function resetSlotStore(): void {
   nextId = 1;
 }
 
+export function findSlotById(id: number): Slot | undefined {
+  return slotStore.find((slot) => slot.id === id);
+}
+
+export function removeSlotById(id: number): Slot | undefined {
+  const index = slotStore.findIndex((slot) => slot.id === id);
+  if (index < 0) {
+    return undefined;
+  }
+  const [removed] = slotStore.splice(index, 1);
+  return removed;
+}
+
+export function listStoredSlots(): Slot[] {
+  return [...slotStore];
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 /**
@@ -56,6 +73,9 @@ export function resetSlotStore(): void {
  *       var, default 60 s).  The `X-Cache` response header indicates whether
  *       the response was a cache HIT or MISS.
  *     tags: [Slots]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: A list of slot objects.
@@ -74,6 +94,10 @@ export function resetSlotStore(): void {
  *                   type: array
  *                   items:
  *                     $ref: '#/components/schemas/Slot'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
  */
 router.get("/", async (_req: Request, res: Response): Promise<void> => {
   // ── 1. Try cache ────────────────────────────────────────────────────────────
@@ -102,8 +126,10 @@ router.get("/", async (_req: Request, res: Response): Promise<void> => {
  *     summary: Create a new slot
  *     description: >
  *       Creates a slot and invalidates the `slots:all` cache so the next GET
- *       reflects the new record.
+ *       reflects the new record. Requires API key authentication for service access.
  *     tags: [Slots]
+ *     security:
+ *       - apiKeyAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -124,6 +150,10 @@ router.get("/", async (_req: Request, res: Response): Promise<void> => {
  *                   $ref: '#/components/schemas/Slot'
  *       400:
  *         description: Missing required fields.
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
  *
  * @openapi
  * components:
@@ -189,6 +219,9 @@ router.post(
  *       Returns a single slot by ID.
  *       Attempts to read from cache first, then falls back to data store.
  *     tags: [Slots]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -208,6 +241,10 @@ router.post(
  *                   $ref: '#/components/schemas/Slot'
  *       400:
  *         description: Invalid ID supplied
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
  *       404:
  *         description: Slot not found
  */

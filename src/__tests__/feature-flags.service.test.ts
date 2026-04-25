@@ -1,4 +1,5 @@
 import {
+  FEATURE_FLAGS,
   getFeatureFlagAccessor,
   resolveFeatureFlags,
   setFeatureFlagsFromEnv,
@@ -56,5 +57,18 @@ describe("feature flag service", () => {
 
     expect(accessor.isEnabled("CREATE_SLOT")).toBe(false);
     expect(accessor.list()).toEqual({ CREATE_SLOT: false });
+  });
+
+  it("defines guarded routes in the registry for every rollout flag", () => {
+    for (const [flag, definition] of Object.entries(FEATURE_FLAGS)) {
+      expect(definition.guardedRoutes.length).toBeGreaterThan(0);
+
+      for (const route of definition.guardedRoutes) {
+        expect(route.disabledResponse.code).toBe("FEATURE_DISABLED");
+        expect(route.disabledResponse.error).toBe(
+          `Feature ${flag} is currently disabled`,
+        );
+      }
+    }
   });
 });

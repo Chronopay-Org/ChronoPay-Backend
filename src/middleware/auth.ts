@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { jwtVerify } from "jose";
 
 export type ChronoPayRole = "customer" | "admin" | "professional";
 
@@ -9,6 +10,61 @@ export interface AuthContext {
 
 export interface AuthenticatedRequest extends Request {
   auth?: AuthContext;
+}
+
+export async function authenticateToken(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const authHeader =
+      (typeof req.header === "function" ? req.header("authorization") : undefined) ??
+      (typeof req.headers?.authorization === "string" ? req.headers.authorization : undefined);
+    const jwtSecret = process.env.JWT_SECRET;
+
+    if (!authHeader) {
+      if (!jwtSecret) {
+        return next();
+      }
+
+      return res.status(401).json({
+        success: false,
+        error: "Authorization header is required",
+      });
+    }
+
+    if (!authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        error: "Authorization header must use Bearer scheme",
+      });
+    }
+
+    const token = authHeader.slice("Bearer ".length).trim();
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: "Bearer token is missing",
+      });
+    }
+
+    if (!jwtSecret) {
+      return res.status(500).json({
+        success: false,
+        error: "Authentication middleware error",
+      });
+    }
+
+    const { payload } = await jwtVerify(token, new TextEncoder().encode(jwtSecret));
+    req.user = payload as Request["user"];
+    next();
+  } catch {
+    return res.status(401).json({
+      success: false,
+      error: "Invalid or expired token",
+    });
+  }
 }
 
 /**
@@ -43,6 +99,8 @@ export function requireAuthenticatedActor(
       role,
     };
 
+    (req as any).logContext = { userId: rawUserId.trim() };
+
     next();
   };
 }
@@ -53,9 +111,15 @@ function parseRole(rawRole: string | undefined): ChronoPayRole {
   }
 
   const normalized = rawRole.trim().toLowerCase();
-  if (normalized === "customer" || normalized === "admin" || normalized === "professional") {
+  if (
+    normalized === "customer" ||
+    normalized === "admin" ||
+    normalized === "professional"
+  ) {
     return normalized;
   }
 
   return "professional";
 }
+
+export const authenticateToken = requireAuthenticatedActor;
