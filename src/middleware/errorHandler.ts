@@ -53,9 +53,10 @@ function defaultLogError(error: Error, req: Request): void {
   const method = req.method;
   const url = req.url;
   const statusCode = isAppError(error) ? error.statusCode : 500;
+  const requestId = req.requestId ?? req.id ?? "unknown";
 
   console.error(
-    `[${timestamp}] ${method} ${url} - ${statusCode}: ${error.message}`,
+    `[${timestamp}] ${method} ${url} - ${statusCode} [requestId=${requestId}]: ${error.message}`,
     isAppError(error) && error.statusCode >= 500 ? error.stack : "",
   );
 }
@@ -99,6 +100,7 @@ export function createErrorHandler(
 
     // Get appropriate status code
     const statusCode = getStatusCode(err);
+    const requestId = req.requestId ?? req.id;
 
     // Build error response
     let errorResponse: Record<string, unknown>;
@@ -106,12 +108,22 @@ export function createErrorHandler(
     if (isAppError(err)) {
       // Use the structured error from our custom error classes
       errorResponse = err.toJSON();
+      if (
+        typeof errorResponse === "object" &&
+        errorResponse !== null &&
+        "error" in errorResponse &&
+        typeof (errorResponse as { error?: unknown }).error === "object" &&
+        (errorResponse as { error?: unknown }).error !== null
+      ) {
+        ((errorResponse as { error: Record<string, unknown> }).error).requestId = requestId;
+      }
     } else {
       // Handle unknown/unexpected errors
       const errorObj: Record<string, unknown> = {
         message: unknownErrorMessage,
         code: "INTERNAL_ERROR",
         timestamp: new Date().toISOString(),
+        requestId,
       };
 
       // Add stack trace in development only

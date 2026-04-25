@@ -119,6 +119,7 @@ export const createRequestLogger = () => {
     return (req: Request, res: Response, next: NextFunction) => {
       // Minimal request processing for tests
       (req as any).startTime = Date.now();
+      (req as any).id = req.requestId;
       next();
     };
   }
@@ -177,6 +178,9 @@ export const createRequestLogger = () => {
      * Custom request ID generation for traceability
      */
     genReqId: (req: any) => {
+      if (typeof req.requestId === "string" && req.requestId.length > 0) {
+        return req.requestId;
+      }
       // Use existing request ID if present (from proxy/gateway)
       const existingId =
         req.headers["x-request-id"] || req.headers["x-correlation-id"];
@@ -229,7 +233,7 @@ export const errorLoggerMiddleware = (
   res: Response,
   next: any
 ) => {
-  const requestId = req.id || "unknown";
+  const requestId = req.requestId || req.id || "unknown";
   const duration = calculateDuration(req.startTime);
 
   logger.error(
