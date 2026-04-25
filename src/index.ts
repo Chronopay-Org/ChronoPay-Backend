@@ -21,7 +21,6 @@ if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {
     logInfo(`Server running on port ${PORT}`);
   });
-}
 
 export default app;
 export { createApp };
