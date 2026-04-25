@@ -1,27 +1,26 @@
-import "dotenv/config";
-import { createApp as createBaseApp, type AppFactoryOptions } from "./app.js";
+export { createApp } from "./app.js";
+export { resetSlotStore as __resetSlotsForTests } from "./routes/slots.js";
+import { createApp } from "./app.js";
 import { loadEnvConfig, type EnvConfig } from "./config/env.js";
 
-const config = loadEnvConfig(process.env);
-
-interface AppListener {
-  listen(port: number, callback?: () => void): unknown;
-}
-
-export function createApp(options: AppFactoryOptions = {}) {
-  return createBaseApp(options);
-}
-
-export function startServer(app: AppListener, runtimeConfig: EnvConfig): unknown {
-  return app.listen(runtimeConfig.port, () => {
-    console.log(`ChronoPay API listening on http://localhost:${runtimeConfig.port}`);
+export function startServer(
+  server: { listen: (port: number, callback?: () => void) => unknown },
+  config: EnvConfig,
+) {
+  return server.listen(config.port, () => {
+    console.log(`ChronoPay API listening on http://localhost:${config.port}`);
   });
 }
 
+const config = loadEnvConfig();
 const app = createApp();
 
-if (config.nodeEnv !== "test") {
-  startServer(app, config);
+const PORT = process.env.PORT || 3000;
+
+if (process.env.NODE_ENV !== "test") {
+  app.listen(PORT, () => {
+    logInfo(`Server running on port ${PORT}`);
+  });
 }
 
 export default app;

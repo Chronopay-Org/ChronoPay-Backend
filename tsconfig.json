@@ -8,26 +8,9 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "types": ["node", "jest"]
   },
-  "include": [
-    "src/index.ts",
-    "src/app.ts",
-    "src/cache/**/*.ts",
-    "src/config/**/*.ts",
-    "src/middleware/apiKeyAuth.ts",
-    "src/middleware/auth.ts",
-    "src/middleware/checkout-validation.ts",
-    "src/middleware/errorHandling.ts",
-    "src/middleware/idempotency.ts",
-    "src/middleware/validation.ts",
-    "src/modules/**/*.ts",
-    "src/repositories/**/*.ts",
-    "src/routes/**/*.ts",
-    "src/services/checkout.ts",
-    "src/types/**/*.ts",
-    "src/utils/hash.ts",
-    "src/utils/idempotencyPayloadCodec.ts"
-  ],
-  "exclude": ["node_modules", "dist", "src/__tests__/**/*"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/__tests__/**"]
 }
