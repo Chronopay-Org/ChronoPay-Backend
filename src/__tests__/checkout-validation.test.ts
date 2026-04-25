@@ -1,15 +1,10 @@
-/**
- * Checkout Validation Tests
- * 
- * Tests for input validation functions and edge cases
- */
-
 import {
   isValidEmail,
   isValidAmount,
   isValidCurrency,
   isValidPaymentMethod,
   isValidCustomerId,
+  isValidAsset,
 } from "../middleware/checkout-validation.js";
 
 describe("Checkout Validation Functions", () => {
@@ -36,24 +31,61 @@ describe("Checkout Validation Functions", () => {
   });
 
   describe("isValidAmount", () => {
-    it("should accept valid amounts", () => {
+    it("should accept valid integer amounts", () => {
       expect(isValidAmount(1)).toBe(true);
-      expect(isValidAmount(999999999)).toBe(true);
       expect(isValidAmount(10000)).toBe(true);
+      expect(isValidAmount(1e12)).toBe(true);
     });
 
-    it("should reject invalid amounts", () => {
+    it("should accept valid decimal strings", () => {
+      expect(isValidAmount("100")).toBe(true);
+      expect(isValidAmount("10.50")).toBe(true);
+      expect(isValidAmount("0.0000001")).toBe(true);
+      expect(isValidAmount("1000000.1234567")).toBe(true);
+    });
+
+    it("should reject invalid decimal strings", () => {
+      expect(isValidAmount("abc")).toBe(false);
+      expect(isValidAmount("10.12345678")).toBe(false); // 8 decimals
+      expect(isValidAmount("10.50.10")).toBe(false);
+      expect(isValidAmount("-10.50")).toBe(false);
+      expect(isValidAmount("0")).toBe(false);
+    });
+
+    it("should reject invalid numbers", () => {
       expect(isValidAmount(0)).toBe(false);
       expect(isValidAmount(-100)).toBe(false);
-      expect(isValidAmount(100.5)).toBe(false);
-      expect(isValidAmount("1000")).toBe(false);
+      expect(isValidAmount(100.5)).toBe(false); // Decimals must be strings
       expect(isValidAmount(null)).toBe(false);
       expect(isValidAmount(undefined)).toBe(false);
     });
 
     it("should reject amounts exceeding limit", () => {
-      expect(isValidAmount(1e9 + 1)).toBe(false);
-      expect(isValidAmount(2e9)).toBe(false);
+      expect(isValidAmount(1e14 + 1)).toBe(false);
+      expect(isValidAmount("100000000000001")).toBe(false);
+    });
+  });
+
+  describe("isValidAsset", () => {
+    it("should accept 'native' asset", () => {
+      expect(isValidAsset("native")).toBe(true);
+    });
+
+    it("should accept valid AssetCode:Issuer format", () => {
+      const validIssuer = "GBX6Y3S2UC2X7Z7Y7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X";
+      expect(isValidAsset(`USDC:${validIssuer}`)).toBe(true);
+      expect(isValidAsset(`ARST:${validIssuer}`)).toBe(true);
+      expect(isValidAsset(`YUSDC:${validIssuer}`)).toBe(true);
+    });
+
+    it("should reject invalid asset formats", () => {
+      expect(isValidAsset("USDC")).toBe(false);
+      expect(isValidAsset("native:G... (56 chars)")).toBe(false);
+      expect(isValidAsset("USDC:G123")).toBe(false); // Short issuer
+      expect(isValidAsset("TOO_LONG_ASSET_CODE:GBX6Y3S2UC2X7Z7Y7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X")).toBe(false);
+      expect(isValidAsset("USDC:BX6Y3S2UC2X7Z7Y7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X7X")).toBe(false); // Missing 'G'
+      expect(isValidAsset(null)).toBe(false);
+      expect(isValidAsset(123)).toBe(false);
     });
   });
 

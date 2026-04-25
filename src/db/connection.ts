@@ -1,4 +1,6 @@
 import { Pool, PoolClient } from "pg";
+import { logger } from "../utils/logger.js";
+import { slowQueryCounter, slowQueryDuration } from "../metrics.js";
 
 /**
  * Module-level singleton pool. Lazily initialized on first call to getPool().
@@ -25,6 +27,46 @@ let _poolFactory: (connectionString: string) => Pool = (connectionString) =>
  */
 export function _setPoolFactory(factory: (connectionString: string) => Pool): void {
   _poolFactory = factory;
+}
+
+/**
+ * Slow-query threshold in milliseconds. Null = disabled.
+ * Defaults to SLOW_QUERY_THRESHOLD_MS env var; overridable in tests via _setSlowQueryThreshold().
+ */
+let _slowQueryThresholdMs: number | null = process.env.SLOW_QUERY_THRESHOLD_MS
+  ? Number(process.env.SLOW_QUERY_THRESHOLD_MS)
+  : null;
+
+/** @internal — for test injection only */
+export function _setSlowQueryThreshold(ms: number | null): void {
+  _slowQueryThresholdMs = ms;
+}
+
+/**
+ * Wraps a query execution function with slow-query detection.
+ *
+ * When the threshold is set and the query duration exceeds it, emits a
+ * structured warn log (query text only — no params to avoid leaking PII)
+ * and increments the slow-query counter and duration histogram.
+ *
+ * @param queryText  The SQL query string (logged as-is; never include params here).
+ * @param execute    Async function that performs the actual query.
+ */
+export async function instrumentQuery<T>(
+  queryText: string,
+  execute: () => Promise<T>,
+): Promise<T> {
+  const start = Date.now();
+  try {
+    return await execute();
+  } finally {
+    const duration = Date.now() - start;
+    if (_slowQueryThresholdMs !== null && duration >= _slowQueryThresholdMs) {
+      logger.warn({ query: queryText, durationMs: duration, threshold: _slowQueryThresholdMs }, "slow query detected");
+      slowQueryCounter.inc();
+      slowQueryDuration.observe(duration);
+    }
+  }
 }
 
 /**

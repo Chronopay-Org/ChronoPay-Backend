@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { jest } from "@jest/globals";
 import {
+  assertFeatureFlagGuardRegistration,
   featureFlagContextMiddleware,
   requireFeatureFlag,
 } from "../middleware/featureFlags.js";
@@ -96,5 +97,17 @@ describe("feature flag middleware", () => {
       error: "Feature flag evaluation failed",
     });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it("passes for registered guarded routes", () => {
+    expect(() =>
+      assertFeatureFlagGuardRegistration("CREATE_SLOT", "POST", "/api/v1/slots"),
+    ).not.toThrow();
+  });
+
+  it("fails for unregistered guarded routes", () => {
+    expect(() =>
+      assertFeatureFlagGuardRegistration("CREATE_SLOT", "POST", "/api/v1/slots/:id"),
+    ).toThrow(/Missing feature-flag registry entry/);
   });
 });

@@ -1,30 +1,26 @@
-import { loadEnvConfig } from "./config/env.js";
+export { createApp } from "./app.js";
+export { resetSlotStore as __resetSlotsForTests } from "./routes/slots.js";
 import { createApp } from "./app.js";
-import { logInfo } from "./utils/logger.js";
+import { loadEnvConfig, type EnvConfig } from "./config/env.js";
+
+export function startServer(
+  server: { listen: (port: number, callback?: () => void) => unknown },
+  config: EnvConfig,
+) {
+  return server.listen(config.port, () => {
+    console.log(`ChronoPay API listening on http://localhost:${config.port}`);
+  });
+}
 
 const config = loadEnvConfig();
 const app = createApp();
 
-export function startServer(appInstance: any = app, configOverride: any = config) {
-  const finalConfig = configOverride || config;
-  const finalApp = appInstance || app;
-  
-  return finalApp.listen(finalConfig.port, () => {
-    console.log(`ChronoPay API listening on http://localhost:${finalConfig.port}`);
-    logInfo(`ChronoPay API listening on http://localhost:${finalConfig.port}`, {
-      port: finalConfig.port,
-      environment: finalConfig.nodeEnv,
-    });
+const PORT = process.env.PORT || 3000;
+
+if (process.env.NODE_ENV !== "test") {
+  app.listen(PORT, () => {
+    logInfo(`Server running on port ${PORT}`);
   });
-}
-
-if (config.nodeEnv !== "test") {
-  startServer();
-}
-
-export function __resetSlotsForTests() {
-  // Reset function for tests - implementation depends on your slot storage
-  // This is a placeholder that tests can use
 }
 
 export default app;
