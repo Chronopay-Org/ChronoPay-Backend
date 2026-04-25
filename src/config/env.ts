@@ -3,6 +3,7 @@ export type NodeEnv = "development" | "test" | "production";
 export interface EnvConfig {
   nodeEnv: NodeEnv;
   port: number;
+  redisUrl: string;
 }
 
 /**
@@ -31,6 +32,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   const issues: string[] = [];
   const nodeEnv = parseNodeEnv(env.NODE_ENV, issues);
   const port = parsePort(env.PORT, issues);
+  const redisUrl = parseRedisUrl(env.REDIS_URL, issues);
 
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
@@ -39,6 +41,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   return {
     nodeEnv,
     port,
+    redisUrl,
   };
 }
 
@@ -86,4 +89,48 @@ function parsePort(rawValue: string | undefined, issues: string[]): number {
   }
 
   return parsed;
+}
+
+function parseRedisUrl(rawValue: string | undefined, issues: string[]): string {
+  if (rawValue === undefined) {
+    issues.push("REDIS_URL is required.");
+    return "redis://localhost:6379";
+  }
+
+  const value = rawValue.trim();
+
+  if (value.length === 0) {
+    issues.push("REDIS_URL must be a non-empty value.");
+    return "redis://localhost:6379";
+  }
+
+  try {
+    const url = new URL(value);
+    const allowedSchemes = ["redis:", "rediss:"];
+
+    if (!allowedSchemes.includes(url.protocol)) {
+      issues.push("REDIS_URL must use one of the supported schemes: redis, rediss.");
+      return "redis://localhost:6379";
+    }
+
+    if (!url.hostname) {
+      issues.push("REDIS_URL must include a host.");
+      return "redis://localhost:6379";
+    }
+
+    if (url.username || url.password) {
+      issues.push("REDIS_URL must not contain embedded credentials.");
+      return "redis://localhost:6379";
+    }
+
+    if (/\s/.test(value)) {
+      issues.push("REDIS_URL must not contain whitespace.");
+      return "redis://localhost:6379";
+    }
+
+    return value;
+  } catch {
+    issues.push("REDIS_URL must be a valid URL.");
+    return "redis://localhost:6379";
+  }
 }

@@ -1,4 +1,4 @@
-import { createChildContext, runWithTraceContext, getTraceContext } from "./context";
+import { createChildContext, runWithTraceContext, getTraceContext } from "./context.js";
 
 /**
  * Interface representing a tracing span.

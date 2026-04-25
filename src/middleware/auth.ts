@@ -53,9 +53,15 @@ function parseRole(rawRole: string | undefined): ChronoPayRole {
   }
 
   const normalized = rawRole.trim().toLowerCase();
-  if (normalized === "customer" || normalized === "admin" || normalized === "professional") {
+  if (
+    normalized === "customer" ||
+    normalized === "admin" ||
+    normalized === "professional"
+  ) {
     return normalized;
   }
 
   return "professional";
 }
+
+export const authenticateToken = requireAuthenticatedActor;
