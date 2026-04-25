@@ -11,13 +11,14 @@
 
 import { Router, Request, Response } from "express";
 import { validateRequiredFields } from "../middleware/validation.js";
-import { requireRole } from "../middleware/rbac.js";
-import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
-import { getCachedSlots, setCachedSlots, invalidateSlotsCache } from "../cache/slotCache.js";
-import { slotService, SlotNotFoundError, SlotValidationError } from "../services/slotService.js";
-import { listSlots } from "../services/slotService.js";
-import { getSlotsCount, getSlotsPage } from "../repositories/slotRepository.js";
+import {
+  getCachedSlots,
+  setCachedSlots,
+  invalidateSlotsCache,
+  getOrFetchSlots,
+  type Slot,
+} from "../cache/slotCache.js";
 
 export type Slot = {
   id: number;
@@ -39,65 +40,138 @@ export function resetSlotStore(): void {
   slotService.reset(); // also resets appSlots in index.ts via monkey-patch
 }
 
-export { slotStore, nextId };
+export function findSlotById(id: number): Slot | undefined {
+  return slotStore.find((slot) => slot.id === id);
+}
 
-// ─── GET /api/v1/slots ────────────────────────────────────────────────────────
-router.get("/", async (req: Request, res: Response): Promise<void> => {
-  const { page, limit } = req.query;
-
-  // Paginated mode: explicit query params only
-  const hasPaginationQuery = page !== undefined || limit !== undefined;
-
-  if (hasPaginationQuery) {
-    try {
-      const result = await listSlots(
-        {
-          page: page !== undefined ? Number(page) : undefined,
-          limit: limit !== undefined ? Number(limit) : undefined,
-        },
-        { getSlotsCount, getSlotsPage },
-      );
-      res.json(result);
-    } catch (err) {
-      res.status(400).json({
-        success: false,
-        error: err instanceof Error ? err.message : "Bad request",
-      });
-    }
-    return;
+export function removeSlotById(id: number): Slot | undefined {
+  const index = slotStore.findIndex((slot) => slot.id === id);
+  if (index < 0) {
+    return undefined;
   }
+  const [removed] = slotStore.splice(index, 1);
+  return removed;
+}
 
-  // Cache-aware mode (slotsRoute.test.ts + slots-cache.test.ts + feature-flags.integration.test.ts)
-  try {
-    const cached = await getCachedSlots();
-    if (cached !== null) {
-    res.set("X-Cache", "HIT");
-      res.set("Cache-Control", "no-store");
-      res.json({ slots: cached });
-      return;
-    }
-  } catch (err) {
-    console.warn("Redis GET failed, falling back to store:", err instanceof Error ? err.message : err);
-  }
+export function listStoredSlots(): Slot[] {
+  return [...slotStore];
+}
 
-  // Use slotStore (populated by POST, synced with slotService)
-  const slots: Slot[] = [...slotStore];
+// ─── Routes ───────────────────────────────────────────────────────────────────
 
-  try {
-    await setCachedSlots(slots as unknown as import("../cache/slotCache.js").Slot[]);
-  } catch (err) {
-    console.warn("Redis SET failed:", err instanceof Error ? err.message : err);
-  }
+/**
+ * @openapi
+ * /api/v1/slots:
+ *   get:
+ *     summary: List all available slots
+ *     description: >
+ *       Returns the full list of slots.  Results are served from the Redis
+ *       cache when available (TTL controlled by REDIS_SLOT_TTL_SECONDS env
+ *       var, default 60 s).  The `X-Cache` response header indicates whether
+ *       the response was a cache HIT or MISS.
+ *     tags: [Slots]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: A list of slot objects.
+ *         headers:
+ *           X-Cache:
+ *             schema:
+ *               type: string
+ *               enum: [HIT, MISS]
+ *             description: Indicates whether the response came from cache.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 slots:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Slot'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ */
+router.get("/", async (_req: Request, res: Response): Promise<void> => {
+  const { slots, cacheStatus } = await getOrFetchSlots(async () => [...slotStore]);
 
-  res.set("X-Cache", "MISS");
-  res.set("Cache-Control", "no-store");
+  res.set("X-Cache", cacheStatus === "HIT" ? "HIT" : "MISS");
   res.json({ slots });
 });
 
-// ─── POST /api/v1/slots ───────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/slots:
+ *   post:
+ *     summary: Create a new slot
+ *     description: >
+ *       Creates a slot and invalidates the `slots:all` cache so the next GET
+ *       reflects the new record. Requires API key authentication for service access.
+ *     tags: [Slots]
+ *     security:
+ *       - apiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/CreateSlotInput'
+ *     responses:
+ *       201:
+ *         description: Slot created successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 slot:
+ *                   $ref: '#/components/schemas/Slot'
+ *       400:
+ *         description: Missing required fields.
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *
+ * @openapi
+ * components:
+ *   schemas:
+ *     Slot:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: integer
+ *         professional:
+ *           type: string
+ *         startTime:
+ *           type: string
+ *           format: date-time
+ *         endTime:
+ *           type: string
+ *           format: date-time
+ *     CreateSlotInput:
+ *       type: object
+ *       required: [professional, startTime, endTime]
+ *       properties:
+ *         professional:
+ *           type: string
+ *         startTime:
+ *           type: string
+ *           format: date-time
+ *         endTime:
+ *           type: string
+ *           format: date-time
+ */
 router.post(
   "/",
   validateRequiredFields(["professional", "startTime", "endTime"]),
+  idempotencyMiddleware,
   async (req: Request, res: Response): Promise<void> => {
     const { professional, startTime, endTime } = req.body as {
       professional: string;
@@ -152,7 +226,44 @@ router.post(
   },
 );
 
-// ─── GET /api/v1/slots/:id ────────────────────────────────────────────────────
+/**
+ * @openapi
+ * /api/v1/slots/{id}:
+ *   get:
+ *     summary: Get slot by ID
+ *     description: >
+ *       Returns a single slot by ID.
+ *       Attempts to read from cache first, then falls back to data store.
+ *     tags: [Slots]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Slot ID
+ *     responses:
+ *       200:
+ *         description: Slot found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 slot:
+ *                   $ref: '#/components/schemas/Slot'
+ *       400:
+ *         description: Invalid ID supplied
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *       404:
+ *         description: Slot not found
+ */
 router.get("/:id", async (req: Request, res: Response): Promise<void> => {
   const id = Number(req.params.id);
 

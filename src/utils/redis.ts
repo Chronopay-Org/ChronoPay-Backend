@@ -1,7 +1,10 @@
-import { Redis } from "ioredis";
-
 // Singleton instance using `any` to bypass complex TS Namespace conflicts with ioredis types
 let redisClient: any = null;
+
+/** Reset the singleton — used in tests to get a fresh in-memory store. */
+export const resetRedisClient = (): void => {
+  redisClient = null;
+};
 
 export const getRedisClient = (): any => {
   if (!redisClient) {
@@ -12,7 +15,7 @@ export const getRedisClient = (): any => {
         ping: async () => "PONG",
         on: () => {},
         get: async (key: string) => memoryStore.get(key) || null,
-        set: async (key: string, val: string, ex: string, time: number, nx: string) => {
+        set: async (key: string, val: string, ex?: string, time?: number, nx?: string) => {
           if (nx === "NX" && memoryStore.has(key)) return null;
           memoryStore.set(key, val);
           return "OK";
@@ -21,8 +24,11 @@ export const getRedisClient = (): any => {
       return redisClient;
     }
 
+    // Dynamically import ioredis only in non-test environments
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { Redis } = require("ioredis");
     const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-    
+
     redisClient = new Redis(redisUrl, {
       maxRetriesPerRequest: null,
       enableReadyCheck: false,

@@ -14,11 +14,15 @@ import request from "supertest";
 import app from "../index.js";
 import { CheckoutSessionService } from "../services/checkout.js";
 import { CheckoutSessionStatus, CheckoutErrorCode } from "../types/checkout.js";
+import { defaultAuditLogger } from "../services/auditLogger.js";
 
 describe("Checkout Session API", () => {
+  const logSpy = jest.spyOn(defaultAuditLogger, "log").mockResolvedValue();
+
   // Clean up sessions before each test
   beforeEach(() => {
     CheckoutSessionService.clearAllSessions();
+    logSpy.mockClear();
   });
 
   // ==================== Create Session Tests ====================
@@ -95,6 +99,7 @@ describe("Checkout Session API", () => {
           amount: 1000000, // 1 XLM in stroops
           currency: "XLM",
           paymentMethod: "crypto",
+          asset: "native",
         },
         customer: {
           customerId: "stellar_wallet_123",
@@ -204,7 +209,7 @@ describe("Checkout Session API", () => {
         .post("/api/v1/checkout/sessions")
         .send({
           payment: {
-            amount: 2e9, // Exceeds 1e9 limit
+            amount: 2e14, // Exceeds 1e14 limit
             currency: "USD",
             paymentMethod: "credit_card",
           },
@@ -682,6 +687,43 @@ describe("Checkout Session API", () => {
   });
 
   // ==================== Additional Coverage Tests ====================
+
+  describe("Audit Logging", () => {
+    it("should emit initiated, validated, and reserved on session creation", async () => {
+      const payload = {
+        payment: { amount: 10000, currency: "USD", paymentMethod: "credit_card" },
+        customer: { customerId: "cust_123", email: "audit@test.com" },
+      };
+
+      await request(app).post("/api/v1/checkout/sessions").send(payload);
+
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: "checkout.initiated" }));
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: "checkout.validated", status: "success" }));
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: "checkout.reserved" }));
+    });
+
+    it("should not log sensitive email or paymentTokens", async () => {
+      const payload = {
+        payment: { amount: 10000, currency: "USD", paymentMethod: "credit_card" },
+        customer: { customerId: "cust_123", email: "secretive@test.com" },
+      };
+
+      const res = await request(app).post("/api/v1/checkout/sessions").send(payload);
+      const sessionId = res.body.session.id;
+
+      await request(app).post(`/api/v1/checkout/sessions/${sessionId}/complete`).send({ paymentToken: "tok_secret123" });
+
+      const logCalls = logSpy.mock.calls;
+      const allLogsStr = JSON.stringify(logCalls);
+
+      expect(allLogsStr).not.toContain("secretive@test.com");
+      expect(allLogsStr).not.toContain("tok_secret123");
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+        action: "checkout.paid",
+        metadata: expect.objectContaining({ tokenProvided: true }),
+      }));
+    });
+  });
 
   describe("Checkout Service Direct Tests", () => {
     it("should clean expired sessions", async () => {

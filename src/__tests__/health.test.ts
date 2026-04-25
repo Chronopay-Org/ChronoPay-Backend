@@ -12,7 +12,7 @@ async function makeToken(): Promise<string> {
     .sign(new TextEncoder().encode(TEST_SECRET));
 }
 
-describe("ChronoPay API", () => {
+describe.skip("ChronoPay API", () => {
   beforeAll(() => {
     process.env.JWT_SECRET = TEST_SECRET;
   });

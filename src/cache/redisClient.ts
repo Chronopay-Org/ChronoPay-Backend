@@ -19,7 +19,7 @@
  *   `setRedisClient` escape hatch.
  */
 
-import {Redis} from "ioredis";
+import {createRequire} from "module";
 
 
 export const SLOT_CACHE_TTL_SECONDS = parseInt(
@@ -28,6 +28,7 @@ export const SLOT_CACHE_TTL_SECONDS = parseInt(
 );
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+const require = createRequire(import.meta.url);
 
 /**
  * The minimal Redis surface the rest of the application uses.
@@ -35,8 +36,15 @@ const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
  */
 export interface RedisClient {
   get(key: string): Promise<string | null>;
-  set(key: string, value: string, exMode: "EX", ttl: number): Promise<unknown>;
+  set(
+    key: string,
+    value: string,
+    exMode: "EX",
+    ttl: number,
+    condition?: "NX",
+  ): Promise<unknown>;
   del(key: string): Promise<unknown>;
+  keys(pattern: string): Promise<string[]>;
   quit(): Promise<unknown>;
 }
 
@@ -56,6 +64,19 @@ export function getRedisClient(): RedisClient | null {
   }
 
   if (!_client) {
+    const {Redis} = require("ioredis") as {
+      Redis: new (
+        url: string,
+        options: {
+          retryStrategy: (times: number) => number;
+          maxRetriesPerRequest: number;
+          enableReadyCheck: boolean;
+          lazyConnect: boolean;
+        },
+      ) => RedisClient & {
+        on(event: "connect" | "error", handler: (...args: unknown[]) => void): void;
+      };
+    };
     const redis = new Redis(REDIS_URL, {
       // Retry with exponential back-off capped at 2 s; give up after 10 attempts.
       retryStrategy: (times:number) => Math.min(times * 100, 2000),
@@ -67,9 +88,11 @@ export function getRedisClient(): RedisClient | null {
     redis.on("connect", () =>
       console.info("[redis] Connected to", REDIS_URL),
     );
-    redis.on("error", (err: Error) =>
-      console.error("[redis] Connection error:", err.message),
-    );
+    redis.on("error", (...args: unknown[]) => {
+      const err = args[0];
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[redis] Connection error:", message);
+    });
 
     _client = redis;
   }

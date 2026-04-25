@@ -165,6 +165,7 @@ rate limiting.
 ## Feature Flags
 
 ChronoPay backend uses environment-driven feature flags for safe rollout and rapid disable.
+For the enforced registry and guarded-route mapping, see [`docs/feature-flags.md`](docs/feature-flags.md).
 
 ### Configuration
 
