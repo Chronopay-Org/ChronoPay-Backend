@@ -97,4 +97,44 @@ describe("auditMiddleware", () => {
       expect.any(Object)
     );
   });
+
+  it("should use socket.remoteAddress when req.ip is undefined", () => {
+    const middleware = auditMiddleware("GET_ITEM");
+
+    const req: Partial<Request> = {
+      ip: undefined,
+      originalUrl: "/api/items/123",
+      method: "GET",
+      body: {},
+      socket: { remoteAddress: "10.0.0.1" } as any,
+    };
+
+    let finishCallback: () => void;
+    
+    const res: Partial<Response> = {
+      statusCode: 200,
+      on: jest.fn((event, cb) => {
+        if (event === "finish") {
+          finishCallback = cb as () => void;
+        }
+        return res as Response;
+      }),
+    };
+
+    const next: NextFunction = jest.fn();
+
+    middleware(req as Request, res as Response, next);
+    finishCallback!();
+
+    expect(defaultAuditLogger.log).toHaveBeenCalledWith(
+      "GET_ITEM",
+      {
+        method: "GET",
+        body: undefined,
+      },
+      expect.objectContaining({
+        actorIp: "10.0.0.1",
+      })
+    );
+  });
 });

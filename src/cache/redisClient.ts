@@ -44,6 +44,7 @@ export interface RedisClient {
     condition?: "NX",
   ): Promise<unknown>;
   del(key: string): Promise<unknown>;
+  keys(pattern: string): Promise<string[]>;
   quit(): Promise<unknown>;
 }
 

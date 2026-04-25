@@ -104,4 +104,82 @@ describe("AuditLogger", () => {
       "utf8"
     );
   });
+
+  it("should handle mkdir failure gracefully", async () => {
+    jest.spyOn(fs, "mkdir").mockRejectedValue(new Error("Permission denied") as never);
+    const consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      logger.log("TEST", {}, { status: 200 })
+    ).resolves.toBeUndefined();
+
+    expect(consoleSpy).toHaveBeenCalledWith("Failed to write to audit log:", expect.any(Error));
+    consoleSpy.mockRestore();
+  });
+
+  it("should use default service and environment when not provided", async () => {
+    const defaultLogger = new AuditLogger();
+    const mkdirSpy = jest.spyOn(fs, "mkdir").mockResolvedValue(undefined as never);
+    const appendSpy = jest.spyOn(fs, "appendFile").mockResolvedValue(undefined as never);
+
+    await defaultLogger.log("TEST", {}, { status: 200 });
+
+    expect(appendSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('"service":"chronopay-backend"'),
+      "utf8"
+    );
+    expect(appendSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('"environment":"dev"'),
+      "utf8"
+    );
+  });
+
+  it("should handle legacy entry without metadata", async () => {
+    const mkdirSpy = jest.spyOn(fs, "mkdir").mockResolvedValue(undefined as never);
+    const appendSpy = jest.spyOn(fs, "appendFile").mockResolvedValue(undefined as never);
+
+    await logger.log({
+      action: "LEGACY_ACTION",
+      status: 200,
+    });
+
+    expect(appendSpy).toHaveBeenCalledWith(
+      "test.log",
+      expect.stringContaining('"action":"LEGACY_ACTION"'),
+      "utf8"
+    );
+    expect(appendSpy).toHaveBeenCalledWith(
+      "test.log",
+      expect.stringContaining('"version":"1.0.0"'),
+      "utf8"
+    );
+  });
+
+  it("should handle undefined data parameter", async () => {
+    const mkdirSpy = jest.spyOn(fs, "mkdir").mockResolvedValue(undefined as never);
+    const appendSpy = jest.spyOn(fs, "appendFile").mockResolvedValue(undefined as never);
+
+    await logger.log("TEST_ACTION", undefined as any, { status: 200 });
+
+    expect(appendSpy).toHaveBeenCalledWith(
+      "test.log",
+      expect.stringContaining('"action":"TEST_ACTION"'),
+      "utf8"
+    );
+  });
+
+  it("should handle null data parameter", async () => {
+    const mkdirSpy = jest.spyOn(fs, "mkdir").mockResolvedValue(undefined as never);
+    const appendSpy = jest.spyOn(fs, "appendFile").mockResolvedValue(undefined as never);
+
+    await logger.log("TEST_ACTION", null as any, { status: 200 });
+
+    expect(appendSpy).toHaveBeenCalledWith(
+      "test.log",
+      expect.stringContaining('"action":"TEST_ACTION"'),
+      "utf8"
+    );
+  });
 });

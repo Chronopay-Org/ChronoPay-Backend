@@ -17,6 +17,7 @@ module.exports = {
   moduleNameMapper: {
     "^(\\.{1,2}/.*)\\.js$": "$1",
     "^(\\.{1,2}/.*)$": "$1",
+    "^ioredis$": "<rootDir>/src/__tests__/mocks/ioredisMock.js",
   },
   transform: { "^.+\\.tsx?$": ["ts-jest", { useESM: true }] },
   testMatch: ["**/__tests__/**/*.test.ts"],
