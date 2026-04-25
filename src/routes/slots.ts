@@ -43,6 +43,23 @@ export function resetSlotStore(): void {
   nextId = 1;
 }
 
+export function findSlotById(id: number): Slot | undefined {
+  return slotStore.find((slot) => slot.id === id);
+}
+
+export function removeSlotById(id: number): Slot | undefined {
+  const index = slotStore.findIndex((slot) => slot.id === id);
+  if (index < 0) {
+    return undefined;
+  }
+  const [removed] = slotStore.splice(index, 1);
+  return removed;
+}
+
+export function listStoredSlots(): Slot[] {
+  return [...slotStore];
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 /**

@@ -12,6 +12,14 @@ export class BuyerProfileController {
           message: "User must be authenticated to create a profile",
         });
       }
+      const userId = req.user.id;
+      if (!userId || typeof userId !== "string") {
+        return res.status(401).json({
+          success: false,
+          error: "Authentication required",
+          message: "User identity is missing",
+        });
+      }
 
       const { fullName, email, phoneNumber, address, avatarUrl } = req.body;
 
@@ -55,6 +63,14 @@ export class BuyerProfileController {
           success: false,
           error: "Authentication required",
           message: "User must be authenticated to view their profile",
+        });
+      }
+      const userId = req.user.id;
+      if (!userId || typeof userId !== "string") {
+        return res.status(401).json({
+          success: false,
+          error: "Authentication required",
+          message: "User identity is missing",
         });
       }
 

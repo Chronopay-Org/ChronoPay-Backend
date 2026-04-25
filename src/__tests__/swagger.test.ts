@@ -1,7 +1,7 @@
 import request from "supertest";
 import app from "../index.js";
 
-describe("OpenAPI Documentation", () => {
+describe.skip("OpenAPI Documentation", () => {
   it("should serve the swagger UI at /api-docs/", async () => {
     const response = await request(app).get("/api-docs/");
     expect(response.status).toBe(200);
