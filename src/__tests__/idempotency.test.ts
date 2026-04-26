@@ -206,10 +206,14 @@ describe.skip("Idempotency Middleware (integration)", () => {
     await idempotencyMiddleware(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(422);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: "Unprocessable Entity: Idempotency-Key used with different payload.",
-    });
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        code: "IDEMPOTENCY_KEY_MISMATCH",
+        error: "Unprocessable Entity: Idempotency-Key used with different payload.",
+        timestamp: expect.any(String),
+      }),
+    );
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -235,10 +239,14 @@ describe.skip("Idempotency Middleware (integration)", () => {
     await idempotencyMiddleware(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(409);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: "Conflict: This transaction is actively running.",
-    });
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        code: "IDEMPOTENCY_IN_PROGRESS",
+        error: "Conflict: This transaction is actively running.",
+        timestamp: expect.any(String),
+      }),
+    );
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -303,10 +311,14 @@ describe.skip("Idempotency Middleware (integration)", () => {
     await idempotencyMiddleware(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(409);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: "Conflict: This transaction is actively running.",
-    });
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        code: "IDEMPOTENCY_IN_PROGRESS",
+        error: "Conflict: This transaction is actively running.",
+        timestamp: expect.any(String),
+      }),
+    );
     expect(next).not.toHaveBeenCalled();
   });
 

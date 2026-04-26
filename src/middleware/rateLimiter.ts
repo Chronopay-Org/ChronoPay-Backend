@@ -4,6 +4,8 @@ import rateLimit, {
 } from "express-rate-limit";
 import { type Request, type Response } from "express";
 import { configService } from "../config/config.service.js";
+import { RateLimitError } from "../errors/AppError.js";
+import { sendErrorResponse } from "../errors/sendError.js";
 
 /**
  * Creates a rate limiter middleware with configurable window and request ceiling.
@@ -20,11 +22,8 @@ export function createRateLimiter(
     limit: resolvedMax,
     standardHeaders: "draft-7",
     legacyHeaders: false,
-    handler: (_req: Request, res: Response) => {
-      res.status(429).json({
-        success: false,
-        error: "Too many requests, please try again later.",
-      });
+    handler: (req: Request, res: Response) => {
+      sendErrorResponse(res, new RateLimitError(), req);
     },
   };
 

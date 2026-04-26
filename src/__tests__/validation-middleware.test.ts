@@ -29,10 +29,14 @@ describe("validateRequiredFields middleware", () => {
     middleware(request, response, next);
 
     expect((response as unknown as { statusCode: number }).statusCode).toBe(400);
-    expect(responseBody[0]).toEqual({
-      success: false,
-      error: "Request body is missing or invalid",
-    });
+    expect(responseBody[0]).toEqual(
+      expect.objectContaining({
+        success: false,
+        code: "BAD_REQUEST",
+        error: "Request body is missing or invalid",
+        timestamp: expect.any(String),
+      }),
+    );
   });
 
   it("returns 500 when a middleware exception occurs", () => {
@@ -49,9 +53,13 @@ describe("validateRequiredFields middleware", () => {
     middleware(request, response, next);
 
     expect((response as unknown as { statusCode: number }).statusCode).toBe(500);
-    expect(responseBody[0]).toEqual({
-      success: false,
-      error: "Validation middleware error",
-    });
+    expect(responseBody[0]).toEqual(
+      expect.objectContaining({
+        success: false,
+        code: "INTERNAL_ERROR",
+        error: "Validation middleware error",
+        timestamp: expect.any(String),
+      }),
+    );
   });
 });

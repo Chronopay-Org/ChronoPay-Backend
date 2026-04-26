@@ -1,15 +1,36 @@
 import { NextFunction, Request, Response } from "express";
+import {
+  AppError,
+  MalformedJsonError,
+  isAppError,
+  type AppErrorEnvelope,
+} from "../errors/AppError.js";
+import { ERROR_CODES } from "../errors/errorCodes.js";
+
+function withRequestContext(
+  envelope: AppErrorEnvelope,
+  req: Request,
+): AppErrorEnvelope {
+  const requestId = req.requestId ?? req.id;
+  if (requestId !== undefined) {
+    envelope.requestId = requestId;
+  }
+  return envelope;
+}
 
 export function notFoundHandler(req: Request, res: Response) {
-  return res.status(404).json({
-    success: false,
-    error: `Route not found: ${req.method} ${req.path}`,
-  });
+  const err = new AppError(
+    `Route not found: ${req.method} ${req.path}`,
+    ERROR_CODES.NOT_FOUND.status,
+    ERROR_CODES.NOT_FOUND.code,
+    true,
+  );
+  return res.status(err.statusCode).json(withRequestContext(err.toJSON(), req));
 }
 
 export function jsonParseErrorHandler(
   err: Error & { status?: number; type?: string },
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction,
 ) {
@@ -17,38 +38,29 @@ export function jsonParseErrorHandler(
     return next(err);
   }
 
-  return res.status(400).json({
-    success: false,
-    error: "Malformed JSON payload",
-  });
+  const wrapped = new MalformedJsonError();
+  return res
+    .status(wrapped.statusCode)
+    .json(withRequestContext(wrapped.toJSON(), req));
 }
 
 export function genericErrorHandler(
   err: unknown,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction,
 ) {
-  if (
-    err instanceof Error &&
-    "statusCode" in err &&
-    "code" in err
-  ) {
-    const e = err as any;
-    if (
-      (e.statusCode === 415 || e.statusCode === 406) &&
-      (e.code === "UNSUPPORTED_MEDIA_TYPE" || e.code === "NOT_ACCEPTABLE")
-    ) {
-      return res.status(e.statusCode).json({
-        success: false,
-        code: e.code,
-        error: e.message,
-      });
-    }
+  if (isAppError(err)) {
+    return res
+      .status(err.statusCode)
+      .json(withRequestContext(err.toJSON(), req));
   }
 
-  return res.status(500).json({
+  const fallback: AppErrorEnvelope = {
     success: false,
+    code: ERROR_CODES.INTERNAL_ERROR.code,
     error: "Internal server error",
-  });
+    timestamp: new Date().toISOString(),
+  };
+  return res.status(500).json(withRequestContext(fallback, req));
 }

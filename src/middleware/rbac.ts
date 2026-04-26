@@ -1,5 +1,13 @@
 import { Request, Response, NextFunction } from "express";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import {
+  BadRequestError,
+  ForbiddenError,
+  InternalServerError,
+  UnauthorizedError,
+} from "../errors/AppError.js";
+import { ERROR_CODES } from "../errors/errorCodes.js";
+import { sendErrorResponse } from "../errors/sendError.js";
 
 const ROLE_HEADER = "x-user-role";
 const VALID_ROLES = ["admin", "professional", "customer"] as const;
@@ -43,35 +51,45 @@ export function requireRole(allowedRoles: UserRole[]) {
 
       if (!parsedRole) {
         emitRbacAudit(req, "RBAC_MISSING", 401);
-        return res.status(401).json({
-          success: false,
-          error: `Missing required authentication header: ${ROLE_HEADER}`,
-        });
+        return sendErrorResponse(
+          res,
+          new UnauthorizedError(
+            `Missing required authentication header: ${ROLE_HEADER}`,
+            ERROR_CODES.AUTHENTICATION_REQUIRED.code,
+          ),
+          req,
+        );
       }
 
       if (!isValidRole(parsedRole)) {
         // parsedRole is a normalized string — safe to log as it is not a raw header value.
         emitRbacAudit(req, "RBAC_INVALID_ROLE", 400, { role: parsedRole });
-        return res.status(400).json({
-          success: false,
-          error: "Invalid user role",
-        });
+        return sendErrorResponse(
+          res,
+          new BadRequestError("Invalid user role"),
+          req,
+        );
       }
 
       if (!allowedRoleSet.has(parsedRole)) {
         emitRbacAudit(req, "RBAC_FORBIDDEN", 403, { role: parsedRole });
-        return res.status(403).json({
-          success: false,
-          error: "Insufficient permissions",
-        });
+        return sendErrorResponse(
+          res,
+          new ForbiddenError(
+            "Insufficient permissions",
+            ERROR_CODES.INSUFFICIENT_PERMISSIONS.code,
+          ),
+          req,
+        );
       }
 
       return next();
     } catch {
-      return res.status(500).json({
-        success: false,
-        error: "Authorization middleware error",
-      });
+      return sendErrorResponse(
+        res,
+        new InternalServerError("Authorization middleware error"),
+        req,
+      );
     }
   };
 }
