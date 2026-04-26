@@ -1,48 +1,69 @@
 /**
  * Buyer Profile Data Transfer Objects (DTOs)
- * 
- * Defines validation schemas and transformation logic for Buyer Profile operations.
- * Uses runtime validation since class-validator is not available in this project.
+ *
+ * Validation, allowlist enforcement, and normalization for Buyer Profile operations.
  */
 
 import { Request, Response, NextFunction } from "express";
 
-/**
- * Validation error structure
- */
 export interface ValidationError {
   field: string;
   message: string;
 }
 
-/**
- * Validate email format
- */
+// ---------------------------------------------------------------------------
+// Allowlists
+// ---------------------------------------------------------------------------
+
+/** Accepted fields for create requests. Any other key is rejected. */
+const CREATE_ALLOWLIST = new Set(["fullName", "email", "phoneNumber", "address", "avatarUrl"]);
+
+/** Accepted fields for update requests. Any other key is rejected. */
+const UPDATE_ALLOWLIST = new Set(["fullName", "email", "phoneNumber", "address", "avatarUrl"]);
+
+// ---------------------------------------------------------------------------
+// Length limits
+// ---------------------------------------------------------------------------
+
+const LIMITS = {
+  fullName: { min: 2, max: 100 },
+  email: { max: 255 },
+  phoneNumber: { min: 7, max: 20 },
+  address: { max: 500 },
+  avatarUrl: { max: 2048 },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Normalize all unicode whitespace variants to a single ASCII space, then trim. */
+function normalizeWhitespace(s: string): string {
+  // \p{Z} covers all Unicode separator categories; \s covers ASCII control whitespace
+  return s.replace(/[\p{Z}\s]+/gu, " ").trim();
+}
+
+/** Sanitize a text field: normalize whitespace and strip < > to prevent injection. */
+function sanitizeString(input: string): string {
+  return normalizeWhitespace(input).replace(/[<>]/g, "");
+}
+
 function isValidEmail(email: string): boolean {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 /**
- * Validate phone number format (basic validation)
- * Accepts formats: +1234567890, 123-456-7890, (123) 456-7890, etc.
+ * Phone: digits, spaces, hyphens, plus, parentheses only.
+ * Length enforced separately via LIMITS.
  */
 function isValidPhoneNumber(phone: string): boolean {
-  const phoneRegex = /^[\d\s\-+()]{10,20}$/;
-  return phoneRegex.test(phone);
+  return /^[\d\s\-+()]+$/.test(phone);
 }
 
-/**
- * Validate UUID format
- */
 function isValidUUID(uuid: string): boolean {
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  return uuidRegex.test(uuid);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid);
 }
 
-/**
- * Validate URL format
- */
 function isValidURL(url: string): boolean {
   try {
     new URL(url);
@@ -53,15 +74,22 @@ function isValidURL(url: string): boolean {
 }
 
 /**
- * Sanitize string input (trim and remove potentially dangerous characters)
+ * fullName must contain only letters (any script), spaces, hyphens, apostrophes, and periods.
+ * Rejects digits and most special characters.
  */
-function sanitizeString(input: string): string {
-  return input.trim().replace(/[<>]/g, "");
+function isValidFullName(name: string): boolean {
+  return /^[\p{L}\p{M}'\-. ]+$/u.test(name);
 }
 
-/**
- * Create Buyer Profile DTO validation
- */
+/** Return the set of unknown keys in body relative to an allowlist. */
+function unknownFields(body: Record<string, unknown>, allowlist: Set<string>): string[] {
+  return Object.keys(body).filter((k) => !allowlist.has(k));
+}
+
+// ---------------------------------------------------------------------------
+// DTOs
+// ---------------------------------------------------------------------------
+
 export interface CreateBuyerProfileDTO {
   fullName: string;
   email: string;
@@ -70,9 +98,18 @@ export interface CreateBuyerProfileDTO {
   avatarUrl?: string;
 }
 
-/**
- * Validate Create Buyer Profile DTO
- */
+export interface UpdateBuyerProfileDTO {
+  fullName?: string;
+  email?: string;
+  phoneNumber?: string;
+  address?: string;
+  avatarUrl?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Validators
+// ---------------------------------------------------------------------------
+
 export function validateCreateBuyerProfileDTO(data: unknown): ValidationError[] {
   const errors: ValidationError[] = [];
 
@@ -83,44 +120,64 @@ export function validateCreateBuyerProfileDTO(data: unknown): ValidationError[] 
 
   const body = data as Record<string, unknown>;
 
-  // Validate fullName
-  if (!body.fullName || typeof body.fullName !== "string") {
-    errors.push({ field: "fullName", message: "Full name is required" });
-  } else if (body.fullName.trim().length < 2) {
-    errors.push({ field: "fullName", message: "Full name must be at least 2 characters" });
-  } else if (body.fullName.trim().length > 100) {
-    errors.push({ field: "fullName", message: "Full name must not exceed 100 characters" });
+  // Allowlist check
+  const unknown = unknownFields(body, CREATE_ALLOWLIST);
+  if (unknown.length > 0) {
+    errors.push({ field: "body", message: `Unknown field(s): ${unknown.join(", ")}` });
   }
 
-  // Validate email
+  // fullName
+  if (!body.fullName || typeof body.fullName !== "string") {
+    errors.push({ field: "fullName", message: "Full name is required" });
+  } else {
+    const name = normalizeWhitespace(body.fullName);
+    if (name.length < LIMITS.fullName.min) {
+      errors.push({ field: "fullName", message: "Full name must be at least 2 characters" });
+    } else if (name.length > LIMITS.fullName.max) {
+      errors.push({ field: "fullName", message: "Full name must not exceed 100 characters" });
+    } else if (!isValidFullName(name)) {
+      errors.push({ field: "fullName", message: "Full name contains invalid characters" });
+    }
+  }
+
+  // email
   if (!body.email || typeof body.email !== "string") {
     errors.push({ field: "email", message: "Email is required" });
   } else if (!isValidEmail(body.email)) {
     errors.push({ field: "email", message: "Invalid email format" });
-  } else if (body.email.length > 255) {
+  } else if (body.email.length > LIMITS.email.max) {
     errors.push({ field: "email", message: "Email must not exceed 255 characters" });
   }
 
-  // Validate phoneNumber
+  // phoneNumber
   if (!body.phoneNumber || typeof body.phoneNumber !== "string") {
     errors.push({ field: "phoneNumber", message: "Phone number is required" });
-  } else if (!isValidPhoneNumber(body.phoneNumber)) {
-    errors.push({ field: "phoneNumber", message: "Invalid phone number format" });
+  } else {
+    const phone = body.phoneNumber.trim();
+    if (phone.length < LIMITS.phoneNumber.min) {
+      errors.push({ field: "phoneNumber", message: "Invalid phone number format" });
+    } else if (phone.length > LIMITS.phoneNumber.max) {
+      errors.push({ field: "phoneNumber", message: "Phone number must not exceed 20 characters" });
+    } else if (!isValidPhoneNumber(phone)) {
+      errors.push({ field: "phoneNumber", message: "Invalid phone number format" });
+    }
   }
 
-  // Validate address (optional)
+  // address (optional)
   if (body.address !== undefined && body.address !== null) {
     if (typeof body.address !== "string") {
       errors.push({ field: "address", message: "Address must be a string" });
-    } else if (body.address.length > 500) {
+    } else if (body.address.length > LIMITS.address.max) {
       errors.push({ field: "address", message: "Address must not exceed 500 characters" });
     }
   }
 
-  // Validate avatarUrl (optional)
+  // avatarUrl (optional)
   if (body.avatarUrl !== undefined && body.avatarUrl !== null) {
     if (typeof body.avatarUrl !== "string") {
       errors.push({ field: "avatarUrl", message: "Avatar URL must be a string" });
+    } else if (body.avatarUrl.length > LIMITS.avatarUrl.max) {
+      errors.push({ field: "avatarUrl", message: "Avatar URL must not exceed 2048 characters" });
     } else if (!isValidURL(body.avatarUrl)) {
       errors.push({ field: "avatarUrl", message: "Invalid URL format" });
     }
@@ -129,20 +186,6 @@ export function validateCreateBuyerProfileDTO(data: unknown): ValidationError[] 
   return errors;
 }
 
-/**
- * Update Buyer Profile DTO validation
- */
-export interface UpdateBuyerProfileDTO {
-  fullName?: string;
-  email?: string;
-  phoneNumber?: string;
-  address?: string;
-  avatarUrl?: string;
-}
-
-/**
- * Validate Update Buyer Profile DTO
- */
 export function validateUpdateBuyerProfileDTO(data: unknown): ValidationError[] {
   const errors: ValidationError[] = [];
 
@@ -153,63 +196,73 @@ export function validateUpdateBuyerProfileDTO(data: unknown): ValidationError[] 
 
   const body = data as Record<string, unknown>;
 
-  // Check if at least one field is provided
-  const hasAtLeastOneField = 
-    body.fullName !== undefined ||
-    body.email !== undefined ||
-    body.phoneNumber !== undefined ||
-    body.address !== undefined ||
-    body.avatarUrl !== undefined;
+  // Allowlist check
+  const unknown = unknownFields(body, UPDATE_ALLOWLIST);
+  if (unknown.length > 0) {
+    errors.push({ field: "body", message: `Unknown field(s): ${unknown.join(", ")}` });
+  }
 
-  if (!hasAtLeastOneField) {
+  // At least one known field required
+  const hasField = UPDATE_ALLOWLIST.size > 0 &&
+    [...UPDATE_ALLOWLIST].some((k) => body[k] !== undefined);
+  if (!hasField) {
     errors.push({ field: "body", message: "At least one field must be provided for update" });
     return errors;
   }
 
-  // Validate fullName (optional)
   if (body.fullName !== undefined) {
     if (typeof body.fullName !== "string") {
       errors.push({ field: "fullName", message: "Full name must be a string" });
-    } else if (body.fullName.trim().length < 2) {
-      errors.push({ field: "fullName", message: "Full name must be at least 2 characters" });
-    } else if (body.fullName.trim().length > 100) {
-      errors.push({ field: "fullName", message: "Full name must not exceed 100 characters" });
+    } else {
+      const name = normalizeWhitespace(body.fullName);
+      if (name.length < LIMITS.fullName.min) {
+        errors.push({ field: "fullName", message: "Full name must be at least 2 characters" });
+      } else if (name.length > LIMITS.fullName.max) {
+        errors.push({ field: "fullName", message: "Full name must not exceed 100 characters" });
+      } else if (!isValidFullName(name)) {
+        errors.push({ field: "fullName", message: "Full name contains invalid characters" });
+      }
     }
   }
 
-  // Validate email (optional)
   if (body.email !== undefined) {
     if (typeof body.email !== "string") {
       errors.push({ field: "email", message: "Email must be a string" });
     } else if (!isValidEmail(body.email)) {
       errors.push({ field: "email", message: "Invalid email format" });
-    } else if (body.email.length > 255) {
+    } else if (body.email.length > LIMITS.email.max) {
       errors.push({ field: "email", message: "Email must not exceed 255 characters" });
     }
   }
 
-  // Validate phoneNumber (optional)
   if (body.phoneNumber !== undefined) {
     if (typeof body.phoneNumber !== "string") {
       errors.push({ field: "phoneNumber", message: "Phone number must be a string" });
-    } else if (!isValidPhoneNumber(body.phoneNumber)) {
-      errors.push({ field: "phoneNumber", message: "Invalid phone number format" });
+    } else {
+      const phone = body.phoneNumber.trim();
+      if (phone.length < LIMITS.phoneNumber.min) {
+        errors.push({ field: "phoneNumber", message: "Invalid phone number format" });
+      } else if (phone.length > LIMITS.phoneNumber.max) {
+        errors.push({ field: "phoneNumber", message: "Phone number must not exceed 20 characters" });
+      } else if (!isValidPhoneNumber(phone)) {
+        errors.push({ field: "phoneNumber", message: "Invalid phone number format" });
+      }
     }
   }
 
-  // Validate address (optional)
   if (body.address !== undefined && body.address !== null) {
     if (typeof body.address !== "string") {
       errors.push({ field: "address", message: "Address must be a string" });
-    } else if (body.address.length > 500) {
+    } else if (body.address.length > LIMITS.address.max) {
       errors.push({ field: "address", message: "Address must not exceed 500 characters" });
     }
   }
 
-  // Validate avatarUrl (optional)
   if (body.avatarUrl !== undefined && body.avatarUrl !== null) {
     if (typeof body.avatarUrl !== "string") {
       errors.push({ field: "avatarUrl", message: "Avatar URL must be a string" });
+    } else if (body.avatarUrl.length > LIMITS.avatarUrl.max) {
+      errors.push({ field: "avatarUrl", message: "Avatar URL must not exceed 2048 characters" });
     } else if (!isValidURL(body.avatarUrl)) {
       errors.push({ field: "avatarUrl", message: "Invalid URL format" });
     }
@@ -218,9 +271,6 @@ export function validateUpdateBuyerProfileDTO(data: unknown): ValidationError[] 
   return errors;
 }
 
-/**
- * Validate UUID parameter
- */
 export function validateUUIDParam(data: unknown): ValidationError[] {
   const errors: ValidationError[] = [];
 
@@ -240,95 +290,56 @@ export function validateUUIDParam(data: unknown): ValidationError[] {
   return errors;
 }
 
-/**
- * Transform create DTO to service data
- */
+// ---------------------------------------------------------------------------
+// Transformers — produce a clean, allowlisted object (unknown keys dropped)
+// ---------------------------------------------------------------------------
+
 export function transformCreateDTO(dto: CreateBuyerProfileDTO): CreateBuyerProfileDTO {
   return {
     fullName: sanitizeString(dto.fullName),
     email: dto.email.trim().toLowerCase(),
     phoneNumber: dto.phoneNumber.trim(),
-    address: dto.address ? sanitizeString(dto.address) : undefined,
-    avatarUrl: dto.avatarUrl?.trim(),
+    ...(dto.address != null ? { address: sanitizeString(dto.address) } : {}),
+    ...(dto.avatarUrl != null ? { avatarUrl: dto.avatarUrl.trim() } : {}),
   };
 }
 
-/**
- * Transform update DTO to service data
- */
 export function transformUpdateDTO(dto: UpdateBuyerProfileDTO): UpdateBuyerProfileDTO {
-  const transformed: UpdateBuyerProfileDTO = {};
-
-  if (dto.fullName !== undefined) {
-    transformed.fullName = sanitizeString(dto.fullName);
-  }
-  if (dto.email !== undefined) {
-    transformed.email = dto.email.trim().toLowerCase();
-  }
-  if (dto.phoneNumber !== undefined) {
-    transformed.phoneNumber = dto.phoneNumber.trim();
-  }
-  if (dto.address !== undefined) {
-    transformed.address = dto.address ? sanitizeString(dto.address) : undefined;
-  }
-  if (dto.avatarUrl !== undefined) {
-    transformed.avatarUrl = dto.avatarUrl?.trim();
-  }
-
-  return transformed;
+  const out: UpdateBuyerProfileDTO = {};
+  if (dto.fullName !== undefined) out.fullName = sanitizeString(dto.fullName);
+  if (dto.email !== undefined) out.email = dto.email.trim().toLowerCase();
+  if (dto.phoneNumber !== undefined) out.phoneNumber = dto.phoneNumber.trim();
+  if (dto.address !== undefined) out.address = dto.address ? sanitizeString(dto.address) : undefined;
+  if (dto.avatarUrl !== undefined) out.avatarUrl = dto.avatarUrl?.trim();
+  return out;
 }
 
-/**
- * Middleware to validate create buyer profile request
- */
+// ---------------------------------------------------------------------------
+// Middleware
+// ---------------------------------------------------------------------------
+
 export function validateCreateBuyerProfile(req: Request, res: Response, next: NextFunction) {
   const errors = validateCreateBuyerProfileDTO(req.body);
-
   if (errors.length > 0) {
-    return res.status(400).json({
-      success: false,
-      error: "Validation failed",
-      details: errors,
-    });
+    return res.status(400).json({ success: false, error: "Validation failed", details: errors });
   }
-
-  // Transform the data
   req.body = transformCreateDTO(req.body as CreateBuyerProfileDTO);
   next();
 }
 
-/**
- * Middleware to validate update buyer profile request
- */
 export function validateUpdateBuyerProfile(req: Request, res: Response, next: NextFunction) {
   const errors = validateUpdateBuyerProfileDTO(req.body);
-
   if (errors.length > 0) {
-    return res.status(400).json({
-      success: false,
-      error: "Validation failed",
-      details: errors,
-    });
+    return res.status(400).json({ success: false, error: "Validation failed", details: errors });
   }
-
-  // Transform the data
   req.body = transformUpdateDTO(req.body as UpdateBuyerProfileDTO);
   next();
 }
 
-/**
- * Middleware to validate UUID parameter
- */
 export function validateUUID(req: Request, res: Response, next: NextFunction) {
   const errors = validateUUIDParam(req.params);
-
   if (errors.length > 0) {
-    return res.status(400).json({
-      success: false,
-      error: "Validation failed",
-      details: errors,
-    });
+    return res.status(400).json({ success: false, error: "Validation failed", details: errors });
   }
-
   next();
 }
