@@ -22,6 +22,26 @@ import {
 import { AppError, isAppError, getStatusCode, ContentNegotiationError } from "../errors/AppError.js";
 
 /**
+ * Domain error code to HTTP status mapping table
+ * Ensures consistent mapping across all modules
+ */
+const DOMAIN_ERROR_HTTP_STATUS: Record<string, number> = {
+  BAD_REQUEST: 400,
+  VALIDATION_ERROR: 400,
+  UNAUTHORIZED: 401,
+  AUTHENTICATION_ERROR: 401,
+  FORBIDDEN: 403,
+  AUTHORIZATION_ERROR: 403,
+  NOT_FOUND: 404,
+  CONFLICT: 409,
+  UNPROCESSABLE_ENTITY: 422,
+  RATE_LIMIT: 429,
+  RATE_LIMIT_ERROR: 429,
+  SERVICE_UNAVAILABLE: 503,
+  FEATURE_DISABLED: 503,
+};
+
+/**
  * Configuration options for error handling middleware
  */
 export interface ErrorHandlerOptions {
@@ -108,43 +128,53 @@ export function createErrorHandler(
     // Determine if this is an operational error (expected)
     const isOperational = isAppError(err) && err.isOperational;
 
-    // Get appropriate status code
-    const statusCode = getStatusCode(err);
+    // Determine HTTP status code using mapping table
+    let statusCode = 500;
+    let errorCode = "INTERNAL_ERROR";
     const requestId = req.requestId ?? req.id;
-
-    // Build error response
     let errorResponse: Record<string, unknown>;
 
     if (isAppError(err)) {
-      // Use the structured error from our custom error classes
-      errorResponse = err.toJSON();
-      if (
-        typeof errorResponse === "object" &&
-        errorResponse !== null &&
-        "error" in errorResponse &&
-        typeof (errorResponse as { error?: unknown }).error === "object" &&
-        (errorResponse as { error?: unknown }).error !== null
-      ) {
-        ((errorResponse as { error: Record<string, unknown> }).error).requestId = requestId;
+      errorCode = err.code;
+      // Use mapping table if code is known, else fallback to error's statusCode or 500
+      statusCode = DOMAIN_ERROR_HTTP_STATUS[errorCode] || err.statusCode || 500;
+      // Always sanitize internal errors (unknown or operational=false)
+      if (!err.isOperational || statusCode === 500) {
+        errorResponse = {
+          success: false,
+          error: {
+            message: unknownErrorMessage,
+            code: "INTERNAL_ERROR",
+            timestamp: new Date().toISOString(),
+            requestId,
+          },
+        };
+        statusCode = 500;
+      } else {
+        // Use the structured error from our custom error classes
+        errorResponse = err.toJSON();
+        if (
+          typeof errorResponse === "object" &&
+          errorResponse !== null &&
+          "error" in errorResponse &&
+          typeof (errorResponse as { error?: unknown }).error === "object" &&
+          (errorResponse as { error?: unknown }).error !== null
+        ) {
+          ((errorResponse as { error: Record<string, unknown> }).error).requestId = requestId;
+        }
       }
     } else {
       // Handle unknown/unexpected errors
-      const errorObj: Record<string, unknown> = {
-        message: unknownErrorMessage,
-        code: "INTERNAL_ERROR",
-        timestamp: new Date().toISOString(),
-        requestId,
-      };
-
-      // Add stack trace in development only
-      if (includeStackTrace && err.stack) {
-        errorObj.stack = err.stack;
-      }
-
       errorResponse = {
         success: false,
-        error: errorObj,
+        error: {
+          message: unknownErrorMessage,
+          code: "INTERNAL_ERROR",
+          timestamp: new Date().toISOString(),
+          requestId,
+        },
       };
+      statusCode = 500;
     }
 
     // Send error response
