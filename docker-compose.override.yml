@@ -1,0 +1,51 @@
+# Local development override for Docker Compose
+# This file is automatically loaded by docker-compose when running 'docker-compose up'
+# It overrides production settings for local development
+
+version: "3.8"
+
+services:
+  api:
+    build:
+      target: builder  # Use builder stage for dev (includes dev dependencies)
+    container_name: chronopay-api-dev
+    restart: "no"
+    ports:
+      - "${PORT:-3001}:3001"
+      - "9229:9229"  # Node.js debug port
+    environment:
+      - NODE_ENV=development
+      - PORT=${PORT:-3001}
+      - DEBUG=*
+    volumes:
+      # Mount source code for hot reload during development
+      - ./src:/app/src:ro
+      # Mount package.json for dependency updates
+      - ./package.json:/app/package.json:ro
+      # Exclude node_modules from volume mount
+      - /app/node_modules
+      # Exclude dist to use container's built version
+      - /app/dist
+    command: ["npx", "tsx", "watch", "--inspect=0.0.0.0:9229", "src/index.ts"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health', (r) => r.statusCode === 200 ? process.exit(0) : process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Remove production security restrictions for development
+    security_opt: []
+    read_only: false
+    tmpfs: []
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    # Development labels
+    labels:
+      - "com.chronopay.service=api"
+      - "com.chronopay.environment=development"

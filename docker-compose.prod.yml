@@ -1,0 +1,42 @@
+# Production Docker Compose configuration for ChronoPay Backend
+# Use this file with: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+version: "3.8"
+
+services:
+  api:
+    container_name: chronopay-api-prod
+    restart: always
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: pause
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service_name,environment"
+    labels:
+      - "com.chronopay.service=api"
+      - "com.chronopay.environment=production"

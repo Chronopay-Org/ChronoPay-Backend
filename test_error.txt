@@ -1,0 +1,86 @@
+
+> chronopay-backend@0.1.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand
+
+node.exe : 
+(node:19156) 
+ExperimentalWarning: 
+VM Modules is an 
+experimental feature 
+and might change at 
+any time
+At line:1 char:1
++ & "C:\Program Files\
+nodejs/node.exe" 
+"C:\Program 
+Files\nodejs/node_mo 
+...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: ((node:1915   
+ 6) Ex...nge at an    
+y time:String) []    
+, RemoteException
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+(Use `node 
+--trace-warnings ...` 
+to show where the 
+warning was created)
+PASS src/__tests__/val
+idation.test.ts
+FAIL src/__tests__/hea
+lth.test.ts
+  ??? Test suite 
+failed to run
+
+    ReferenceError: 
+jest is not defined
+
+    [0m [90m 3 
+|[39m
+     [90m 4 |[39m 
+[90m// Mock the 
+redis module so we 
+don't need a real 
+redis server for 
+tests[39m
+    [31m[1m>[22m[3
+9m[90m 5 |[39m jest
+[33m.[39mmock([32m".
+./utils/redis.js"[39m
+[33m,[39m () 
+[33m=>[39m ({
+     [90m   |[39m 
+[31m[1m^[22m[39m
+     [90m 6 |[39m   
+getRedisClient[33m:[
+39m jest[33m.[39mfn(
+)[33m.[39mmockReturn
+Value({
+     [90m 7 |[39m   
+  ping[33m:[39m jest
+[33m.[39mfn()[33m.
+[39mmockResolvedValue(
+[32m"PONG"[39m)[33m
+,[39m
+     [90m 8 |[39m   
+})[33m,[39m[0m
+
+      at src/__tests__
+/health.test.ts:5:1
+
+Test Suites: 1 
+failed, 1 passed, 2 
+total
+Tests:       4 
+passed, 4 total
+Snapshots:   0 total
+Time:        5.206 s
+Ran all test suites.
