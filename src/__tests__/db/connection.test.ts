@@ -27,7 +27,7 @@ const mockClient = { query: mockQueryFn, release: mockReleaseFn } as unknown as 
 
 let mockConnectFn: jest.MockedFunction<() => Promise<PoolClient>>;
 let mockEndFn: jest.MockedFunction<() => Promise<void>>;
-let mockOnFn: jest.MockedFunction<() => void>;
+let mockOnFn: jest.MockedFunction<(event: string, listener: (err: Error) => void) => void>;
 let mockPoolInstance: Pool;
 
 const FAKE_URL = "postgresql://user:pass@localhost:5432/test";
@@ -47,7 +47,7 @@ beforeEach(async () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mockEndFn = jest.fn<any>().mockResolvedValue(undefined);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mockOnFn = jest.fn<any>();
+  mockOnFn = jest.fn<(event: string, listener: (...args: any[]) => void) => any>();
 
   mockPoolInstance = {
     connect: mockConnectFn,
@@ -56,7 +56,7 @@ beforeEach(async () => {
   } as unknown as Pool;
 
   // Inject the mock factory — returns our controlled pool instance
-  _setPoolFactory(() => mockPoolInstance);
+  _setPoolFactory((_url: string) => mockPoolInstance);
 
   // Restore mockQueryFn default behavior
   mockQueryFn.mockResolvedValue({ rows: [] });
@@ -79,8 +79,8 @@ describe("getPool()", () => {
 
   it("creates a Pool using the factory with the DATABASE_URL", () => {
     process.env.DATABASE_URL = FAKE_URL;
-    const factoryFn = jest.fn<() => Pool>().mockReturnValue(mockPoolInstance);
-    _setPoolFactory(factoryFn as unknown as (url: string) => Pool);
+    const factoryFn = jest.fn<(url: string) => Pool>().mockReturnValue(mockPoolInstance);
+    _setPoolFactory(factoryFn);
     getPool();
     expect(factoryFn).toHaveBeenCalledWith(FAKE_URL);
   });
@@ -118,7 +118,7 @@ describe("closePool()", () => {
 
     // Build a second mock pool to confirm re-creation
     const secondPool = { connect: jest.fn(), end: jest.fn(), on: jest.fn() } as unknown as Pool;
-    _setPoolFactory(() => secondPool);
+    _setPoolFactory((_url: string) => secondPool);
     const p2 = getPool();
     expect(p2).toBe(secondPool);
   });

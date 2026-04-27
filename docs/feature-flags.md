@@ -1,76 +1,27 @@
 # Feature Flags
 
-Environment-driven feature flags for safe rollout and rapid disable of ChronoPay features.
+This document is the canonical map between feature flags and guarded HTTP routes.
+Tests enforce that every registered flag and guarded route remains documented here.
 
-## Configuration
+## Supported Values
 
-- Flag env format: `FF_<FLAG_NAME>`
-- Flags are validated at startup; malformed values cause a fast-fail before serving requests.
+Feature flag environment variables are case-insensitive and support:
 
-### Supported values (case-insensitive)
+- Enabled: `true`, `1`, `on`, `yes`
+- Disabled: `false`, `0`, `off`, `no`
 
-| Enabled | Disabled |
-|---|---|
-| `true`, `1`, `on`, `yes` | `false`, `0`, `off`, `no` |
+Malformed values fail startup with a clear validation error.
 
-If a flag env variable is missing, the service uses the registered default value.
+## Registry
 
-## Registered flags
+| Flag | Env Var | Default | Guarded Routes | Disabled Behavior |
+| --- | --- | --- | --- | --- |
+| `CREATE_SLOT` | `FF_CREATE_SLOT` | `true` | `POST /api/v1/slots` | `503` with `{ success: false, code: "FEATURE_DISABLED", error: "Feature CREATE_SLOT is currently disabled" }` |
 
-| Flag | Env var | Default | Description |
-|---|---|---|---|
-| `CREATE_SLOT` | `FF_CREATE_SLOT` | `true` | Enable slot creation via `POST /api/v1/slots` |
-| `CHECKOUT` | `FF_CHECKOUT` | `true` | Enable checkout endpoints. Set to `false` to kill-switch during incidents. |
+## Security Notes
 
-## FF_CHECKOUT kill switch
+- Feature checks are fail-closed for malformed environment configuration at startup.
+- Guarded endpoints return deterministic `503` payloads when disabled.
+- Missing environment variables fall back to registry defaults.
+- Unknown feature flag lookups are treated as server misconfiguration and rejected.
 
-`FF_CHECKOUT` guards all checkout routes (`POST /api/v1/checkout/sessions`, `GET /api/v1/checkout/sessions/:id`, and all session state transitions).
-
-### Enabled (default)
-
-All checkout routes behave normally.
-
-### Disabled (`FF_CHECKOUT=false`)
-
-All checkout routes immediately return `503` with a deterministic payload:
-
-```json
-{
-  "success": false,
-  "code": "FEATURE_DISABLED",
-  "error": "Feature CHECKOUT is currently disabled"
-}
-```
-
-No session is created, read, or modified. The response is returned before any business logic runs.
-
-### Quick disable during an incident
-
-```bash
-# Disable checkout immediately (restart required to pick up env change)
-FF_CHECKOUT=false npm run start
-
-# Re-enable
-FF_CHECKOUT=true npm run start
-```
-
-## Failure-mode handling
-
-| Scenario | Behaviour |
-|---|---|
-| Missing env var | Falls back to registered default |
-| Malformed value (e.g. `enabled`) | Service fails at startup with explicit error |
-| Unknown flag lookup in code | Treated as server misconfiguration; throws `Error` |
-
-## Implementation
-
-- Flag registry: `src/flags/registry.ts`
-- Flag types: `src/flags/types.ts`
-- Flag service (parse, resolve, read): `src/flags/service.ts`
-- Middleware: `src/middleware/featureFlags.ts` — `requireFeatureFlag(flag)` and `featureFlagContextMiddleware`
-
-## Test coverage
-
-`src/__tests__/checkout-kill-switch.test.ts` covers enabled/disabled/malformed paths, all truthy/falsy value variants, and the deterministic 503 response shape.
-
-`src/__tests__/feature-flags.service.test.ts` covers the flag service in isolation.

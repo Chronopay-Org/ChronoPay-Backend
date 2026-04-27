@@ -1,8 +1,8 @@
 import request from "supertest";
-import app from "../index";
-import { getTraceContext, generateId, runWithTraceContext } from "../tracing/context";
-import { TRACE_HEADERS } from "../tracing/middleware";
-import { withSpan, getCurrentSpan } from "../tracing/hooks";
+import app from "../index.js";
+import { getTraceContext, generateId, runWithTraceContext } from "../tracing/context.js";
+import { TRACE_HEADERS } from "../tracing/middleware.js";
+import { withSpan, getCurrentSpan } from "../tracing/hooks.js";
 
 describe("Distributed Tracing", () => {
   describe("Context Management", () => {
@@ -58,7 +58,7 @@ describe("Distributed Tracing", () => {
 
   describe("Tracing Hooks (withSpan)", () => {
     it("should create a child span and return function result", async () => {
-      const result = await withSpan("test-operation", { key: "value" }, async (span) => {
+      const result = await withSpan("test-operation", { key: "value" }, async (span: any) => {
         expect(span.name).toBe("test-operation");
         expect(span.attributes.key).toBe("value");
         return "success";
