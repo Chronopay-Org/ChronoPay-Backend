@@ -35,10 +35,9 @@ export function genericErrorHandler(
     "code" in err
   ) {
     const e = err as any;
-    if (
-      (e.statusCode === 415 || e.statusCode === 406) &&
-      (e.code === "UNSUPPORTED_MEDIA_TYPE" || e.code === "NOT_ACCEPTABLE")
-    ) {
+    // Emit a consistent envelope for any AppError-shaped error (includes
+    // ServiceUnavailableError / 503 from dependency outages).
+    if (typeof e.statusCode === "number" && typeof e.code === "string") {
       return res.status(e.statusCode).json({
         success: false,
         code: e.code,

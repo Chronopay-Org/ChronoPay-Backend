@@ -102,7 +102,7 @@ describe.skip("Idempotency Middleware (integration)", () => {
     expect(redis.get).not.toHaveBeenCalled();
   });
 
-  it("bypasses idempotency when Redis is unavailable", async () => {
+  it("returns 503 DEPENDENCY_UNAVAILABLE when Redis is unavailable (fail-closed)", async () => {
     setRedisClient(null);
     const req = mockRequest({
       method: "POST",
@@ -115,7 +115,13 @@ describe.skip("Idempotency Middleware (integration)", () => {
 
     await idempotencyMiddleware(req, res, next);
 
-    expect(next).toHaveBeenCalledWith();
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      code: "DEPENDENCY_UNAVAILABLE",
+      error: "Redis is currently unavailable",
+    });
+    expect(next).not.toHaveBeenCalled();
   });
 
   it("replays a stored completed response", async () => {
