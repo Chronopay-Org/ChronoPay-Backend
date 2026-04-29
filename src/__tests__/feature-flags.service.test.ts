@@ -56,7 +56,7 @@ describe("feature flag service", () => {
     const accessor = getFeatureFlagAccessor();
 
     expect(accessor.isEnabled("CREATE_SLOT")).toBe(false);
-    expect(accessor.list()).toEqual({ CREATE_SLOT: false });
+    expect(accessor.list()).toEqual({ CREATE_SLOT: false, CHECKOUT: true });
   });
 
   it("defines guarded routes in the registry for every rollout flag", () => {
