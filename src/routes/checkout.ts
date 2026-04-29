@@ -22,8 +22,13 @@ import {
   GetCheckoutSessionResponse,
   CheckoutErrorResponse,
 } from "../types/checkout.js";
+import { requireFeatureFlag } from "../middleware/featureFlags.js";
+import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../middleware/payloadLimit.js";
 
 const checkoutRouter = Router();
+
+// Kill-switch: all checkout routes are guarded by FF_CHECKOUT.
+checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
 
 /**
  * @openapi
@@ -126,6 +131,7 @@ const checkoutRouter = Router();
  */
 checkoutRouter.post(
   "/sessions",
+  ...payloadLimit(ROUTE_PAYLOAD_LIMITS.checkout),
   validateCreateCheckoutSession(),
   idempotencyMiddleware,
   (req: Request, res: Response) => {

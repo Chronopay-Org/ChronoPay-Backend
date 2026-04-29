@@ -23,6 +23,14 @@ export interface EnvConfig {
   nodeEnv: NodeEnv;
   port: number;
   redisUrl: string;
+  rateLimitWindowMs: number;
+  rateLimitMax: number;
+  trustProxy: boolean;
+  timeoutMs?: number;
+  webhookSecret?: string;
+  jwtIssuer?: string;
+  jwtAudience?: string;
+  corsAllowedOrigins?: string[];
 }
 
 export class EnvValidationError extends Error {
@@ -65,6 +73,14 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     nodeEnv,
     port,
     redisUrl,
+    rateLimitWindowMs,
+    rateLimitMax,
+    trustProxy,
+    timeoutMs,
+    webhookSecret,
+    jwtIssuer,
+    jwtAudience,
+    corsAllowedOrigins,
   };
 }
 
@@ -172,4 +188,25 @@ function parseRedisUrl(rawValue: string | undefined, issues: string[]): string {
     issues.push("REDIS_URL must be a valid URL.");
     return "redis://localhost:6379";
   }
+}
+
+function parseBoolean(rawValue: string | undefined, key: string, defaultValue: boolean, issues: string[]): boolean {
+  if (rawValue === undefined) return defaultValue;
+  const val = rawValue.trim().toLowerCase();
+  if (val === "true" || val === "1") return true;
+  if (val === "false" || val === "0") return false;
+  issues.push(`${key} must be a boolean value (true/false).`);
+  return defaultValue;
+}
+
+function parseOptionalString(rawValue: string | undefined): string | undefined {
+  if (rawValue === undefined) return undefined;
+  const val = rawValue.trim();
+  if (val === "") return undefined;
+  return val;
+}
+
+function parseStringList(rawValue: string | undefined): string[] {
+  if (rawValue === undefined) return [];
+  return rawValue.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 }

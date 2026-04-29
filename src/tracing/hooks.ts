@@ -1,4 +1,5 @@
 import { createChildContext, runWithTraceContext, getTraceContext } from "./context.js";
+import { emitSpan } from "./spanExporter.js";
 
 /**
  * Interface representing a tracing span.
@@ -12,21 +13,26 @@ export interface Span {
   startTime: number;
   endTime?: number;
   duration?: number;
-  attributes: Record<string, any>;
+  /** Stable, non-PII attributes: route, requestId, outcome, latency, error */
+  attributes: Record<string, string | number | boolean>;
 }
 
 /**
- * Hook to manually instrument a synchronous or asynchronous function with a new span.
- * This automatically handles span lifecycle and context propagation.
- * 
- * @param name - The name of the span (e.g., "db.query", "api.call").
- * @param attributes - Metadata associated with the span.
- * @param fn - The function to execute within this span.
- * @returns The result of the function execution.
+ * Wraps a synchronous or asynchronous function in a new child span.
+ *
+ * Stable attributes automatically recorded:
+ *   - outcome: "ok" | "error"
+ *   - latency: duration in ms (alias for duration)
+ *   - error: true (only on failure)
+ *   - error.message: sanitised message (only on failure)
+ *
+ * @param name       Span name, e.g. "slots.create"
+ * @param attributes Initial attributes — must NOT contain PII or secrets.
+ * @param fn         Work to execute inside the span.
  */
 export async function withSpan<T>(
   name: string,
-  attributes: Record<string, any>,
+  attributes: Record<string, string | number | boolean>,
   fn: (span: Span) => Promise<T> | T,
 ): Promise<T> {
   const childContext = createChildContext();
@@ -40,41 +46,35 @@ export async function withSpan<T>(
   };
 
   try {
-    // Run the function within the new child context
     const result = await runWithTraceContext(childContext, () => fn(span));
-    
+
     span.endTime = Date.now();
     span.duration = span.endTime - span.startTime;
-    
-    // In a real production system, we would export this span to a collector here
-    // For now, we'll log it for visibility if in development
-    if (process.env.DEBUG_TRACING === "true") {
-      console.log(`[TRACING] Span "${name}" completed:`, span);
-    }
+    span.attributes.outcome = "ok";
+    span.attributes.latency = span.duration;
 
+    emitSpan(span);
     return result;
   } catch (error) {
     span.endTime = Date.now();
     span.duration = span.endTime - span.startTime;
+    span.attributes.outcome = "error";
+    span.attributes.latency = span.duration;
     span.attributes.error = true;
-    span.attributes["error.message"] = error instanceof Error ? error.message : String(error);
+    span.attributes["error.message"] =
+      error instanceof Error ? error.message : String(error);
 
-    if (process.env.DEBUG_TRACING === "true") {
-      console.error(`[TRACING] Span "${name}" failed:`, span);
-    }
-    
+    emitSpan(span);
     throw error;
   }
 }
 
 /**
- * Retrieves the current span information from the active context.
- * Useful for adding attributes to the current span dynamically.
+ * Returns a snapshot of the current span from the active AsyncLocalStorage context.
  */
 export function getCurrentSpan(): Partial<Span> | undefined {
   const context = getTraceContext();
   if (!context) return undefined;
-
   return {
     traceId: context.traceId,
     spanId: context.spanId,

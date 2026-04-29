@@ -168,3 +168,8 @@ export async function setCachedSlots(slots: Slot[]): Promise<void> {
     console.warn("[slotCache] setCachedSlots error:", (err as Error).message);
   }
 }
+
+export async function getOrFetchSlots(fetcher: () => Promise<Slot[]>): Promise<{ slots: Slot[], cacheStatus: "HIT" | "MISS" }> {
+  const slots = await fetcher();
+  return { slots, cacheStatus: "MISS" };
+}

@@ -5,6 +5,9 @@ import {
   setFeatureFlagsFromEnv,
 } from "../flags/index.js";
 import type { FeatureFlagName } from "../flags/index.js";
+import { AppError, ServiceUnavailableError } from "../errors/AppError.js";
+import { ERROR_CODES } from "../errors/errorCodes.js";
+import { sendErrorResponse } from "../errors/sendError.js";
 
 // Extend Express Request to include flags
 declare global {
@@ -40,20 +43,28 @@ export function requireFeatureFlag(flag: FeatureFlagName) {
   return (req: Request, res: Response, next: NextFunction) => {
     try {
       if (!req.flags!.isEnabled(flag)) {
-        return res.status(503).json({
-          success: false,
-          code: "FEATURE_DISABLED",
-          error: `Feature ${flag} is currently disabled`,
-        });
+        return sendErrorResponse(
+          res,
+          new ServiceUnavailableError(
+            `Feature ${flag} is currently disabled`,
+            ERROR_CODES.FEATURE_DISABLED.code,
+          ),
+          req,
+        );
       }
 
       next();
     } catch {
-      return res.status(500).json({
-        success: false,
-        code: "FEATURE_FLAG_EVALUATION_ERROR",
-        error: "Feature flag evaluation failed",
-      });
+      return sendErrorResponse(
+        res,
+        new AppError(
+          "Feature flag evaluation failed",
+          ERROR_CODES.FEATURE_FLAG_EVALUATION_ERROR.status,
+          ERROR_CODES.FEATURE_FLAG_EVALUATION_ERROR.code,
+          true,
+        ),
+        req,
+      );
     }
   };
 }

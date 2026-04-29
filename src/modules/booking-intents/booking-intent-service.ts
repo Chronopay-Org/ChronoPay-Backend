@@ -4,6 +4,7 @@ import type {
   BookingIntentRecord,
   BookingIntentRepository,
 } from "./booking-intent-repository.js";
+import { withSpan } from "../../tracing/hooks.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -64,6 +65,14 @@ export class BookingIntentService {
       note: input.note,
       createdAt: this.now(),
     });
+  }
+
+  createIntentTraced(input: CreateBookingIntentInput, actor: AuthContext): Promise<BookingIntentRecord> {
+    return withSpan(
+      "bookingIntents.create",
+      { route: "POST /api/v1/booking-intents" },
+      () => this.createIntent(input, actor),
+    );
   }
 }
 
