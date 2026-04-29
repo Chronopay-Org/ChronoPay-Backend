@@ -39,17 +39,26 @@ describe("Custom Error Classes", () => {
       expect(error.isOperational).toBe(false);
     });
 
-    it("should serialize to JSON correctly", () => {
+    it("should serialize to JSON in canonical envelope", () => {
       const error = new AppError("Test error", 400, "BAD_REQUEST", true);
       const json = error.toJSON();
 
       expect(json).toEqual({
         success: false,
-        error: {
-          message: "Test error",
-          code: "BAD_REQUEST",
-          timestamp: error.timestamp,
-        },
+        code: "BAD_REQUEST",
+        error: "Test error",
+        timestamp: error.timestamp,
+      });
+    });
+
+    it("should include details when provided", () => {
+      const error = new AppError("Test", 400, "BAD_REQUEST", true, { field: "x" });
+      expect(error.toJSON()).toEqual({
+        success: false,
+        code: "BAD_REQUEST",
+        error: "Test",
+        timestamp: error.timestamp,
+        details: { field: "x" },
       });
     });
   });
@@ -68,10 +77,15 @@ describe("Custom Error Classes", () => {
   });
 
   describe("UnauthorizedError", () => {
-    it("should create 401 error", () => {
+    it("should create 401 error with default code", () => {
       const error = new UnauthorizedError("Please login");
       expect(error.statusCode).toBe(401);
       expect(error.code).toBe("UNAUTHORIZED");
+    });
+
+    it("should accept a custom code from the taxonomy", () => {
+      const error = new UnauthorizedError("Bad token", "INVALID_TOKEN");
+      expect(error.code).toBe("INVALID_TOKEN");
     });
   });
 
@@ -80,6 +94,11 @@ describe("Custom Error Classes", () => {
       const error = new ForbiddenError("Access denied");
       expect(error.statusCode).toBe(403);
       expect(error.code).toBe("FORBIDDEN");
+    });
+
+    it("should accept a custom code", () => {
+      const error = new ForbiddenError("nope", "INSUFFICIENT_PERMISSIONS");
+      expect(error.code).toBe("INSUFFICIENT_PERMISSIONS");
     });
   });
 
@@ -196,8 +215,9 @@ describe("Error Handling Middleware", () => {
       const res = await request(app).get("/test");
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
-      expect(res.body.error.code).toBe("BAD_REQUEST");
-      expect(res.body.error.message).toBe("Invalid input");
+      expect(res.body.code).toBe("BAD_REQUEST");
+      expect(res.body.error).toBe("Invalid input");
+      expect(res.body.timestamp).toBeDefined();
     });
 
     it("should handle NotFoundError", async () => {
@@ -209,7 +229,7 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/test");
       expect(res.status).toBe(404);
-      expect(res.body.error.code).toBe("NOT_FOUND");
+      expect(res.body.code).toBe("NOT_FOUND");
     });
 
     it("should handle UnauthorizedError", async () => {
@@ -221,6 +241,7 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/test");
       expect(res.status).toBe(401);
+      expect(res.body.code).toBe("UNAUTHORIZED");
     });
 
     it("should handle ForbiddenError", async () => {
@@ -232,6 +253,7 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/test");
       expect(res.status).toBe(403);
+      expect(res.body.code).toBe("FORBIDDEN");
     });
 
     it("should handle ConflictError", async () => {
@@ -243,6 +265,7 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/test");
       expect(res.status).toBe(409);
+      expect(res.body.code).toBe("CONFLICT");
     });
 
     it("should handle UnprocessableEntityError", async () => {
@@ -254,6 +277,7 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/test");
       expect(res.status).toBe(422);
+      expect(res.body.code).toBe("UNPROCESSABLE_ENTITY");
     });
 
     it("should handle InternalServerError", async () => {
@@ -265,6 +289,7 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/test");
       expect(res.status).toBe(500);
+      expect(res.body.code).toBe("INTERNAL_ERROR");
     });
 
     it("should handle ServiceUnavailableError", async () => {
@@ -276,9 +301,10 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/test");
       expect(res.status).toBe(503);
+      expect(res.body.code).toBe("SERVICE_UNAVAILABLE");
     });
 
-    it("should handle regular Error with 500 status", async () => {
+    it("should handle regular Error with 500 status and INTERNAL_ERROR code", async () => {
       const errorHandler = createErrorHandler();
       app.get("/test", () => {
         throw new Error("Unexpected error");
@@ -287,10 +313,10 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/test");
       expect(res.status).toBe(500);
-      expect(res.body.error.code).toBe("INTERNAL_ERROR");
+      expect(res.body.code).toBe("INTERNAL_ERROR");
     });
 
-    it("should include stack trace in development", async () => {
+    it("should include stack trace in development for unknown errors", async () => {
       const originalEnv = process.env.NODE_ENV;
       process.env.NODE_ENV = "development";
 
@@ -301,7 +327,7 @@ describe("Error Handling Middleware", () => {
       app.use(errorHandler);
 
       const res = await request(app).get("/test");
-      expect(res.body.error.stack).toBeDefined();
+      expect(res.body.stack).toBeDefined();
 
       process.env.NODE_ENV = originalEnv;
     });
@@ -317,9 +343,20 @@ describe("Error Handling Middleware", () => {
       app.use(errorHandler);
 
       const res = await request(app).get("/test");
-      expect(res.body.error.stack).toBeUndefined();
+      expect(res.body.stack).toBeUndefined();
 
       process.env.NODE_ENV = originalEnv;
+    });
+
+    it("should never leak the original message of unknown errors", async () => {
+      const errorHandler = createErrorHandler();
+      app.get("/test", () => {
+        throw new Error("internal connection string oops");
+      });
+      app.use(errorHandler);
+
+      const res = await request(app).get("/test");
+      expect(res.body.error).not.toContain("connection string");
     });
 
     it("should use custom unknown error message", async () => {
@@ -332,7 +369,7 @@ describe("Error Handling Middleware", () => {
       app.use(errorHandler);
 
       const res = await request(app).get("/test");
-      expect(res.body.error.message).toBe("Custom error message");
+      expect(res.body.error).toBe("Custom error message");
     });
 
     it("should call custom logError function", async () => {
@@ -360,7 +397,7 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/nonexistent");
       expect(res.status).toBe(404);
-      expect(res.body.error.code).toBe("NOT_FOUND");
+      expect(res.body.code).toBe("NOT_FOUND");
     });
 
     it("should include method and path in error message", async () => {
@@ -370,8 +407,8 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).post("/nonexistent");
       expect(res.status).toBe(404);
-      expect(res.body.error.message).toContain("POST");
-      expect(res.body.error.message).toContain("/nonexistent");
+      expect(res.body.error).toContain("POST");
+      expect(res.body.error).toContain("/nonexistent");
     });
   });
 
@@ -389,7 +426,7 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/async");
       expect(res.status).toBe(400);
-      expect(res.body.error.message).toBe("Async error");
+      expect(res.body.error).toBe("Async error");
     });
 
     it("should work with synchronous errors", async () => {
@@ -405,7 +442,7 @@ describe("Error Handling Middleware", () => {
 
       const res = await request(app).get("/sync");
       expect(res.status).toBe(400);
-      expect(res.body.error.message).toBe("Sync error");
+      expect(res.body.error).toBe("Sync error");
     });
 
     it("should pass successful responses through", async () => {

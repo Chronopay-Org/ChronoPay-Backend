@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { getRedisClient } from "../utils/redis.js";
+import { ConflictError, UnauthorizedError } from "../errors/AppError.js";
+import { ERROR_CODES } from "../errors/errorCodes.js";
+import { sendErrorResponse } from "../errors/sendError.js";
 
 const TIMESTAMP_HEADER = "x-chronopay-timestamp";
 const SIGNATURE_HEADER = "x-chronopay-signature";
@@ -74,26 +77,38 @@ export function requireInternalHmacAuth(options: InternalHmacOptions = {}) {
     const signatureHeader = req.header(SIGNATURE_HEADER);
 
     if (!timestampHeader || !signatureHeader) {
-      return res.status(401).json({
-        success: false,
-        error: "Missing internal authentication headers",
-      });
+      return sendErrorResponse(
+        res,
+        new UnauthorizedError(
+          "Missing internal authentication headers",
+          ERROR_CODES.AUTHENTICATION_REQUIRED.code,
+        ),
+        req,
+      );
     }
 
     const timestampMs = Number(timestampHeader);
     if (!Number.isFinite(timestampMs)) {
-      return res.status(401).json({
-        success: false,
-        error: "Invalid internal timestamp",
-      });
+      return sendErrorResponse(
+        res,
+        new UnauthorizedError(
+          "Invalid internal timestamp",
+          ERROR_CODES.INVALID_TIMESTAMP.code,
+        ),
+        req,
+      );
     }
 
     const ageSeconds = Math.abs(Date.now() - timestampMs) / 1000;
     if (ageSeconds > maxSkewSeconds) {
-      return res.status(401).json({
-        success: false,
-        error: "Internal request timestamp outside allowed skew window",
-      });
+      return sendErrorResponse(
+        res,
+        new UnauthorizedError(
+          "Internal request timestamp outside allowed skew window",
+          ERROR_CODES.TIMESTAMP_OUT_OF_SKEW.code,
+        ),
+        req,
+      );
     }
 
     const method = req.method.toUpperCase();
@@ -106,19 +121,27 @@ export function requireInternalHmacAuth(options: InternalHmacOptions = {}) {
       .digest("hex");
 
     if (!safeEqualHex(expectedSignature, signatureHeader)) {
-      return res.status(401).json({
-        success: false,
-        error: "Invalid internal request signature",
-      });
+      return sendErrorResponse(
+        res,
+        new UnauthorizedError(
+          "Invalid internal request signature",
+          ERROR_CODES.INVALID_SIGNATURE.code,
+        ),
+        req,
+      );
     }
 
     const replayKey = `${timestampHeader}:${signatureHeader}`;
     const isReplay = await detectReplay(replayKey, replayTtlSeconds);
     if (isReplay) {
-      return res.status(409).json({
-        success: false,
-        error: "Replay detected for internal request",
-      });
+      return sendErrorResponse(
+        res,
+        new ConflictError(
+          "Replay detected for internal request",
+          ERROR_CODES.REPLAY_DETECTED.code,
+        ),
+        req,
+      );
     }
 
     next();

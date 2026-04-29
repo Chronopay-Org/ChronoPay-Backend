@@ -1,5 +1,12 @@
 import type { NextFunction, Request, Response } from "express";
 import { jwtVerify } from "jose";
+import {
+  ForbiddenError,
+  InternalServerError,
+  UnauthorizedError,
+} from "../errors/AppError.js";
+import { ERROR_CODES } from "../errors/errorCodes.js";
+import { sendErrorResponse } from "../errors/sendError.js";
 
 export type ChronoPayRole = "customer" | "admin" | "professional";
 
@@ -28,42 +35,59 @@ export async function authenticateToken(
         return next();
       }
 
-      return res.status(401).json({
-        success: false,
-        error: "Authorization header is required",
-      });
+      return sendErrorResponse(
+        res,
+        new UnauthorizedError(
+          "Authorization header is required",
+          ERROR_CODES.AUTHENTICATION_REQUIRED.code,
+        ),
+        req,
+      );
     }
 
     if (!authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({
-        success: false,
-        error: "Authorization header must use Bearer scheme",
-      });
+      return sendErrorResponse(
+        res,
+        new UnauthorizedError(
+          "Authorization header must use Bearer scheme",
+          ERROR_CODES.INVALID_TOKEN.code,
+        ),
+        req,
+      );
     }
 
     const token = authHeader.slice("Bearer ".length).trim();
     if (!token) {
-      return res.status(401).json({
-        success: false,
-        error: "Bearer token is missing",
-      });
+      return sendErrorResponse(
+        res,
+        new UnauthorizedError(
+          "Bearer token is missing",
+          ERROR_CODES.INVALID_TOKEN.code,
+        ),
+        req,
+      );
     }
 
     if (!jwtSecret) {
-      return res.status(500).json({
-        success: false,
-        error: "Authentication middleware error",
-      });
+      return sendErrorResponse(
+        res,
+        new InternalServerError("Authentication middleware error"),
+        req,
+      );
     }
 
     const { payload } = await jwtVerify(token, new TextEncoder().encode(jwtSecret));
     req.user = payload as Request["user"];
     next();
   } catch {
-    return res.status(401).json({
-      success: false,
-      error: "Invalid or expired token",
-    });
+    return sendErrorResponse(
+      res,
+      new UnauthorizedError(
+        "Invalid or expired token",
+        ERROR_CODES.INVALID_TOKEN.code,
+      ),
+      req,
+    );
   }
 }
 
@@ -79,20 +103,28 @@ export function requireAuthenticatedActor(
 
     if (!rawUserId || rawUserId.trim().length === 0) {
       emitAuthAudit(req, "AUTH_MISSING", 401);
-      return res.status(401).json({
-        success: false,
-        error: "Authentication required.",
-      });
+      return sendErrorResponse(
+        res,
+        new UnauthorizedError(
+          "Authentication required.",
+          ERROR_CODES.AUTHENTICATION_REQUIRED.code,
+        ),
+        req,
+      );
     }
 
     const role = parseRole(rawRole);
     if (!allowedRoles.includes(role)) {
       // Safe to log the resolved role — it is a controlled enum value, not a raw header.
       emitAuthAudit(req, "AUTH_FORBIDDEN", 403, { role });
-      return res.status(403).json({
-        success: false,
-        error: "Role is not authorized for this action.",
-      });
+      return sendErrorResponse(
+        res,
+        new ForbiddenError(
+          "Role is not authorized for this action.",
+          ERROR_CODES.INSUFFICIENT_PERMISSIONS.code,
+        ),
+        req,
+      );
     }
 
     req.auth = {
