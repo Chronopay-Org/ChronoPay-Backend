@@ -16,6 +16,18 @@ declare module "express-serve-static-core" {
       exp?: number;
       [key: string]: unknown;
     };
+    /**
+     * Authentication context set by requireAuthenticatedActor middleware.
+     * Contains userId and role from validated headers.
+     */
+    auth?: {
+      userId: string;
+      role: string;
+    };
+    /**
+     * API key identifier (SHA-256 hash) set by requireApiKey middleware.
+     */
+    apiKeyId?: string;
     flags?: FeatureFlagAccessor;
   }
 }

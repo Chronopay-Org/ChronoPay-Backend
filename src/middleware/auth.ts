@@ -155,4 +155,4 @@ function parseRole(rawRole: string | undefined): ChronoPayRole {
   return "professional";
 }
 
-export const authenticateToken = requireAuthenticatedActor;
+// Removed duplicate export of authenticateToken

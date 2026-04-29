@@ -1,7 +1,9 @@
 /**
  * Buyer Profile DTO Unit Tests
- * 
- * Tests all validation functions and DTO transformations.
+ *
+ * Covers: allowlist enforcement, unicode whitespace normalization,
+ * phone length limits, fullName character set, avatarUrl length limit,
+ * and all existing validation/transform paths.
  */
 
 import {
@@ -10,13 +12,20 @@ import {
   validateUUIDParam,
   transformCreateDTO,
   transformUpdateDTO,
+  validateCreateBuyerProfile,
+  validateUpdateBuyerProfile,
+  validateUUID,
   CreateBuyerProfileDTO,
   UpdateBuyerProfileDTO,
 } from "../dto/buyer-profile.dto.js";
+import { jest } from "@jest/globals";
 
 describe("BuyerProfileDTO", () => {
+  // ---------------------------------------------------------------------------
+  // validateCreateBuyerProfileDTO
+  // ---------------------------------------------------------------------------
   describe("validateCreateBuyerProfileDTO", () => {
-    const validData: CreateBuyerProfileDTO = {
+    const valid: CreateBuyerProfileDTO = {
       fullName: "John Doe",
       email: "john.doe@example.com",
       phoneNumber: "+1234567890",
@@ -24,450 +33,646 @@ describe("BuyerProfileDTO", () => {
       avatarUrl: "https://example.com/avatar.jpg",
     };
 
-    it("should return no errors for valid data", () => {
-      const errors = validateCreateBuyerProfileDTO(validData);
-
-      expect(errors).toHaveLength(0);
+    it("returns no errors for valid data", () => {
+      expect(validateCreateBuyerProfileDTO(valid)).toHaveLength(0);
     });
 
-    it("should return error when data is not an object", () => {
-      const errors = validateCreateBuyerProfileDTO(null);
-
-      expect(errors).toContainEqual(
+    it("returns error when body is not an object", () => {
+      expect(validateCreateBuyerProfileDTO(null)).toContainEqual(
         expect.objectContaining({ field: "body" })
       );
     });
 
-    it("should return error when fullName is missing", () => {
-      const { fullName, ...data } = validData;
-      const errors = validateCreateBuyerProfileDTO(data);
-
+    // --- Allowlist ---
+    it("rejects unknown fields", () => {
+      const errors = validateCreateBuyerProfileDTO({ ...valid, injected: "evil" });
       expect(errors).toContainEqual(
+        expect.objectContaining({ field: "body", message: expect.stringContaining("injected") })
+      );
+    });
+
+    it("rejects multiple unknown fields", () => {
+      const errors = validateCreateBuyerProfileDTO({ ...valid, foo: 1, bar: 2 });
+      expect(errors).toContainEqual(
+        expect.objectContaining({ field: "body", message: expect.stringContaining("foo") })
+      );
+    });
+
+    // --- fullName ---
+    it("returns error when fullName is missing", () => {
+      const { fullName, ...data } = valid;
+      expect(validateCreateBuyerProfileDTO(data)).toContainEqual(
         expect.objectContaining({ field: "fullName" })
       );
     });
 
-    it("should return error when fullName is too short", () => {
-      const errors = validateCreateBuyerProfileDTO({
-        ...validData,
-        fullName: "J",
-      });
-
-      expect(errors).toContainEqual(
-        expect.objectContaining({
-          field: "fullName",
-          message: "Full name must be at least 2 characters",
-        })
+    it("returns error when fullName is too short", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, fullName: "J" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "fullName", message: "Full name must be at least 2 characters" })
       );
     });
 
-    it("should return error when fullName is too long", () => {
-      const errors = validateCreateBuyerProfileDTO({
-        ...validData,
-        fullName: "A".repeat(101),
-      });
-
-      expect(errors).toContainEqual(
-        expect.objectContaining({
-          field: "fullName",
-          message: "Full name must not exceed 100 characters",
-        })
+    it("returns error when fullName is too long", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, fullName: "A".repeat(101) })
+      ).toContainEqual(
+        expect.objectContaining({ field: "fullName", message: "Full name must not exceed 100 characters" })
       );
     });
 
-    it("should return error when email is missing", () => {
-      const { email, ...data } = validData;
-      const errors = validateCreateBuyerProfileDTO(data);
+    it("returns error when fullName contains digits", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, fullName: "John123" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "fullName", message: "Full name contains invalid characters" })
+      );
+    });
 
-      expect(errors).toContainEqual(
+    it("returns error when fullName contains special characters", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, fullName: "John@Doe" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "fullName", message: "Full name contains invalid characters" })
+      );
+    });
+
+    it("accepts fullName with hyphens, apostrophes, and periods", () => {
+      const names = ["Mary-Jane", "O'Brien", "Dr. Smith", "José García"];
+      names.forEach((fullName) => {
+        expect(validateCreateBuyerProfileDTO({ ...valid, fullName })).toHaveLength(0);
+      });
+    });
+
+    it("accepts fullName with unicode letters (non-ASCII scripts)", () => {
+      // Arabic, Chinese, Cyrillic
+      const names = ["محمد علي", "张伟", "Иван Петров"];
+      names.forEach((fullName) => {
+        expect(validateCreateBuyerProfileDTO({ ...valid, fullName })).toHaveLength(0);
+      });
+    });
+
+    it("normalizes unicode whitespace in fullName before length check", () => {
+      // \u2003 is EM SPACE (unicode whitespace, not ASCII space)
+      const errors = validateCreateBuyerProfileDTO({ ...valid, fullName: "Jo\u2003hn" });
+      expect(errors).toHaveLength(0);
+    });
+
+    // --- email ---
+    it("returns error when email is missing", () => {
+      const { email, ...data } = valid;
+      expect(validateCreateBuyerProfileDTO(data)).toContainEqual(
         expect.objectContaining({ field: "email" })
       );
     });
 
-    it("should return error when email format is invalid", () => {
-      const errors = validateCreateBuyerProfileDTO({
-        ...validData,
-        email: "invalid-email",
-      });
-
-      expect(errors).toContainEqual(
-        expect.objectContaining({
-          field: "email",
-          message: "Invalid email format",
-        })
+    it("returns error for invalid email format", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, email: "invalid-email" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "email", message: "Invalid email format" })
       );
     });
 
-    it("should return error when email is too long", () => {
-      const errors = validateCreateBuyerProfileDTO({
-        ...validData,
-        email: "a".repeat(250) + "@example.com",
-      });
-
-      expect(errors).toContainEqual(
-        expect.objectContaining({
-          field: "email",
-          message: "Email must not exceed 255 characters",
-        })
+    it("returns error when email exceeds 255 characters", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, email: "a".repeat(250) + "@x.com" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "email", message: "Email must not exceed 255 characters" })
       );
     });
 
-    it("should return error when phoneNumber is missing", () => {
-      const { phoneNumber, ...data } = validData;
-      const errors = validateCreateBuyerProfileDTO(data);
-
-      expect(errors).toContainEqual(
+    // --- phoneNumber ---
+    it("returns error when phoneNumber is missing", () => {
+      const { phoneNumber, ...data } = valid;
+      expect(validateCreateBuyerProfileDTO(data)).toContainEqual(
         expect.objectContaining({ field: "phoneNumber" })
       );
     });
 
-    it("should return error when phoneNumber format is invalid", () => {
-      const errors = validateCreateBuyerProfileDTO({
-        ...validData,
-        phoneNumber: "123", // too short
-      });
-
-      expect(errors).toContainEqual(
-        expect.objectContaining({
-          field: "phoneNumber",
-          message: "Invalid phone number format",
-        })
+    it("returns error when phoneNumber is too short (< 7 chars)", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, phoneNumber: "12345" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "phoneNumber", message: "Invalid phone number format" })
       );
     });
 
-    it("should accept valid phone number formats", () => {
-      const formats = [
-        "+1234567890",
-        "123-456-7890",
-        "(123) 456-7890",
-        "123 456 7890",
-        "+1 (123) 456-7890",
-      ];
-
-      formats.forEach((phoneNumber) => {
-        const errors = validateCreateBuyerProfileDTO({
-          ...validData,
-          phoneNumber,
-        });
-
-        expect(errors).not.toContainEqual(
-          expect.objectContaining({ field: "phoneNumber" })
-        );
-      });
-    });
-
-    it("should return error when address is too long", () => {
-      const errors = validateCreateBuyerProfileDTO({
-        ...validData,
-        address: "A".repeat(501),
-      });
-
-      expect(errors).toContainEqual(
-        expect.objectContaining({
-          field: "address",
-          message: "Address must not exceed 500 characters",
-        })
+    it("returns error when phoneNumber exceeds 20 characters", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, phoneNumber: "1".repeat(21) })
+      ).toContainEqual(
+        expect.objectContaining({ field: "phoneNumber", message: "Phone number must not exceed 20 characters" })
       );
     });
 
-    it("should return error when avatarUrl format is invalid", () => {
-      const errors = validateCreateBuyerProfileDTO({
-        ...validData,
-        avatarUrl: "not-a-url",
-      });
-
-      expect(errors).toContainEqual(
-        expect.objectContaining({
-          field: "avatarUrl",
-          message: "Invalid URL format",
-        })
+    it("returns error when phoneNumber contains invalid characters", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, phoneNumber: "+1234abc7890" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "phoneNumber", message: "Invalid phone number format" })
       );
     });
 
-    it("should accept valid URL formats", () => {
+    it("accepts valid phone number formats", () => {
+      const phones = ["+1234567890", "123-456-7890", "(123) 456-7890", "123 456 7890"];
+      phones.forEach((phoneNumber) => {
+        expect(validateCreateBuyerProfileDTO({ ...valid, phoneNumber })).toHaveLength(0);
+      });
+    });
+
+    // --- address ---
+    it("returns error when address exceeds 500 characters", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, address: "A".repeat(501) })
+      ).toContainEqual(
+        expect.objectContaining({ field: "address", message: "Address must not exceed 500 characters" })
+      );
+    });
+
+    it("allows address to be undefined or null", () => {
+      expect(validateCreateBuyerProfileDTO({ ...valid, address: undefined })).toHaveLength(0);
+      expect(validateCreateBuyerProfileDTO({ ...valid, address: null as unknown as string })).toHaveLength(0);
+    });
+
+    // --- avatarUrl ---
+    it("returns error for invalid avatarUrl format", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, avatarUrl: "not-a-url" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "avatarUrl", message: "Invalid URL format" })
+      );
+    });
+
+    it("returns error when avatarUrl exceeds 2048 characters", () => {
+      const longUrl = "https://example.com/" + "a".repeat(2040);
+      expect(
+        validateCreateBuyerProfileDTO({ ...valid, avatarUrl: longUrl })
+      ).toContainEqual(
+        expect.objectContaining({ field: "avatarUrl", message: "Avatar URL must not exceed 2048 characters" })
+      );
+    });
+
+    it("accepts valid avatarUrl formats", () => {
       const urls = [
         "https://example.com/avatar.jpg",
         "http://example.com/avatar.png",
         "https://cdn.example.com/path/to/avatar.gif",
       ];
-
       urls.forEach((avatarUrl) => {
-        const errors = validateCreateBuyerProfileDTO({
-          ...validData,
-          avatarUrl,
-        });
-
-        expect(errors).not.toContainEqual(
-          expect.objectContaining({ field: "avatarUrl" })
-        );
+        expect(validateCreateBuyerProfileDTO({ ...valid, avatarUrl })).toHaveLength(0);
       });
     });
 
-    it("should allow optional fields to be undefined", () => {
-      const minimalData = {
-        fullName: "John Doe",
-        email: "john.doe@example.com",
-        phoneNumber: "+1234567890",
-      };
-
-      const errors = validateCreateBuyerProfileDTO(minimalData);
-
-      expect(errors).toHaveLength(0);
+    it("allows optional fields to be omitted", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ fullName: "John Doe", email: "john@example.com", phoneNumber: "+1234567890" })
+      ).toHaveLength(0);
     });
 
-    it("should allow optional fields to be null", () => {
-      const dataWithNulls = {
-        ...validData,
-        address: null,
-        avatarUrl: null,
-      };
+    it("returns error when address is a non-string type", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ fullName: "John Doe", email: "john@example.com", phoneNumber: "+1234567890", address: 123 as unknown as string })
+      ).toContainEqual(
+        expect.objectContaining({ field: "address", message: "Address must be a string" })
+      );
+    });
 
-      const errors = validateCreateBuyerProfileDTO(dataWithNulls);
+    it("returns error when avatarUrl is a non-string type", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ fullName: "John Doe", email: "john@example.com", phoneNumber: "+1234567890", avatarUrl: 123 as unknown as string })
+      ).toContainEqual(
+        expect.objectContaining({ field: "avatarUrl", message: "Avatar URL must be a string" })
+      );
+    });
 
-      expect(errors).toHaveLength(0);
+    it("returns error when fullName is a non-string type", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ fullName: 42 as unknown as string, email: "john@example.com", phoneNumber: "+1234567890" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "fullName", message: "Full name is required" })
+      );
+    });
+
+    it("returns error when email is a non-string type", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ fullName: "John Doe", email: 42 as unknown as string, phoneNumber: "+1234567890" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "email", message: "Email is required" })
+      );
+    });
+
+    it("returns error when phoneNumber is a non-string type", () => {
+      expect(
+        validateCreateBuyerProfileDTO({ fullName: "John Doe", email: "john@example.com", phoneNumber: 1234567890 as unknown as string })
+      ).toContainEqual(
+        expect.objectContaining({ field: "phoneNumber", message: "Phone number is required" })
+      );
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // validateUpdateBuyerProfileDTO
+  // ---------------------------------------------------------------------------
   describe("validateUpdateBuyerProfileDTO", () => {
-    it("should return no errors for valid partial update", () => {
-      const errors = validateUpdateBuyerProfileDTO({
-        fullName: "John Updated",
-      });
-
-      expect(errors).toHaveLength(0);
+    it("returns no errors for valid partial update", () => {
+      expect(validateUpdateBuyerProfileDTO({ fullName: "John Updated" })).toHaveLength(0);
     });
 
-    it("should return error when data is not an object", () => {
-      const errors = validateUpdateBuyerProfileDTO(null);
-
-      expect(errors).toContainEqual(
+    it("returns error when body is not an object", () => {
+      expect(validateUpdateBuyerProfileDTO(null)).toContainEqual(
         expect.objectContaining({ field: "body" })
       );
     });
 
-    it("should return error when no fields are provided", () => {
-      const errors = validateUpdateBuyerProfileDTO({});
-
-      expect(errors).toContainEqual(
-        expect.objectContaining({
-          field: "body",
-          message: "At least one field must be provided for update",
-        })
+    it("returns error when no fields are provided", () => {
+      expect(validateUpdateBuyerProfileDTO({})).toContainEqual(
+        expect.objectContaining({ field: "body", message: "At least one field must be provided for update" })
       );
     });
 
-    it("should validate fullName if provided", () => {
-      const errors = validateUpdateBuyerProfileDTO({
-        fullName: "J",
-      });
-
+    // --- Allowlist ---
+    it("rejects unknown fields", () => {
+      const errors = validateUpdateBuyerProfileDTO({ fullName: "Jane", role: "admin" });
       expect(errors).toContainEqual(
+        expect.objectContaining({ field: "body", message: expect.stringContaining("role") })
+      );
+    });
+
+    it("rejects unknown fields even when known fields are present", () => {
+      const errors = validateUpdateBuyerProfileDTO({ fullName: "Jane", hack: "x" });
+      expect(errors).toContainEqual(
+        expect.objectContaining({ field: "body", message: expect.stringContaining("hack") })
+      );
+    });
+
+    // --- fullName ---
+    it("validates fullName character set on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ fullName: "Jane123" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "fullName", message: "Full name contains invalid characters" })
+      );
+    });
+
+    it("validates fullName length on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ fullName: "J" })
+      ).toContainEqual(
         expect.objectContaining({ field: "fullName" })
       );
     });
 
-    it("should validate email if provided", () => {
-      const errors = validateUpdateBuyerProfileDTO({
-        email: "invalid-email",
-      });
+    // --- phoneNumber ---
+    it("returns error when phoneNumber is too short on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ phoneNumber: "12345" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "phoneNumber", message: "Invalid phone number format" })
+      );
+    });
 
-      expect(errors).toContainEqual(
+    it("returns error when phoneNumber exceeds 20 chars on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ phoneNumber: "1".repeat(21) })
+      ).toContainEqual(
+        expect.objectContaining({ field: "phoneNumber", message: "Phone number must not exceed 20 characters" })
+      );
+    });
+
+    // --- avatarUrl ---
+    it("returns error when avatarUrl exceeds 2048 chars on update", () => {
+      const longUrl = "https://example.com/" + "a".repeat(2040);
+      expect(
+        validateUpdateBuyerProfileDTO({ avatarUrl: longUrl })
+      ).toContainEqual(
+        expect.objectContaining({ field: "avatarUrl", message: "Avatar URL must not exceed 2048 characters" })
+      );
+    });
+
+    it("validates email if provided", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ email: "invalid-email" })
+      ).toContainEqual(
         expect.objectContaining({ field: "email" })
       );
     });
 
-    it("should validate phoneNumber if provided", () => {
-      const errors = validateUpdateBuyerProfileDTO({
-        phoneNumber: "123",
-      });
-
-      expect(errors).toContainEqual(
-        expect.objectContaining({ field: "phoneNumber" })
-      );
-    });
-
-    it("should validate address if provided", () => {
-      const errors = validateUpdateBuyerProfileDTO({
-        address: "A".repeat(501),
-      });
-
-      expect(errors).toContainEqual(
+    it("validates address if provided", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ address: "A".repeat(501) })
+      ).toContainEqual(
         expect.objectContaining({ field: "address" })
       );
     });
 
-    it("should validate avatarUrl if provided", () => {
-      const errors = validateUpdateBuyerProfileDTO({
-        avatarUrl: "not-a-url",
-      });
+    it("allows multiple fields to be updated", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({
+          fullName: "John Updated",
+          email: "john.updated@example.com",
+          phoneNumber: "+9999999999",
+        })
+      ).toHaveLength(0);
+    });
 
-      expect(errors).toContainEqual(
-        expect.objectContaining({ field: "avatarUrl" })
+    it("returns error when address is a non-string type on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ address: 123 as unknown as string })
+      ).toContainEqual(
+        expect.objectContaining({ field: "address", message: "Address must be a string" })
       );
     });
 
-    it("should allow multiple fields to be updated", () => {
-      const errors = validateUpdateBuyerProfileDTO({
-        fullName: "John Updated",
-        email: "john.updated@example.com",
-        phoneNumber: "+9999999999",
-      });
+    it("returns error when avatarUrl is a non-string type on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ avatarUrl: 123 as unknown as string })
+      ).toContainEqual(
+        expect.objectContaining({ field: "avatarUrl", message: "Avatar URL must be a string" })
+      );
+    });
 
-      expect(errors).toHaveLength(0);
+    it("returns error when fullName is a non-string type on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ fullName: 42 as unknown as string })
+      ).toContainEqual(
+        expect.objectContaining({ field: "fullName", message: "Full name must be a string" })
+      );
+    });
+
+    it("returns error when email is a non-string type on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ email: 42 as unknown as string })
+      ).toContainEqual(
+        expect.objectContaining({ field: "email", message: "Email must be a string" })
+      );
+    });
+
+    it("returns error when phoneNumber is a non-string type on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ phoneNumber: 1234567890 as unknown as string })
+      ).toContainEqual(
+        expect.objectContaining({ field: "phoneNumber", message: "Phone number must be a string" })
+      );
+    });
+
+    it("returns error when email exceeds 255 chars on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ email: "a".repeat(250) + "@x.com" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "email", message: "Email must not exceed 255 characters" })
+      );
+    });
+
+    it("returns error when phoneNumber contains invalid chars on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ phoneNumber: "+1234abc7890" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "phoneNumber", message: "Invalid phone number format" })
+      );
+    });
+
+    it("returns error for invalid avatarUrl format on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ avatarUrl: "not-a-url" })
+      ).toContainEqual(
+        expect.objectContaining({ field: "avatarUrl", message: "Invalid URL format" })
+      );
+    });
+
+    it("allows address to be null on update", () => {
+      expect(
+        validateUpdateBuyerProfileDTO({ address: null as unknown as string })
+      ).toHaveLength(0);
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // validateUUIDParam
+  // ---------------------------------------------------------------------------
   describe("validateUUIDParam", () => {
-    it("should return no errors for valid UUID", () => {
-      const errors = validateUUIDParam({
-        id: "550e8400-e29b-41d4-a716-446655440000",
-      });
-
-      expect(errors).toHaveLength(0);
+    it("returns no errors for valid UUID", () => {
+      expect(validateUUIDParam({ id: "550e8400-e29b-41d4-a716-446655440000" })).toHaveLength(0);
     });
 
-    it("should return error when params is not an object", () => {
-      const errors = validateUUIDParam(null);
-
-      expect(errors).toContainEqual(
+    it("returns error when params is not an object", () => {
+      expect(validateUUIDParam(null)).toContainEqual(
         expect.objectContaining({ field: "params" })
       );
     });
 
-    it("should return error when id is missing", () => {
-      const errors = validateUUIDParam({});
-
-      expect(errors).toContainEqual(
+    it("returns error when id is missing", () => {
+      expect(validateUUIDParam({})).toContainEqual(
         expect.objectContaining({ field: "id" })
       );
     });
 
-    it("should return error when id is not a valid UUID", () => {
-      const errors = validateUUIDParam({
-        id: "invalid-uuid",
-      });
-
-      expect(errors).toContainEqual(
-        expect.objectContaining({
-          field: "id",
-          message: "Invalid UUID format",
-        })
+    it("returns error for invalid UUID", () => {
+      expect(validateUUIDParam({ id: "invalid-uuid" })).toContainEqual(
+        expect.objectContaining({ field: "id", message: "Invalid UUID format" })
       );
     });
 
-    it("should accept valid UUID formats", () => {
+    it("accepts multiple valid UUID formats", () => {
       const uuids = [
         "550e8400-e29b-41d4-a716-446655440000",
         "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-        "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
       ];
-
       uuids.forEach((id) => {
-        const errors = validateUUIDParam({ id });
-        expect(errors).toHaveLength(0);
+        expect(validateUUIDParam({ id })).toHaveLength(0);
       });
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // transformCreateDTO
+  // ---------------------------------------------------------------------------
   describe("transformCreateDTO", () => {
-    it("should trim and normalize email to lowercase", () => {
-      const dto: CreateBuyerProfileDTO = {
-        fullName: "  John Doe  ",
-        email: "  JOHN.DOE@EXAMPLE.COM  ",
-        phoneNumber: "  +1234567890  ",
-      };
-
-      const transformed = transformCreateDTO(dto);
-
-      expect(transformed.fullName).toBe("John Doe");
-      expect(transformed.email).toBe("john.doe@example.com");
-      expect(transformed.phoneNumber).toBe("+1234567890");
+    it("trims and lowercases email", () => {
+      const result = transformCreateDTO({
+        fullName: "John Doe",
+        email: "  JOHN@EXAMPLE.COM  ",
+        phoneNumber: "+1234567890",
+      });
+      expect(result.email).toBe("john@example.com");
     });
 
-    it("should sanitize fullName by removing angle brackets", () => {
-      const dto: CreateBuyerProfileDTO = {
-        fullName: "John <script>alert('xss')</script> Doe",
+    it("normalizes unicode whitespace in fullName", () => {
+      // \u2003 EM SPACE, \u00a0 NO-BREAK SPACE
+      const result = transformCreateDTO({
+        fullName: "John\u2003 \u00a0Doe",
         email: "john@example.com",
         phoneNumber: "+1234567890",
-      };
-
-      const transformed = transformCreateDTO(dto);
-
-      expect(transformed.fullName).toBe("John scriptalert('xss')/script Doe");
+      });
+      expect(result.fullName).toBe("John Doe");
     });
 
-    it("should trim address and avatarUrl", () => {
-      const dto: CreateBuyerProfileDTO = {
+    it("strips angle brackets from fullName", () => {
+      const result = transformCreateDTO({
+        fullName: "John <b>Doe</b>",
+        email: "john@example.com",
+        phoneNumber: "+1234567890",
+      });
+      expect(result.fullName).toBe("John bDoe/b");
+    });
+
+    it("trims phoneNumber", () => {
+      const result = transformCreateDTO({
+        fullName: "John Doe",
+        email: "john@example.com",
+        phoneNumber: "  +1234567890  ",
+      });
+      expect(result.phoneNumber).toBe("+1234567890");
+    });
+
+    it("sanitizes address", () => {
+      const result = transformCreateDTO({
         fullName: "John Doe",
         email: "john@example.com",
         phoneNumber: "+1234567890",
         address: "  123 Main St  ",
-        avatarUrl: "  https://example.com/avatar.jpg  ",
-      };
-
-      const transformed = transformCreateDTO(dto);
-
-      expect(transformed.address).toBe("123 Main St");
-      expect(transformed.avatarUrl).toBe("https://example.com/avatar.jpg");
+      });
+      expect(result.address).toBe("123 Main St");
     });
 
-    it("should handle undefined optional fields", () => {
-      const dto: CreateBuyerProfileDTO = {
+    it("trims avatarUrl", () => {
+      const result = transformCreateDTO({
         fullName: "John Doe",
         email: "john@example.com",
         phoneNumber: "+1234567890",
-      };
+        avatarUrl: "  https://example.com/avatar.jpg  ",
+      });
+      expect(result.avatarUrl).toBe("https://example.com/avatar.jpg");
+    });
 
-      const transformed = transformCreateDTO(dto);
+    it("omits address and avatarUrl when not provided", () => {
+      const result = transformCreateDTO({
+        fullName: "John Doe",
+        email: "john@example.com",
+        phoneNumber: "+1234567890",
+      });
+      expect(result.address).toBeUndefined();
+      expect(result.avatarUrl).toBeUndefined();
+    });
 
-      expect(transformed.address).toBeUndefined();
-      expect(transformed.avatarUrl).toBeUndefined();
+    it("produces only allowlisted keys", () => {
+      const input = {
+        fullName: "John Doe",
+        email: "john@example.com",
+        phoneNumber: "+1234567890",
+      } as CreateBuyerProfileDTO;
+      const result = transformCreateDTO(input);
+      const keys = Object.keys(result);
+      const allowed = new Set(["fullName", "email", "phoneNumber", "address", "avatarUrl"]);
+      keys.forEach((k) => expect(allowed.has(k)).toBe(true));
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // transformUpdateDTO
+  // ---------------------------------------------------------------------------
   describe("transformUpdateDTO", () => {
-    it("should trim and normalize email to lowercase", () => {
-      const dto: UpdateBuyerProfileDTO = {
-        email: "  JOHN.UPDATED@EXAMPLE.COM  ",
-      };
-
-      const transformed = transformUpdateDTO(dto);
-
-      expect(transformed.email).toBe("john.updated@example.com");
+    it("trims and lowercases email", () => {
+      const result = transformUpdateDTO({ email: "  JOHN.UPDATED@EXAMPLE.COM  " });
+      expect(result.email).toBe("john.updated@example.com");
     });
 
-    it("should sanitize fullName by removing angle brackets", () => {
-      const dto: UpdateBuyerProfileDTO = {
-        fullName: "John <b>Updated</b> Doe",
-      };
-
-      const transformed = transformUpdateDTO(dto);
-
-      expect(transformed.fullName).toBe("John bUpdated/b Doe");
+    it("normalizes unicode whitespace in fullName", () => {
+      const result = transformUpdateDTO({ fullName: "Jane\u2003Doe" });
+      expect(result.fullName).toBe("Jane Doe");
     });
 
-    it("should handle undefined fields", () => {
-      const dto: UpdateBuyerProfileDTO = {
-        fullName: "John Updated",
-      };
-
-      const transformed = transformUpdateDTO(dto);
-
-      expect(transformed.fullName).toBe("John Updated");
-      expect(transformed.email).toBeUndefined();
-      expect(transformed.phoneNumber).toBeUndefined();
+    it("strips angle brackets from fullName", () => {
+      const result = transformUpdateDTO({ fullName: "John <b>Updated</b> Doe" });
+      expect(result.fullName).toBe("John bUpdated/b Doe");
     });
 
-    it("should handle undefined optional fields", () => {
-      const dto: UpdateBuyerProfileDTO = {
-        address: undefined,
-        avatarUrl: undefined,
-      };
+    it("omits undefined fields from output", () => {
+      const result = transformUpdateDTO({ fullName: "John Updated" });
+      expect(result.fullName).toBe("John Updated");
+      expect(result.email).toBeUndefined();
+      expect(result.phoneNumber).toBeUndefined();
+      expect(result.address).toBeUndefined();
+      expect(result.avatarUrl).toBeUndefined();
+    });
 
-      const transformed = transformUpdateDTO(dto);
+    it("produces only allowlisted keys", () => {
+      const result = transformUpdateDTO({ fullName: "Jane", email: "jane@example.com" });
+      const keys = Object.keys(result);
+      const allowed = new Set(["fullName", "email", "phoneNumber", "address", "avatarUrl"]);
+      keys.forEach((k) => expect(allowed.has(k)).toBe(true));
+    });
+  });
 
-      expect(transformed.address).toBeUndefined();
-      expect(transformed.avatarUrl).toBeUndefined();
+  // ---------------------------------------------------------------------------
+  // Middleware
+  // ---------------------------------------------------------------------------
+  describe("middleware", () => {
+    const makeRes = () => {
+      const res: Record<string, jest.Mock> = {};
+      res.status = jest.fn().mockReturnValue(res);
+      res.json = jest.fn().mockReturnValue(res);
+      return res as unknown as import("express").Response;
+    };
+
+    describe("validateCreateBuyerProfile", () => {
+      it("calls next() for valid body", () => {
+        const req = {
+          body: { fullName: "John Doe", email: "john@example.com", phoneNumber: "+1234567890" },
+        } as import("express").Request;
+        const res = makeRes();
+        const next = jest.fn();
+        validateCreateBuyerProfile(req, res, next);
+        expect(next).toHaveBeenCalled();
+      });
+
+      it("returns 400 for invalid body", () => {
+        const req = { body: {} } as import("express").Request;
+        const res = makeRes();
+        const next = jest.fn();
+        validateCreateBuyerProfile(req, res, next);
+        expect((res as unknown as Record<string, jest.Mock>).status).toHaveBeenCalledWith(400);
+        expect(next).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("validateUpdateBuyerProfile", () => {
+      it("calls next() for valid body", () => {
+        const req = { body: { fullName: "Jane Doe" } } as import("express").Request;
+        const res = makeRes();
+        const next = jest.fn();
+        validateUpdateBuyerProfile(req, res, next);
+        expect(next).toHaveBeenCalled();
+      });
+
+      it("returns 400 for invalid body", () => {
+        const req = { body: {} } as import("express").Request;
+        const res = makeRes();
+        const next = jest.fn();
+        validateUpdateBuyerProfile(req, res, next);
+        expect((res as unknown as Record<string, jest.Mock>).status).toHaveBeenCalledWith(400);
+        expect(next).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("validateUUID", () => {
+      it("calls next() for valid UUID param", () => {
+        const req = { params: { id: "550e8400-e29b-41d4-a716-446655440000" } } as unknown as import("express").Request;
+        const res = makeRes();
+        const next = jest.fn();
+        validateUUID(req, res, next);
+        expect(next).toHaveBeenCalled();
+      });
+
+      it("returns 400 for invalid UUID param", () => {
+        const req = { params: { id: "bad-id" } } as unknown as import("express").Request;
+        const res = makeRes();
+        const next = jest.fn();
+        validateUUID(req, res, next);
+        expect((res as unknown as Record<string, jest.Mock>).status).toHaveBeenCalledWith(400);
+        expect(next).not.toHaveBeenCalled();
+      });
     });
   });
 });

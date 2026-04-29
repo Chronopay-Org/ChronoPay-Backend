@@ -17,7 +17,6 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   role: UserRole;
-  [key: string]: unknown;
 }
 
 declare global {

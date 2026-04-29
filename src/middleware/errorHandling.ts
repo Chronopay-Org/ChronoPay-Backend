@@ -50,10 +50,21 @@ export function genericErrorHandler(
   res: Response,
   _next: NextFunction,
 ) {
-  if (isAppError(err)) {
-    return res
-      .status(err.statusCode)
-      .json(withRequestContext(err.toJSON(), req));
+  if (
+    err instanceof Error &&
+    "statusCode" in err &&
+    "code" in err
+  ) {
+    const e = err as any;
+    // Emit a consistent envelope for any AppError-shaped error (includes
+    // ServiceUnavailableError / 503 from dependency outages).
+    if (typeof e.statusCode === "number" && typeof e.code === "string") {
+      return res.status(e.statusCode).json({
+        success: false,
+        code: e.code,
+        error: e.message,
+      });
+    }
   }
 
   const fallback: AppErrorEnvelope = {

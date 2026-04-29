@@ -36,7 +36,13 @@ export const idempotencyMiddleware = async (
 
   const redis = getRedisClient();
   if (!redis) {
-    next();
+    // Fail closed: without Redis we cannot guarantee idempotency, so reject
+    // rather than silently allowing duplicate processing.
+    res.status(503).json({
+      success: false,
+      code: "DEPENDENCY_UNAVAILABLE",
+      error: "Redis is currently unavailable",
+    });
     return;
   }
 

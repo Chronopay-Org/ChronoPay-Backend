@@ -1,7 +1,6 @@
-export { createApp } from "./app.js";
-export { resetSlotStore as __resetSlotsForTests } from "./routes/slots.js";
 import { createApp } from "./app.js";
 import { loadEnvConfig, type EnvConfig } from "./config/env.js";
+import { logInfo } from "./utils/logger.js";
 
 export function startServer(
   server: { listen: (port: number, callback?: () => void) => unknown },
@@ -21,6 +20,6 @@ if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {
     logInfo(`Server running on port ${PORT}`);
   });
+}
 
 export default app;
-export { createApp };

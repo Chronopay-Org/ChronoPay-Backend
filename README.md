@@ -154,29 +154,43 @@ See [docs/database/migrations.md](docs/database/migrations.md) for complete docu
 
 ## Rate Limiting
 
-All API endpoints are protected by per-IP rate limiting using
-[`express-rate-limit`](https://github.com/express-rate-limit/express-rate-limit).
+ChronoPay Backend implements **auth-aware rate limiting** to ensure fair usage while minimizing collateral damage from shared IP addresses (NAT, corporate proxies). The limiter keys requests by authenticated principal (user ID or API key) when available, and falls back to IP for unauthenticated traffic.
 
-### Default behavior
+### Key Strategy
 
-| Setting       | Default    | Description                                     |
-|---------------|------------|-------------------------------------------------|
-| Window        | 15 minutes | Rolling time window per IP address              |
-| Max requests  | 100        | Maximum requests allowed within the window      |
-| Response code | `429`      | HTTP status returned when limit is exceeded     |
+Priority order for rate-limit key generation:
+
+1. **Header-based user ID** (`x-chronopay-user-id`) → `rl:user:<userId>`
+2. **JWT user ID** (`req.user.sub` or `req.user.id`) → `rl:user:<userId>`
+3. **API key** (SHA-256 hash of `x-api-key`) → `rl:apiKey:<hash>`
+4. **IP address** (`req.ip`, respects `TRUST_PROXY`) → `rl:ip:<ip>`
+
+This ensures:
+- Different principal types never collide
+- Same principal shares quota across all protected routes (global counter)
+- Unauthenticated requests are still limited by IP
+
+### Default Limits
+
+| Setting       | Default    | Description                           |
+|---------------|------------|---------------------------------------|
+| Window        | 15 minutes | Rolling window per principal         |
+| Max requests  | 100        | Per principal within the window      |
+| Response code | `429`      | HTTP status when limit exceeded       |
 
 ### Configuration
 
-Override defaults with environment variables:
+Override with environment variables:
 
-| Variable               | Description                             | Example         |
-|------------------------|-----------------------------------------|-----------------|
-| `RATE_LIMIT_WINDOW_MS` | Window duration in milliseconds         | `900000` (15 m) |
-| `RATE_LIMIT_MAX`       | Max requests per window per IP          | `100`           |
+| Variable               | Default | Description                                  |
+|------------------------|---------|----------------------------------------------|
+| `RATE_LIMIT_WINDOW_MS` | `900000`| Window duration in milliseconds              |
+| `RATE_LIMIT_MAX`       | `100`   | Max requests per window per principal        |
+| `TRUST_PROXY`          | `false` | Use `X-Forwarded-For` for client IP behind load balancer |
 
-### 429 response format
+All authenticated endpoints should apply `createAuthAwareRateLimiter()` **after** their authentication middleware. Unauthenticated endpoints (e.g., health checks) are automatically IP-based if a limiter is used.
 
-When the rate limit is exceeded the API returns the standard error envelope:
+### 429 Response
 
 ```json
 {
@@ -185,22 +199,58 @@ When the rate limit is exceeded the API returns the standard error envelope:
 }
 ```
 
-### Headers
+Every response also includes the `RateLimit` header (draft-7 format):
 
-All responses include a `RateLimit` header (RFC draft-7 combined format) that
-exposes the current limit, remaining count, and reset time. Legacy
-`X-RateLimit-*` headers are disabled.
+```
+RateLimit: limit=100, remaining=85, reset=1711072800
+```
 
-### Trust proxy (production deployments)
+### Middleware Usage
 
-When the API runs behind a reverse proxy (Nginx, a load balancer, cloud
-gateway), set `TRUST_PROXY=true` in your environment. Without it, Express reads
-`req.ip` from the TCP socket — which will be the proxy's address — causing all
-clients to share a single rate-limit counter.
+**Header-based auth** (`x-chronopay-user-id`):
+```ts
+router.post(
+  '/',
+  requireAuthenticatedActor(['customer', 'admin']),
+  createAuthAwareRateLimiter(),
+  handler
+);
+```
 
-Do **not** set `TRUST_PROXY=true` when the API is directly internet-exposed
-without a proxy: clients could spoof `X-Forwarded-For` and bypass per-IP
-rate limiting.
+**API-key auth** (`x-api-key`):
+```ts
+router.post(
+  '/',
+  requireApiKey(process.env.API_KEY),
+  createAuthAwareRateLimiter(),
+  handler
+);
+```
+
+**JWT auth** (Bearer token):
+```ts
+router.get(
+  '/profile',
+  authenticate,
+  createAuthAwareRateLimiter(),
+  handler
+);
+```
+
+### Trust Proxy
+
+When running behind a reverse proxy or load balancer, set `TRUST_PROXY=true`. Express will then derive `req.ip` from `X-Forwarded-For`. **Do not enable** if the API is directly exposed; clients could spoof their IP and bypass rate limits.
+
+### Security Notes
+
+- **Auth-before-rate-limit**: The rate limiter must be placed **after** authentication middleware; otherwise it falls back to IP-based keys.  
+- **Header trust**: Header-based auth assumes a trusted upstream validates `x-chronopay-user-id`. Direct exposure without a gateway allows spoofing.  
+- **API key hashing**: Raw API keys are never stored; Redis keys contain only SHA-256 hashes.  
+- **Redis**: All instances share a single Redis store (`rl:` namespace). Ensure Redis is not publicly accessible.
+
+### Full documentation
+
+See [`docs/rate-limiting.md`](docs/rate-limiting.md) for deep dive, troubleshooting, and observability details.
 
 ## Feature Flags
 
