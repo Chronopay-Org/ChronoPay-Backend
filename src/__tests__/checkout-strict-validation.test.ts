@@ -4,7 +4,7 @@ import { CheckoutErrorCode } from "../types/checkout.js";
 
 describe("Checkout Strict Validation Integration", () => {
   describe("POST /api/v1/checkout/sessions", () => {
-    it("should accept valid decimal string amount", async () => {
+    it("should reject valid decimal string amount", async () => {
       const payload = {
         payment: {
           amount: "10.50",
@@ -21,9 +21,8 @@ describe("Checkout Strict Validation Integration", () => {
         .post("/api/v1/checkout/sessions")
         .send(payload);
 
-      expect(res.status).toBe(201);
-      expect(res.body.success).toBe(true);
-      expect(res.body.session.payment.amount).toBe("10.50");
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe(CheckoutErrorCode.INVALID_AMOUNT);
     });
 
     it("should reject malformed decimal string amount", async () => {

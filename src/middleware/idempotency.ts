@@ -2,6 +2,9 @@ import type { NextFunction, Request, Response } from "express";
 import { getRedisClient } from "../cache/redisClient.js";
 import { generateRequestHash } from "../utils/hash.js";
 import { getIdempotencyPayloadCodec } from "../utils/idempotencyPayloadCodec.js";
+import { IdempotencyError } from "../errors/AppError.js";
+import { ERROR_CODES } from "../errors/errorCodes.js";
+import { sendErrorResponse } from "../errors/sendError.js";
 
 const IDEMPOTENCY_EXPIRATION_SECONDS = 86400;
 
@@ -33,17 +36,27 @@ export const idempotencyMiddleware = async (
 
   const redis = getRedisClient();
   if (!redis) {
-    next();
+    // Fail closed: without Redis we cannot guarantee idempotency, so reject
+    // rather than silently allowing duplicate processing.
+    res.status(503).json({
+      success: false,
+      code: "DEPENDENCY_UNAVAILABLE",
+      error: "Redis is currently unavailable",
+    });
     return;
   }
 
   // --- Header validation: reject malformed keys before touching Redis ---
   const keyValidation = validateIdempotencyKey(idempotencyKey);
   if (!keyValidation.valid) {
-    res.status(400).json({
-      success: false,
-      error: keyValidation.reason,
-    });
+    sendErrorResponse(
+      res,
+      new IdempotencyError(
+        keyValidation.reason,
+        ERROR_CODES.IDEMPOTENCY_KEY_INVALID.code,
+      ),
+      req,
+    );
     return;
   }
 
@@ -57,18 +70,26 @@ export const idempotencyMiddleware = async (
       const parsedData = codec.deserialize<IdempotencyState>(existingData);
 
       if (parsedData.status === "processing") {
-        res.status(409).json({
-          success: false,
-          error: "Conflict: This transaction is actively running.",
-        });
+        sendErrorResponse(
+          res,
+          new IdempotencyError(
+            "Conflict: This transaction is actively running.",
+            ERROR_CODES.IDEMPOTENCY_IN_PROGRESS.code,
+          ),
+          req,
+        );
         return;
       }
 
       if (parsedData.requestHash !== incomingHash) {
-        res.status(422).json({
-          success: false,
-          error: "Unprocessable Entity: Idempotency-Key used with different payload.",
-        });
+        sendErrorResponse(
+          res,
+          new IdempotencyError(
+            "Unprocessable Entity: Idempotency-Key used with different payload.",
+            ERROR_CODES.IDEMPOTENCY_KEY_MISMATCH.code,
+          ),
+          req,
+        );
         return;
       }
 
@@ -92,10 +113,14 @@ export const idempotencyMiddleware = async (
     );
 
     if (lockAcquired !== "OK") {
-      res.status(409).json({
-        success: false,
-        error: "Conflict: This transaction is actively running.",
-      });
+      sendErrorResponse(
+        res,
+        new IdempotencyError(
+          "Conflict: This transaction is actively running.",
+          ERROR_CODES.IDEMPOTENCY_IN_PROGRESS.code,
+        ),
+        req,
+      );
       return;
     }
 

@@ -1,7 +1,6 @@
-export { createApp } from "./app.js";
-export { resetSlotStore as __resetSlotsForTests } from "./routes/slots.js";
 import { createApp } from "./app.js";
 import { loadEnvConfig, type EnvConfig } from "./config/env.js";
+import { logInfo } from "./utils/logger.js";
 
 // If you want to add global middleware (like timeout), do it in createApp in app.js
 
@@ -29,4 +28,3 @@ if (process.env.NODE_ENV !== "test") {
 }
 
 export default app;
-export { createApp };

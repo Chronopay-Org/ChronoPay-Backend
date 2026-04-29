@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import cors from "cors";
 import express, { Request, Response } from "express";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
+import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
 import { securityHeaders, createSecurityHeaders } from "./middleware/securityHeaders.js";
 import {
   genericErrorHandler,
@@ -9,13 +10,21 @@ import {
   notFoundHandler,
 } from "./middleware/errorHandling.js";
 import { validateRequiredFields } from "./middleware/validation.js";
+import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
+import { createRequestLogger } from "./middleware/requestLogger.js";
 import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./middleware/featureFlags.js";
 import { createBookingIntentsRouter } from "./routes/booking-intents.js";
+import { AmountUtils } from "./utils/amount.js";
+import checkoutRouter from "./routes/checkout.js";
+import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
+import { createRequestLogger } from "./middleware/requestLogger.js";
 
 export interface AppFactoryOptions {
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
+  enableContentNegotiation?: boolean;
+  contentNegotiationExcludePaths?: string[];
   slotRepository?: SlotRepository;
   bookingIntentService?: BookingIntentService;
 }
@@ -216,10 +225,10 @@ function createCheckoutSessionStub(req: Request, res: Response) {
   }
 
   // Semantic validation (422)
-  if (typeof payment.amount !== "number" || payment.amount <= 0) {
+  if (!AmountUtils.validate(payment.amount)) {
     return res.status(422).json({
       success: false,
-      error: "Amount must be positive",
+      error: "Amount must be a strictly positive integer in native minor units",
     });
   }
 
@@ -518,6 +527,11 @@ function listBuyerProfilesStub(req: Request, res: Response) {
 export function createApp(options: AppFactoryOptions = {}) {
   const app = express();
 
+  // ── Trust proxy configuration (for correct client IP behind load balancer) ─────
+  if (configService.trustProxy) {
+    app.set('trust proxy', 1);
+  }
+
   // ── Initialize feature flags from environment ──────────────────────────────
   initializeFeatureFlagsFromEnv();
 
@@ -558,12 +572,14 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.post(
     "/api/v1/slots",
     requireApiKey(options.apiKey),
+    createAuthAwareRateLimiter(),
     validateRequiredFields(["professional", "startTime", "endTime"]),
     createSlot,
   );
 
   // ── Booking intents routes ─────────────────────────────────────────────────
   app.use("/api/v1/booking-intents", createBookingIntentsRouter());
+  app.use("/api/v1/checkout", checkoutRouter);
 
   if (options.enableTestRoutes) {
     app.get("/__test__/explode", () => {

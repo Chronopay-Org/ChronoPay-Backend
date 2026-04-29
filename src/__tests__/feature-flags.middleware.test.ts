@@ -65,11 +65,14 @@ describe("feature flag middleware", () => {
     requireFeatureFlag("CREATE_SLOT")(req, res, next);
 
     expect(status).toHaveBeenCalledWith(503);
-    expect(json).toHaveBeenCalledWith({
-      success: false,
-      code: "FEATURE_DISABLED",
-      error: "Feature CREATE_SLOT is currently disabled",
-    });
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        code: "FEATURE_DISABLED",
+        error: "Feature CREATE_SLOT is currently disabled",
+        timestamp: expect.any(String),
+      }),
+    );
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -91,11 +94,14 @@ describe("feature flag middleware", () => {
     requireFeatureFlag("CREATE_SLOT")(req, res, next);
 
     expect(status).toHaveBeenCalledWith(500);
-    expect(json).toHaveBeenCalledWith({
-      success: false,
-      code: "FEATURE_FLAG_EVALUATION_ERROR",
-      error: "Feature flag evaluation failed",
-    });
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        code: "FEATURE_FLAG_EVALUATION_ERROR",
+        error: "Feature flag evaluation failed",
+        timestamp: expect.any(String),
+      }),
+    );
     expect(next).not.toHaveBeenCalled();
   });
 
