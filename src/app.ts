@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import cors from "cors";
 import express, { Request, Response } from "express";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
+import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
 import { securityHeaders, createSecurityHeaders } from "./middleware/securityHeaders.js";
 import {
   genericErrorHandler,
@@ -9,6 +10,8 @@ import {
   notFoundHandler,
 } from "./middleware/errorHandling.js";
 import { validateRequiredFields } from "./middleware/validation.js";
+import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
+import { createRequestLogger } from "./middleware/requestLogger.js";
 import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./middleware/featureFlags.js";
 import { createBookingIntentsRouter } from "./routes/booking-intents.js";
 import { AmountUtils } from "./utils/amount.js";
@@ -20,6 +23,8 @@ export interface AppFactoryOptions {
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
+  enableContentNegotiation?: boolean;
+  contentNegotiationExcludePaths?: string[];
   slotRepository?: SlotRepository;
   bookingIntentService?: BookingIntentService;
 }
@@ -522,6 +527,11 @@ function listBuyerProfilesStub(req: Request, res: Response) {
 export function createApp(options: AppFactoryOptions = {}) {
   const app = express();
 
+  // ── Trust proxy configuration (for correct client IP behind load balancer) ─────
+  if (configService.trustProxy) {
+    app.set('trust proxy', 1);
+  }
+
   // ── Initialize feature flags from environment ──────────────────────────────
   initializeFeatureFlagsFromEnv();
 
@@ -562,6 +572,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.post(
     "/api/v1/slots",
     requireApiKey(options.apiKey),
+    createAuthAwareRateLimiter(),
     validateRequiredFields(["professional", "startTime", "endTime"]),
     createSlot,
   );

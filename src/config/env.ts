@@ -23,6 +23,14 @@ export interface EnvConfig {
   nodeEnv: NodeEnv;
   port: number;
   redisUrl: string;
+  rateLimitWindowMs: number;
+  rateLimitMax: number;
+  trustProxy: boolean;
+  timeoutMs?: number;
+  webhookSecret?: string;
+  jwtIssuer?: string;
+  jwtAudience?: string;
+  corsAllowedOrigins?: string[];
 }
 
 export class EnvValidationError extends Error {
@@ -65,6 +73,14 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     nodeEnv,
     port,
     redisUrl,
+    rateLimitWindowMs,
+    rateLimitMax,
+    trustProxy,
+    timeoutMs,
+    webhookSecret,
+    jwtIssuer,
+    jwtAudience,
+    corsAllowedOrigins,
   };
 }
 
