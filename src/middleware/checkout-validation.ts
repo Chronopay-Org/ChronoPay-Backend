@@ -17,6 +17,8 @@ import {
   PaymentMethod,
 } from "../types/checkout.js";
 
+import { AmountUtils } from "../utils/amount.js";
+
 /**
  * Validates email format
  * @param email - Email address to validate
@@ -29,37 +31,11 @@ export function isValidEmail(email: string): boolean {
 
 /**
  * Validates payment amount
- * @param amount - Amount in smallest unit (integer) or decimal string
- * @returns true if amount is valid
+ * @param amount - Amount in smallest unit
+ * @returns true if amount is valid integer
  */
 export function isValidAmount(amount: unknown): boolean {
-  // If number, must be positive integer and within safe range
-  if (typeof amount === "number") {
-    if (!Number.isInteger(amount)) return false;
-    if (amount <= 0) return false;
-    // Max limit: 100 trillion in smallest units (prevents overflow while allowing large amounts)
-    if (amount > 1e14) return false;
-    return true;
-  }
-
-  // If string, must be a valid positive decimal string
-  if (typeof amount === "string") {
-    // Regex for positive decimal numbers (e.g., "10.50", "100", "0.0000001")
-    const decimalRegex = /^\d+(\.\d+)?$/;
-    if (!decimalRegex.test(amount)) return false;
-    
-    const num = parseFloat(amount);
-    if (num <= 0) return false;
-    if (num > 1e14) return false;
-    
-    // Check for excessive precision (Stellar allows up to 7 decimal places)
-    const parts = amount.split(".");
-    if (parts.length === 2 && parts[1].length > 7) return false;
-    
-    return true;
-  }
-
-  return false;
+  return AmountUtils.validate(amount);
 }
 
 /**
@@ -147,7 +123,7 @@ export function validateCreateCheckoutSession() {
       if (!isValidAmount(payment.amount)) {
         throw new CheckoutError(
           CheckoutErrorCode.INVALID_AMOUNT,
-          "Amount must be a positive integer or valid decimal string (max 7 decimal places)",
+          "Amount must be a strictly positive integer representing minor units",
           400,
           { field: "payment.amount", provided: payment.amount },
         );

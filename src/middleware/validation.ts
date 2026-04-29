@@ -1,4 +1,10 @@
 import { Request, Response, NextFunction } from "express";
+import {
+  BadRequestError,
+  InternalServerError,
+  MissingRequiredFieldError,
+} from "../errors/AppError.js";
+import { sendErrorResponse } from "../errors/sendError.js";
 
 type ValidationTarget = "body" | "query" | "params";
 
@@ -90,15 +96,12 @@ export function validateRequiredFields(
     try {
       const data = req[target];
 
-      // Guard: the target must be a non-null object
-      if (data === null || data === undefined || typeof data !== "object") {
-        return buildValidationError(res, [
-          {
-            path: target,
-            rule: "target_invalid",
-            message: `Request ${target} is missing or invalid`,
-          },
-        ]);
+      if (!data || typeof data !== "object") {
+        return sendErrorResponse(
+          res,
+          new BadRequestError(`Request ${target} is missing or invalid`),
+          req,
+        );
       }
 
       // Collect every failing field instead of short-circuiting
@@ -108,12 +111,7 @@ export function validateRequiredFields(
         const value = (data as Record<string, unknown>)[field];
 
         if (value === undefined || value === null || value === "") {
-          details.push({
-            path: field,
-            rule: "required",
-            // Only the field name is surfaced — the raw value is never included
-            message: `${field} is required`,
-          });
+          return sendErrorResponse(res, new MissingRequiredFieldError(field), req);
         }
       }
 
@@ -123,12 +121,11 @@ export function validateRequiredFields(
 
       return next();
     } catch {
-      // Return a generic 500 — do not leak internal error messages
-      return res.status(500).json({
-        success: false,
-        code: "INTERNAL_ERROR",
-        error: "Validation middleware error",
-      });
+      return sendErrorResponse(
+        res,
+        new InternalServerError("Validation middleware error"),
+        req,
+      );
     }
   };
 }

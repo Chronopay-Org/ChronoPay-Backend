@@ -1,24 +1,38 @@
 /**
- * Custom error classes for ChronoPay API
+ * Custom error classes for ChronoPay API.
  *
- * These errors provide structured error handling across the application
- * with proper HTTP status codes and error categorization.
+ * Every subclass binds to a canonical entry in `ERROR_CODES`. The error
+ * envelope emitted on the wire is the flat shape produced by `toJSON()`:
+ *
+ *   { success: false, code, error, requestId?, timestamp, details? }
+ *
+ * See `docs/error-codes.md` for the full taxonomy.
  */
 
-/**
- * Base application error with HTTP status code support
- */
+import { ERROR_CODES, type ErrorCodeString } from "./errorCodes.js";
+
+export interface AppErrorEnvelope {
+  success: false;
+  code: ErrorCodeString | string;
+  error: string;
+  timestamp: string;
+  requestId?: string;
+  details?: unknown;
+}
+
 export class AppError extends Error {
   public readonly statusCode: number;
   public readonly code: string;
   public readonly isOperational: boolean;
   public readonly timestamp: string;
+  public readonly details?: unknown;
 
   constructor(
     message: string,
     statusCode: number = 500,
-    code: string = "INTERNAL_ERROR",
+    code: string = ERROR_CODES.INTERNAL_ERROR.code,
     isOperational: boolean = true,
+    details?: unknown,
   ) {
     super(message);
     this.name = this.constructor.name;
@@ -26,118 +40,184 @@ export class AppError extends Error {
     this.code = code;
     this.isOperational = isOperational;
     this.timestamp = new Date().toISOString();
+    if (details !== undefined) {
+      this.details = details;
+    }
 
-    // Maintains proper stack trace for where error was thrown (only in dev)
     if (process.env.NODE_ENV !== "production") {
       Error.captureStackTrace(this, this.constructor);
     }
   }
 
-  /**
-   * Convert error to JSON-serializable object
-   */
-  toJSON() {
-    return {
+  toJSON(): AppErrorEnvelope {
+    const envelope: AppErrorEnvelope = {
       success: false,
-      error: {
-        message: this.message,
-        code: this.code,
-        timestamp: this.timestamp,
-      },
+      code: this.code,
+      error: this.message,
+      timestamp: this.timestamp,
     };
+    if (this.details !== undefined) {
+      envelope.details = this.details;
+    }
+    return envelope;
   }
 }
 
-/**
- * Bad Request Error (400)
- * Used for invalid inputs, missing fields, malformed requests
- */
 export class BadRequestError extends AppError {
-  constructor(message: string = "Bad Request") {
-    super(message, 400, "BAD_REQUEST", true);
+  constructor(message: string = "Bad Request", details?: unknown) {
+    super(message, ERROR_CODES.BAD_REQUEST.status, ERROR_CODES.BAD_REQUEST.code, true, details);
   }
 }
 
-/**
- * Unauthorized Error (401)
- * Used for missing or invalid authentication
- */
+export class ValidationError extends AppError {
+  constructor(message: string = "Validation failed", details?: unknown) {
+    super(
+      message,
+      ERROR_CODES.VALIDATION_ERROR.status,
+      ERROR_CODES.VALIDATION_ERROR.code,
+      true,
+      details,
+    );
+  }
+}
+
+export class MissingRequiredFieldError extends AppError {
+  constructor(field: string) {
+    super(
+      `Missing required field: ${field}`,
+      ERROR_CODES.MISSING_REQUIRED_FIELD.status,
+      ERROR_CODES.MISSING_REQUIRED_FIELD.code,
+      true,
+      { field },
+    );
+  }
+}
+
+export class MalformedJsonError extends AppError {
+  constructor(message: string = "Malformed JSON payload") {
+    super(
+      message,
+      ERROR_CODES.MALFORMED_JSON.status,
+      ERROR_CODES.MALFORMED_JSON.code,
+      true,
+    );
+  }
+}
+
 export class UnauthorizedError extends AppError {
-  constructor(message: string = "Unauthorized") {
-    super(message, 401, "UNAUTHORIZED", true);
+  constructor(
+    message: string = "Unauthorized",
+    code: string = ERROR_CODES.UNAUTHORIZED.code,
+  ) {
+    super(message, ERROR_CODES.UNAUTHORIZED.status, code, true);
   }
 }
 
-/**
- * Forbidden Error (403)
- * Used when user lacks permission for the requested resource
- */
 export class ForbiddenError extends AppError {
-  constructor(message: string = "Forbidden") {
-    super(message, 403, "FORBIDDEN", true);
+  constructor(
+    message: string = "Forbidden",
+    code: string = ERROR_CODES.FORBIDDEN.code,
+  ) {
+    super(message, ERROR_CODES.FORBIDDEN.status, code, true);
   }
 }
 
-/**
- * Not Found Error (404)
- * Used when requested resource doesn't exist
- */
 export class NotFoundError extends AppError {
   constructor(message: string = "Resource not found") {
-    super(message, 404, "NOT_FOUND", true);
+    super(message, ERROR_CODES.NOT_FOUND.status, ERROR_CODES.NOT_FOUND.code, true);
   }
 }
 
-/**
- * Conflict Error (409)
- * Used for resource conflicts (e.g., duplicate entries)
- */
 export class ConflictError extends AppError {
-  constructor(message: string = "Conflict") {
-    super(message, 409, "CONFLICT", true);
+  constructor(
+    message: string = "Conflict",
+    code: string = ERROR_CODES.CONFLICT.code,
+  ) {
+    super(message, ERROR_CODES.CONFLICT.status, code, true);
   }
 }
 
-/**
- * Unprocessable Entity Error (422)
- * Used for validation errors that can't be processed
- */
 export class UnprocessableEntityError extends AppError {
-  constructor(message: string = "Unprocessable Entity") {
-    super(message, 422, "UNPROCESSABLE_ENTITY", true);
+  constructor(
+    message: string = "Unprocessable Entity",
+    code: string = ERROR_CODES.UNPROCESSABLE_ENTITY.code,
+  ) {
+    super(message, ERROR_CODES.UNPROCESSABLE_ENTITY.status, code, true);
   }
 }
 
-/**
- * Internal Server Error (500)
- * Used for unexpected server errors
- * Note: isOperational is false by default to hide internal details in production
- */
+export class RateLimitError extends AppError {
+  constructor(message: string = "Too many requests, please try again later.") {
+    super(
+      message,
+      ERROR_CODES.RATE_LIMITED.status,
+      ERROR_CODES.RATE_LIMITED.code,
+      true,
+    );
+  }
+}
+
+export class IdempotencyError extends AppError {
+  constructor(
+    message: string,
+    code:
+      | typeof ERROR_CODES.IDEMPOTENCY_KEY_INVALID.code
+      | typeof ERROR_CODES.IDEMPOTENCY_IN_PROGRESS.code
+      | typeof ERROR_CODES.IDEMPOTENCY_KEY_MISMATCH.code,
+  ) {
+    const status =
+      code === ERROR_CODES.IDEMPOTENCY_KEY_INVALID.code
+        ? ERROR_CODES.IDEMPOTENCY_KEY_INVALID.status
+        : code === ERROR_CODES.IDEMPOTENCY_IN_PROGRESS.code
+          ? ERROR_CODES.IDEMPOTENCY_IN_PROGRESS.status
+          : ERROR_CODES.IDEMPOTENCY_KEY_MISMATCH.status;
+    super(message, status, code, true);
+  }
+}
+
+export class DatabaseError extends AppError {
+  constructor(message: string = "Database operation failed", details?: unknown) {
+    super(
+      message,
+      ERROR_CODES.DB_ERROR.status,
+      ERROR_CODES.DB_ERROR.code,
+      false,
+      details,
+    );
+  }
+}
+
 export class InternalServerError extends AppError {
   constructor(message: string = "Internal Server Error") {
     super(
       message,
-      500,
-      "INTERNAL_ERROR",
+      ERROR_CODES.INTERNAL_ERROR.status,
+      ERROR_CODES.INTERNAL_ERROR.code,
       process.env.NODE_ENV !== "production",
     );
   }
 }
 
-/**
- * Service Unavailable Error (503)
- * Used when service is temporarily unavailable
- */
 export class ServiceUnavailableError extends AppError {
-  constructor(message: string = "Service Unavailable") {
-    super(message, 503, "SERVICE_UNAVAILABLE", true);
+  constructor(
+    message: string = "Service Unavailable",
+    code: string = ERROR_CODES.SERVICE_UNAVAILABLE.code,
+  ) {
+    super(message, ERROR_CODES.SERVICE_UNAVAILABLE.status, code, true);
   }
 }
 
-/**
- * Content Negotiation Error (415/406)
- * Used for Content-Type or Accept header validation failures
- */
+export class ConfigurationError extends AppError {
+  constructor(message: string) {
+    super(
+      message,
+      ERROR_CODES.CONFIGURATION_ERROR.status,
+      ERROR_CODES.CONFIGURATION_ERROR.code,
+      true,
+    );
+  }
+}
+
 export class ContentNegotiationError extends AppError {
   constructor(
     statusCode: 415 | 406,
@@ -148,9 +228,6 @@ export class ContentNegotiationError extends AppError {
   }
 }
 
-/**
- * Type guard to check if error is an AppError
- */
 export function isAppError(error: unknown): error is AppError {
   return (
     error instanceof Error &&
@@ -160,9 +237,6 @@ export function isAppError(error: unknown): error is AppError {
   );
 }
 
-/**
- * Extract status code from any error
- */
 export function getStatusCode(error: unknown): number {
   if (isAppError(error)) {
     return error.statusCode;

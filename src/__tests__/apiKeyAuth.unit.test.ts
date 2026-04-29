@@ -78,10 +78,14 @@ describe("API Key Identity Model", () => {
 
     expect(req.apiKeyId).toBeUndefined();
     expect(statusValue).toBe(403);
-    expect(jsonValue).toEqual({
-      success: false,
-      error: "Invalid API key",
-    });
+    expect(jsonValue).toEqual(
+      expect.objectContaining({
+        success: false,
+        code: "INVALID_API_KEY",
+        error: "Invalid API key",
+        timestamp: expect.any(String),
+      }),
+    );
     expect(nextCalled.called).toBe(false);
   });
 

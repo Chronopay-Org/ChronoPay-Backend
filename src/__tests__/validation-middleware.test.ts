@@ -57,12 +57,14 @@ describe("validateRequiredFields — existing contract", () => {
     middleware(request, response, noOp);
 
     expect((response as unknown as { statusCode: number }).statusCode).toBe(400);
-    const body = lastBody();
-    expect(body.success).toBe(false);
-    expect(body.code).toBe("VALIDATION_ERROR");
-    // details contains exactly one entry for the invalid target
-    expect(body.details).toHaveLength(1);
-    expect(body.details[0].rule).toBe("target_invalid");
+    expect(responseBody[0]).toEqual(
+      expect.objectContaining({
+        success: false,
+        code: "BAD_REQUEST",
+        error: "Request body is missing or invalid",
+        timestamp: expect.any(String),
+      }),
+    );
   });
 
   it("returns 500 when a middleware exception occurs", () => {
@@ -78,11 +80,14 @@ describe("validateRequiredFields — existing contract", () => {
     middleware(request, response, noOp);
 
     expect((response as unknown as { statusCode: number }).statusCode).toBe(500);
-    expect(responseBody[0]).toEqual({
-      success: false,
-      code: "INTERNAL_ERROR",
-      error: "Validation middleware error",
-    });
+    expect(responseBody[0]).toEqual(
+      expect.objectContaining({
+        success: false,
+        code: "INTERNAL_ERROR",
+        error: "Validation middleware error",
+        timestamp: expect.any(String),
+      }),
+    );
   });
 });
 

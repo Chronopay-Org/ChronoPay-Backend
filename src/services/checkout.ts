@@ -18,6 +18,7 @@ import {
   CheckoutErrorCode,
 } from "../types/checkout.js";
 import { defaultAuditLogger } from "./auditLogger.js";
+import { withSpan } from "../tracing/hooks.js";
 
 /**
  * Session storage configuration
@@ -322,5 +323,42 @@ export class CheckoutSessionService {
    */
   static getSessionCount(): number {
     return sessionStore.size;
+  }
+
+  // ── Traced wrappers ──────────────────────────────────────────────────────────
+
+  static createSessionTraced(
+    request: CreateCheckoutSessionRequest,
+    authorizationToken?: string,
+  ): Promise<CheckoutSession> {
+    return withSpan(
+      "checkout.createSession",
+      { route: "POST /api/v1/checkout/sessions", paymentMethod: request.payment.paymentMethod },
+      () => this.createSession(request, authorizationToken),
+    );
+  }
+
+  static getSessionTraced(sessionId: string): Promise<CheckoutSession> {
+    return withSpan(
+      "checkout.getSession",
+      { route: "GET /api/v1/checkout/sessions/:sessionId" },
+      () => this.getSession(sessionId),
+    );
+  }
+
+  static completeSessionTraced(sessionId: string, paymentToken?: string): Promise<CheckoutSession> {
+    return withSpan(
+      "checkout.completeSession",
+      { route: "POST /api/v1/checkout/sessions/:sessionId/complete" },
+      () => this.completeSession(sessionId, paymentToken),
+    );
+  }
+
+  static cancelSessionTraced(sessionId: string): Promise<CheckoutSession> {
+    return withSpan(
+      "checkout.cancelSession",
+      { route: "POST /api/v1/checkout/sessions/:sessionId/cancel" },
+      () => this.cancelSession(sessionId),
+    );
   }
 }

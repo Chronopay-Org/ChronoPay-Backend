@@ -1,6 +1,8 @@
 import { withTimeout, withRetry } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
 import { OutboundBadResponseError } from "../errors/OutboundErrors.js";
+import { redactPhone } from "../utils/redact.js";
+import { RetryPolicy } from "../utils/retry-policy.js";
 
 export interface SmsSendResult {
   success: boolean;
@@ -71,6 +73,7 @@ export class SmsNotificationService {
   }
 
   async send(to: string, message: string): Promise<SmsSendResult> {
+    // Input validation
     if (typeof to !== "string" || !to.trim()) {
       return { success: false, error: "Recipient number is required" };
     }
@@ -96,31 +99,44 @@ export class SmsNotificationService {
       };
     }
 
-    try {
-      const result = await withRetry(
-        async (attempt) => {
-          return await withTimeout(
-            async (signal) => {
-              const res = await this.provider.sendSms(normalizedTo, normalizedMessage, signal);
-              
-              // Map provider errors to internal codes if needed
-              if (!res.success && res.statusCode && res.statusCode >= 400 && res.statusCode < 500 && res.statusCode !== 429) {
-                throw new OutboundBadResponseError(this.provider.name, res.error);
-              }
-              
-              return res;
-            },
-            timeoutConfig.http.smsMs,
-            `sms-provider:${this.provider.name}`
-          );
-        },
-        { serviceName: `sms-provider:${this.provider.name}` }
-      );
+    let lastError: string | undefined;
 
-        // Provider returned a non-throwing failure — treat as permanent for this provider
+    // Iterate over providers in order
+    for (const provider of this.providers) {
+      try {
+        const result = await withRetry(
+          async (attempt) => {
+            return await withTimeout(
+              async (signal) => {
+                const res = await provider.sendSms(normalizedTo, normalizedMessage, signal);
+
+                // Treat 4xx (except 429) as permanent failures for this provider
+                if (!res.success && res.statusCode && res.statusCode >= 400 && res.statusCode < 500 && res.statusCode !== 429) {
+                  throw new OutboundBadResponseError(provider.name, res.error);
+                }
+
+                return res;
+              },
+              timeoutConfig.http.smsMs,
+              `sms-provider:${provider.name}`
+            );
+          },
+          { serviceName: `sms-provider:${provider.name}` }
+        );
+
+        // If provider returned success, we're done
+        if (result.success) {
+          return {
+            success: true,
+            provider: provider.name,
+            providerMessageId: result.providerMessageId,
+          };
+        }
+
+        // Non-throwing failure — record and try next provider
         lastError = result.error ?? "Provider returned failure";
       } catch (err) {
-        // All retries exhausted for this provider — try next
+        // All retries exhausted for this provider — record error and try next
         lastError = err instanceof Error ? err.message : String(err);
         console.warn(
           `[SMS] Provider "${provider.name}" failed for ${redactPhone(to)}: ${lastError}`,
@@ -128,21 +144,11 @@ export class SmsNotificationService {
       }
     }
 
-      return {
-        success: true,
-        provider: this.provider.name,
-        providerMessageId: result.providerMessageId,
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        error:
-          error instanceof Error
-            ? `SMS provider exception: ${error.message}`
-            : "SMS provider exception",
-      };
-    }
-    return result;
+    // All providers failed
+    return {
+      success: false,
+      error: lastError ?? "All SMS providers failed",
+    };
   }
 }
 
