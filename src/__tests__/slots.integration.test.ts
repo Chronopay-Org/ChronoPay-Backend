@@ -1,6 +1,15 @@
 /**
+ * Integration tests for the /api/v1/slots HTTP resource.
  *
- * Integration tests for GET /api/v1/slots and POST /api/v1/slots.
+ * Layer:   Integration — real Express app, mocked Redis, in-memory slot store
+ * Scope:   GET /api/v1/slots, POST /api/v1/slots, GET /api/v1/slots/:id,
+ *          GET /health
+ *
+ * Security paths covered:
+ *   - POST validates required fields (professional, startTime, endTime) → 400
+ *   - GET /:id rejects non-integer and negative ids → 400
+ *   - Cache gracefully degrades when Redis is unavailable (no 5xx)
+ *   - Cache invalidation on POST prevents stale reads
  */
 
 import { jest } from "@jest/globals";
