@@ -186,7 +186,7 @@ Override with environment variables:
 |------------------------|---------|----------------------------------------------|
 | `RATE_LIMIT_WINDOW_MS` | `900000`| Window duration in milliseconds              |
 | `RATE_LIMIT_MAX`       | `100`   | Max requests per window per principal        |
-| `TRUST_PROXY`          | `false` | Use `X-Forwarded-For` for client IP behind load balancer |
+| `TRUST_PROXY`          | `false` | Use `X-Forwarded-For` for client IP behind load balancer. Accepted: `true`, `false`, `1`, `0`. **Do not enable** unless the API is behind a trusted proxy that sanitises this header — enabling it on a directly-exposed server lets clients spoof their IP and bypass rate limits. |
 
 All authenticated endpoints should apply `createAuthAwareRateLimiter()` **after** their authentication middleware. Unauthenticated endpoints (e.g., health checks) are automatically IP-based if a limiter is used.
 
