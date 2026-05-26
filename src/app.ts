@@ -3,7 +3,7 @@ import cors from "cors";
 import express, { Request, Response } from "express";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
-import { securityHeaders, createSecurityHeaders } from "./middleware/securityHeaders.js";
+import { securityHeaders } from "./middleware/securityHeaders.js";
 import {
   genericErrorHandler,
   jsonParseErrorHandler,
@@ -16,8 +16,9 @@ import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./m
 import { createBookingIntentsRouter } from "./routes/booking-intents.js";
 import { AmountUtils } from "./utils/amount.js";
 import checkoutRouter from "./routes/checkout.js";
-import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
-import { createRequestLogger } from "./middleware/requestLogger.js";
+import { configService } from "./config/config.service.js";
+import type { SlotRepository } from "./modules/slots/slot-repository.js";
+import type { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
 
 export interface AppFactoryOptions {
   apiKey?: string;
@@ -189,6 +190,9 @@ function createSlot(req: Request, res: Response) {
 // These simplified implementations are for testing and contract validation only.
 // Production routes are in src/routes/ and src/buyer-profile/
 
+// In-memory session store for testing
+const sessionStore = new Map<string, any>();
+
 function createCheckoutSessionStub(req: Request, res: Response) {
   const { payment, customer } = req.body;
 
@@ -287,9 +291,6 @@ function createCheckoutSessionStub(req: Request, res: Response) {
     checkoutUrl: `http://localhost:3001/api/v1/checkout/sessions/${sessionId}/pay`,
   });
 }
-
-// In-memory session store for testing
-const sessionStore = new Map<string, any>();
 
 function getCheckoutSessionStub(req: Request, res: Response) {
   const { sessionId } = req.params;
