@@ -1,5 +1,5 @@
-import express, { Request, Response } from 'express';
-import { Server } from 'node:http';
+import express, { Request, Response } from "express";
+import { Server } from "node:http";
 
 /**
  * Interface representing a mock response for a contract call.
@@ -39,7 +39,7 @@ interface SorobanRpcResponse {
 
 /**
  * ContractMockServer
- * 
+ *
  * A production-grade mock server for testing interactions with Soroban contracts
  * on the Stellar network. It simulates JSON-RPC responses for common Soroban
  * operations, allowing for robust integration testing of the ChronoPay backend
@@ -66,72 +66,72 @@ export class ContractMockServer {
    * Sets up the JSON-RPC routes for the mock server.
    */
   private setupRoutes() {
-    this.app.post('/', (req: Request, res: Response) => {
+    this.app.post("/", (req: Request, res: Response) => {
       const body: SorobanRpcRequest = req.body;
-      const { method, params, id, jsonrpc } = body;
+      const { method, id, jsonrpc } = body;
 
       // Basic JSON-RPC 2.0 validation
-      if (jsonrpc !== '2.0') {
-        return this.sendError(res, null, -32600, 'Invalid Request');
+      if (jsonrpc !== "2.0") {
+        return this.sendError(res, null, -32600, "Invalid Request");
       }
 
       if (id === undefined || id === null) {
-        return this.sendError(res, null, -32600, 'Invalid Request: missing id');
+        return this.sendError(res, null, -32600, "Invalid Request: missing id");
       }
 
       console.log(`[ContractMockServer] Received ${method} request (id: ${id})`);
 
       try {
         switch (method) {
-          case 'getHealth':
-            return this.sendResult(res, id, { status: 'healthy' });
+          case "getHealth":
+            return this.sendResult(res, id, { status: "healthy" });
 
-          case 'getNetwork':
+          case "getNetwork":
             return this.sendResult(res, id, {
-              friendbotUrl: 'https://friendbot.stellar.org/',
-              passphrase: 'Test SDF Network ; September 2015',
-              protocolVersion: 20
-            });
-
-          case 'getLatestLedger':
-            return this.sendResult(res, id, {
-              id: 'abc123ledgerhash',
+              friendbotUrl: "https://friendbot.stellar.org/",
+              passphrase: "Test SDF Network ; September 2015",
               protocolVersion: 20,
-              sequence: 12345
             });
 
-          case 'simulateTransaction':
+          case "getLatestLedger":
+            return this.sendResult(res, id, {
+              id: "abc123ledgerhash",
+              protocolVersion: 20,
+              sequence: 12345,
+            });
+
+          case "simulateTransaction":
             return this.handleSimulateTransaction(body, res);
 
-          case 'sendTransaction':
+          case "sendTransaction":
             return this.sendResult(res, id, {
-              status: 'PENDING',
-              hash: 'tx_' + Math.random().toString(36).substring(7),
+              status: "PENDING",
+              hash: "tx_" + Math.random().toString(36).substring(7),
               latestLedger: 12345,
-              latestLedgerCloseTime: new Date().toISOString()
+              latestLedgerCloseTime: new Date().toISOString(),
             });
 
-          case 'getTransaction':
+          case "getTransaction":
             return this.handleGetTransaction(body, res);
 
-          case 'getEvents':
+          case "getEvents":
             return this.sendResult(res, id, {
               events: [],
-              latestLedger: 12345
+              latestLedger: 12345,
             });
 
           default:
-            return this.sendError(res, id, -32601, 'Method not found');
+            return this.sendError(res, id, -32601, "Method not found");
         }
       } catch (error: any) {
         console.error(`[ContractMockServer] Error processing ${method}:`, error);
-        return this.sendError(res, id, -32603, 'Internal error');
+        return this.sendError(res, id, -32603, "Internal error");
       }
     });
 
     // Health check endpoint for the mock server itself
-    this.app.get('/_health', (_req: Request, res: Response) => {
-      res.json({ status: 'mock-server-ok' });
+    this.app.get("/_health", (_req: Request, res: Response) => {
+      res.json({ status: "mock-server-ok" });
     });
   }
 
@@ -150,16 +150,16 @@ export class ContractMockServer {
       return this.sendResult(res, req.id, {
         results: [{ xdr: mock.response }],
         latestLedger: 12345,
-        cost: { cpuInsns: '1000', memBytes: '1000' },
-        events: []
+        cost: { cpuInsns: "1000", memBytes: "1000" },
+        events: [],
       });
     }
 
     // Default simulation result
     return this.sendResult(res, req.id, {
-      results: [{ xdr: 'AAAAAgAAAAEAAAA=' }],
+      results: [{ xdr: "AAAAAgAAAAEAAAA=" }],
       latestLedger: 12345,
-      cost: { cpuInsns: '100', memBytes: '100' }
+      cost: { cpuInsns: "100", memBytes: "100" },
     });
   }
 
@@ -168,13 +168,13 @@ export class ContractMockServer {
    */
   private handleGetTransaction(req: SorobanRpcRequest, res: Response) {
     return this.sendResult(res, req.id, {
-      status: 'SUCCESS',
+      status: "SUCCESS",
       latestLedger: 12346,
       latestLedgerCloseTime: new Date().toISOString(),
       oldestLedger: 12000,
       oldestLedgerCloseTime: new Date().toISOString(),
-      resultMetaXdr: 'AAAAAgAAAAEAAAA=',
-      resultXdr: 'AAAAAgAAAAEAAAA='
+      resultMetaXdr: "AAAAAgAAAAEAAAA=",
+      resultXdr: "AAAAAgAAAAEAAAA=",
     });
   }
 
@@ -182,7 +182,7 @@ export class ContractMockServer {
    * Finds a mock key based on request parameters.
    */
   private findMockKey(params: any): string {
-    if (!params) return 'default';
+    if (!params) return "default";
 
     // Allow tests to specify a mock key directly in the request for easy matching
     if (params.mockKey) return params.mockKey;
@@ -192,7 +192,7 @@ export class ContractMockServer {
       return `${params.contractId}:${params.method}`;
     }
 
-    return 'default';
+    return "default";
   }
 
   /**
@@ -200,9 +200,9 @@ export class ContractMockServer {
    */
   private sendResult(res: Response, id: string | number, result: any) {
     const response: SorobanRpcResponse = {
-      jsonrpc: '2.0',
+      jsonrpc: "2.0",
       id,
-      result
+      result,
     };
     res.json(response);
   }
@@ -212,9 +212,9 @@ export class ContractMockServer {
    */
   private sendError(res: Response, id: string | number | null, code: number, message: string) {
     const response: SorobanRpcResponse = {
-      jsonrpc: '2.0',
+      jsonrpc: "2.0",
       id: id || 0,
-      error: { code, message }
+      error: { code, message },
     };
     res.status(code === -32603 ? 500 : 200).json(response);
   }
@@ -241,8 +241,8 @@ export class ContractMockServer {
         resolve();
       });
 
-      this.server.on('error', (err: Error) => {
-        console.error('[ContractMockServer] Failed to start:', err);
+      this.server.on("error", (err: Error) => {
+        console.error("[ContractMockServer] Failed to start:", err);
         reject(err);
       });
     });
@@ -256,7 +256,7 @@ export class ContractMockServer {
 
     return new Promise((resolve) => {
       this.server!.close(() => {
-        console.log('[ContractMockServer] Stopped');
+        console.log("[ContractMockServer] Stopped");
         this.server = null;
         resolve();
       });

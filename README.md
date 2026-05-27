@@ -93,13 +93,15 @@ Additional reviewer-focused notes live in:
 
 ## Scripts
 
-| Script | Description |
-|---|---|
-| `npm run build` | Compile TypeScript to `dist/` |
-| `npm run start` | Run production server |
-| `npm run dev` | Run dev server with tsx watch |
-| `npm test` | Run Jest tests |
-| `npm run migrate` | Database migration CLI (see below) |
+| Script                 | Description                                         |
+| ---------------------- | --------------------------------------------------- |
+| `npm run build`        | Compile TypeScript to `dist/`                       |
+| `npm run start`        | Run production server                               |
+| `npm run dev`          | Run dev server with tsx watch                       |
+| `npm run lint`         | Run ESLint for unreachable code and unused imports  |
+| `npm run format`       | Format maintained source/config files with Prettier |
+| `npm test`             | Run Jest tests                                      |
+| `npm run migrate`      | Database migration CLI (see below)                  |
 
 ## Database Migrations
 
@@ -133,6 +135,7 @@ npm run migrate drift-check
 ```
 
 This detects:
+
 - Orphaned migrations (applied but not in registry)
 - Name mismatches between code and database
 - Out-of-order application
@@ -181,27 +184,28 @@ Priority order for rate-limit key generation:
 4. **IP address** (`req.ip`, respects `TRUST_PROXY`) → `rl:ip:<ip>`
 
 This ensures:
+
 - Different principal types never collide
 - Same principal shares quota across all protected routes (global counter)
 - Unauthenticated requests are still limited by IP
 
 ### Default Limits
 
-| Setting       | Default    | Description                           |
-|---------------|------------|---------------------------------------|
-| Window        | 15 minutes | Rolling window per principal         |
-| Max requests  | 100        | Per principal within the window      |
-| Response code | `429`      | HTTP status when limit exceeded       |
+| Setting       | Default    | Description                     |
+| ------------- | ---------- | ------------------------------- |
+| Window        | 15 minutes | Rolling window per principal    |
+| Max requests  | 100        | Per principal within the window |
+| Response code | `429`      | HTTP status when limit exceeded |
 
 ### Configuration
 
 Override with environment variables:
 
-| Variable               | Default | Description                                  |
-|------------------------|---------|----------------------------------------------|
-| `RATE_LIMIT_WINDOW_MS` | `900000`| Window duration in milliseconds              |
-| `RATE_LIMIT_MAX`       | `100`   | Max requests per window per principal        |
-| `TRUST_PROXY`          | `false` | Use `X-Forwarded-For` for client IP behind load balancer |
+| Variable               | Default  | Description                                              |
+| ---------------------- | -------- | -------------------------------------------------------- |
+| `RATE_LIMIT_WINDOW_MS` | `900000` | Window duration in milliseconds                          |
+| `RATE_LIMIT_MAX`       | `100`    | Max requests per window per principal                    |
+| `TRUST_PROXY`          | `false`  | Use `X-Forwarded-For` for client IP behind load balancer |
 
 All authenticated endpoints should apply `createAuthAwareRateLimiter()` **after** their authentication middleware. Unauthenticated endpoints (e.g., health checks) are automatically IP-based if a limiter is used.
 
@@ -223,33 +227,26 @@ RateLimit: limit=100, remaining=85, reset=1711072800
 ### Middleware Usage
 
 **Header-based auth** (`x-chronopay-user-id`):
+
 ```ts
 router.post(
-  '/',
-  requireAuthenticatedActor(['customer', 'admin']),
+  "/",
+  requireAuthenticatedActor(["customer", "admin"]),
   createAuthAwareRateLimiter(),
-  handler
+  handler,
 );
 ```
 
 **API-key auth** (`x-api-key`):
+
 ```ts
-router.post(
-  '/',
-  requireApiKey(process.env.API_KEY),
-  createAuthAwareRateLimiter(),
-  handler
-);
+router.post("/", requireApiKey(process.env.API_KEY), createAuthAwareRateLimiter(), handler);
 ```
 
 **JWT auth** (Bearer token):
+
 ```ts
-router.get(
-  '/profile',
-  authenticate,
-  createAuthAwareRateLimiter(),
-  handler
-);
+router.get("/profile", authenticate, createAuthAwareRateLimiter(), handler);
 ```
 
 ### Trust Proxy
@@ -258,9 +255,9 @@ When running behind a reverse proxy or load balancer, set `TRUST_PROXY=true`. Ex
 
 ### Security Notes
 
-- **Auth-before-rate-limit**: The rate limiter must be placed **after** authentication middleware; otherwise it falls back to IP-based keys.  
-- **Header trust**: Header-based auth assumes a trusted upstream validates `x-chronopay-user-id`. Direct exposure without a gateway allows spoofing.  
-- **API key hashing**: Raw API keys are never stored; Redis keys contain only SHA-256 hashes.  
+- **Auth-before-rate-limit**: The rate limiter must be placed **after** authentication middleware; otherwise it falls back to IP-based keys.
+- **Header trust**: Header-based auth assumes a trusted upstream validates `x-chronopay-user-id`. Direct exposure without a gateway allows spoofing.
+- **API key hashing**: Raw API keys are never stored; Redis keys contain only SHA-256 hashes.
 - **Redis**: All instances share a single Redis store (`rl:` namespace). Ensure Redis is not publicly accessible.
 
 ### Full documentation
@@ -276,7 +273,7 @@ For the enforced registry and guarded-route mapping, see [`docs/feature-flags.md
 
 - Flag env format: `FF_<FLAG_NAME>`
 - Initial flags:
-	- `FF_CREATE_SLOT` controls `POST /api/v1/slots`
+  - `FF_CREATE_SLOT` controls `POST /api/v1/slots`
 
 Supported values (case-insensitive):
 
@@ -292,9 +289,9 @@ If a flag env variable is missing, the service uses the registered default value
 
 ```json
 {
-	"success": false,
-	"code": "FEATURE_DISABLED",
-	"error": "Feature CREATE_SLOT is currently disabled"
+  "success": false,
+  "code": "FEATURE_DISABLED",
+  "error": "Feature CREATE_SLOT is currently disabled"
 }
 ```
 
@@ -340,8 +337,8 @@ On every push and pull request to `main`, GitHub Actions runs:
 
 ## Environment Variables
 
-| Variable    | Required | Description |
-|-------------|----------|-------------|
+| Variable    | Required | Description                                           |
+| ----------- | -------- | ----------------------------------------------------- |
 | `REDIS_URL` | Yes      | Redis connection URL used for idempotency key storage |
 
 ```env

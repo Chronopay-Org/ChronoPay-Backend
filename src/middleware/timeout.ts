@@ -11,12 +11,8 @@ export function timeoutMiddleware(options: TimeoutOptions = {}) {
 
   return (req: Request, res: Response, next: NextFunction) => {
     const requestId = req.headers["x-request-id"] || uuidv4();
-    let timedOut = false;
-
     const timer = setTimeout(() => {
       if (res.headersSent) return;
-      timedOut = true;
-
       res.setHeader("X-Request-Id", String(requestId));
       res.status(503).json({
         success: false,
@@ -25,7 +21,7 @@ export function timeoutMiddleware(options: TimeoutOptions = {}) {
 
       // Log with requestId, route, and duration
       console.warn(
-        `[TIMEOUT] requestId=${requestId} route=${req.originalUrl} duration=${timeoutMs}ms`
+        `[TIMEOUT] requestId=${requestId} route=${req.originalUrl} duration=${timeoutMs}ms`,
       );
     }, timeoutMs);
 

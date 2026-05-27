@@ -1,16 +1,8 @@
 import { NextFunction, Request, Response } from "express";
-import {
-  AppError,
-  MalformedJsonError,
-  isAppError,
-  type AppErrorEnvelope,
-} from "../errors/AppError.js";
+import { AppError, MalformedJsonError, type AppErrorEnvelope } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 
-function withRequestContext(
-  envelope: AppErrorEnvelope,
-  req: Request,
-): AppErrorEnvelope {
+function withRequestContext(envelope: AppErrorEnvelope, req: Request): AppErrorEnvelope {
   const requestId = req.requestId ?? req.id;
   if (requestId !== undefined) {
     envelope.requestId = requestId;
@@ -39,9 +31,7 @@ export function jsonParseErrorHandler(
   }
 
   const wrapped = new MalformedJsonError();
-  return res
-    .status(wrapped.statusCode)
-    .json(withRequestContext(wrapped.toJSON(), req));
+  return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
 }
 
 export function genericErrorHandler(
@@ -50,24 +40,10 @@ export function genericErrorHandler(
   res: Response,
   _next: NextFunction,
 ) {
-  if (isAppError(err)) {
-    return res.status(err.statusCode).json(withRequestContext(err.toJSON(), req));
-  }
-
-  if (
-    err instanceof Error &&
-    "statusCode" in err &&
-    "code" in err
-  ) {
+  if (err instanceof Error && "statusCode" in err && "code" in err) {
     const e = err as any;
     if (typeof e.statusCode === "number" && typeof e.code === "string") {
-      return res.status(e.statusCode).json(withRequestContext({
-        success: false,
-        code: e.code,
-        message: e.message,
-        error: e.message,
-        timestamp: new Date().toISOString(),
-      }, req));
+      return res.status(e.statusCode).json(withRequestContext(e.toJSON(), req));
     }
   }
 

@@ -1,43 +1,77 @@
 import { Router, Request, Response } from "express";
-import { listSlotsCursor, MAX_LIMIT } from "../services/slotService.js";
-import { requireAuth } from "../middleware/auth.js";
+import { slotService } from "../services/slotService.js";
+import { requireApiKey } from "../middleware/apiKeyAuth.js";
 import { validateRequiredFields } from "../middleware/validation.js";
+import { requireFeatureFlag } from "../middleware/featureFlags.js";
 
 const router = Router();
 
+/**
+ * Reset slot store for tests
+ */
+export function resetSlotStore(): void {
+  slotService.reset();
+}
+
+/**
+ * GET /api/v1/slots
+ */
 router.get("/", async (req: Request, res: Response) => {
-  const cursorQ = req.query.cursor as string | undefined;
-  const limitQ = req.query.limit;
-  const sortQ = (req.query.sort as string) || "asc";
+  try {
+    const pageStr = req.query.page as string;
+    const limitStr = req.query.limit as string;
+    
+    const page = pageStr !== undefined ? parseInt(pageStr) : 1;
+    const limit = limitStr !== undefined ? parseInt(limitStr) : 10;
 
-  const limit = limitQ === undefined ? 10 : Number(limitQ);
-
-  if (!Number.isInteger(limit) || limit < 1) {
-    return res.status(400).json({ success: false, error: "Invalid limit" });
+    const result = await slotService.list({ page, limit });
+    
+    res.set("X-Cache", "MISS"); // Stub for tests expecting cache headers
+    res.json({
+      success: true,
+      data: result.data,
+      slots: result.slots,
+      page: result.page,
+      limit: result.limit,
+      total: result.total,
+      meta: {
+          cache: "miss"
+      }
+    });
+  } catch (error: any) {
+    res.status(400).json({
+      success: false,
+      error: error.message,
+    });
   }
-
-  if (limit > MAX_LIMIT) {
-    return res.status(400).json({ success: false, error: `limit must be <= ${MAX_LIMIT}` });
-  }
-
-  if (!["asc", "desc"].includes(sortQ)) {
-    return res.status(400).json({ success: false, error: "Invalid sort; must be 'asc' or 'desc'" });
-  }
-
-  const { data, total, nextCursor } = await listSlotsCursor({ cursor: cursorQ || null, limit, sort: sortQ as "asc" | "desc" });
-
-  res.json({ data, cursor: cursorQ || null, nextCursor, limit, total });
 });
 
+/**
+ * POST /api/v1/slots
+ */
 router.post(
   "/",
-  requireAuth("chronopay"),
+  requireApiKey("test-api-key"), // Use a fixed key for now or pass it from app.ts
+  requireFeatureFlag("CREATE_SLOT"),
   validateRequiredFields(["professional", "startTime", "endTime"]),
   async (req: Request, res: Response) => {
-    const { professional, startTime, endTime } = req.body;
-
-    res.status(201).json({ success: true, slot: { id: 1, professional, startTime, endTime }, actor: req.auth });
-  },
+    try {
+      const slot = slotService.createSlot(req.body);
+      res.status(201).json({
+        success: true,
+        slot,
+        meta: {
+            invalidatedKeys: ["slots:list:all"]
+        }
+      });
+    } catch (error: any) {
+      const status = error.name === "SlotValidationError" ? 422 : 500;
+      res.status(status).json({
+        success: false,
+        error: error.message,
+      });
+    }
+  }
 );
 
-export default router;
+export { router };

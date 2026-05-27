@@ -1,10 +1,10 @@
 import { NextFunction, Request, Response } from "express";
 import {
+  type FeatureFlagName,
   getFeatureFlagAccessor,
   isGuardedRouteRegistered,
   setFeatureFlagsFromEnv,
 } from "../flags/index.js";
-import type { FeatureFlagName } from "../flags/index.js";
 import { AppError, ServiceUnavailableError } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";

@@ -1,6 +1,13 @@
 import type { NextFunction, Request, Response } from "express";
-import { configService } from "../config/config.service.js";
-import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
+import { jwtVerify } from "jose";
+import {
+  ForbiddenError,
+  InternalServerError,
+  UnauthorizedError,
+} from "../errors/AppError.js";
+import { ERROR_CODES } from "../errors/errorCodes.js";
+import { sendErrorResponse } from "../errors/sendError.js";
+import { defaultAuditLogger } from "../services/auditLogger.js";
 
 export type ChronoPayRole = "customer" | "admin" | "professional";
 
@@ -66,14 +73,13 @@ export function requireAuth(expectedIssuer?: string) {
   };
 }
 
-export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[] = ["customer", "admin"]) {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      if (!req.auth) {
-        const token = readBearerToken(req);
-        if (!token) {
-          return res.status(401).json({ success: false, error: "Authentication required." });
-        }
+// Named export for the header-based auth used by booking-intents
+export { requireAuthenticatedActor as authenticateToken };
+
+function parseRole(rawRole: string | undefined): ChronoPayRole {
+  if (!rawRole || rawRole.trim().length === 0) {
+    return "customer";
+  }
 
         const payload = await verifyJwt(token, { issuer: configService.jwtIssuer ?? undefined });
         req.user = payload;
@@ -98,3 +104,25 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[] = ["cust
     }
   };
 }
+
+function emitAuthAudit(
+  req: Request,
+  action: string,
+  status: number,
+  extra?: Record<string, unknown>,
+): void {
+  defaultAuditLogger.log(
+    `auth.${action}`,
+    {
+      method: req.method,
+      ...extra,
+    },
+    {
+      actorIp: req.ip || req.socket?.remoteAddress,
+      resource: req.originalUrl,
+      status,
+    },
+  ).catch(() => {}); // Fire and forget
+}
+
+// Removed duplicate export of authenticateToken

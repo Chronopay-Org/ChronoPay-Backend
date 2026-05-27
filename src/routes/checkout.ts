@@ -339,6 +339,186 @@ checkoutRouter.post(
 
 /**
  * @openapi
+ * /api/v1/checkout/sessions/{sessionId}/pay:
+ *   post:
+ *     summary: Initiate payment for a checkout session
+ *     description: >
+ *       Initiates payment processing for a checkout session. Validates that the
+ *       session is in PENDING state and not expired. Transitions the session
+ *       to COMPLETED or FAILED based on payment result.
+ *     tags: [Checkout]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Session ID (UUID format)
+ *     responses:
+ *       200:
+ *         description: Payment processed successfully (COMPLETED or FAILED)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 session:
+ *                   type: object
+ *                   description: Updated checkout session
+ *       400:
+ *         description: Invalid session ID format
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *       404:
+ *         description: Session not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       409:
+ *         description: Session in invalid state (already completed/failed/cancelled)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       410:
+ *         description: Session expired
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ */
+checkoutRouter.post(
+  "/sessions/:sessionId/pay",
+  validateSessionIdParam(),
+  (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const session = CheckoutSessionService.paySession(sessionId);
+
+      const response: GetCheckoutSessionResponse = {
+        success: true,
+        session,
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      handleCheckoutError(error, res);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /api/v1/checkout/sessions/{sessionId}/pay:
+ *   post:
+ *     summary: Initiate payment for a checkout session
+ *     description: >
+ *       Initiates payment processing for a checkout session. Validates that the
+ *       session is in PENDING state and not expired. Transitions the session
+ *       to COMPLETED or FAILED based on payment result.
+ *     tags: [Checkout]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Session ID (UUID format)
+ *     responses:
+ *       200:
+ *         description: Payment processed successfully (COMPLETED or FAILED)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 session:
+ *                   type: object
+ *                   description: Updated checkout session
+ *       400:
+ *         description: Invalid session ID format
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *       404:
+ *         description: Session not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       409:
+ *         description: Session in invalid state (already completed/failed/cancelled)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       410:
+ *         description: Session expired
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ */
+checkoutRouter.post(
+  "/sessions/:sessionId/pay",
+  validateSessionIdParam(),
+  (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const session = CheckoutSessionService.paySession(sessionId);
+
+      const response: GetCheckoutSessionResponse = {
+        success: true,
+        session,
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      handleCheckoutError(error, res);
+    }
+  },
+);
+
+/**
+ * @openapi
  * /api/v1/checkout/sessions/{sessionId}/fail:
  *   post:
  *     summary: Mark checkout session as failed
