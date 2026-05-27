@@ -1,28 +1,60 @@
-import { Router, Request, Response } from "express";
+import { Express, Request, Response } from "express";
+import { validateRequiredFields } from "../middleware/validation.js";
+import { internalHmacAuth } from "../middleware/internalHmacAuth.js";
 
-const router = Router();
+const allowedEventTypes = new Set([
+  "settlement_completed",
+  "settlement_initiated",
+  "settlement_failed",
+]);
 
-const VALID_EVENT_TYPES = ["settlement_completed", "settlement_initiated", "settlement_failed"];
+const CLOCK_SKEW_MS = 60 * 1000; // 1 minute
 
-router.post("/settlements", (req: Request, res: Response) => {
-  const { eventType, transactionId, amount, timestamp } = req.body ?? {};
+export interface WebhookRouteOptions {
+  signingSecret?: string;
+}
 
-  if (!eventType) return res.status(400).json({ success: false, error: "Missing required field: eventType" });
-  if (!transactionId) return res.status(400).json({ success: false, error: "Missing required field: transactionId" });
-  if (amount === undefined || amount === null) return res.status(400).json({ success: false, error: "Missing required field: amount" });
-  if (timestamp === undefined || timestamp === null) return res.status(400).json({ success: false, error: "Missing required field: timestamp" });
+export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions = {}) {
+  app.post(
+    "/api/v1/webhooks/settlements",
+    internalHmacAuth(options.signingSecret),
+    validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
+    (req: Request, res: Response) => {
+      const { eventType, amount, timestamp } = req.body;
 
-  if (!VALID_EVENT_TYPES.includes(eventType)) {
-    return res.status(400).json({ success: false, error: `Invalid eventType: must be one of ${VALID_EVENT_TYPES.join(", ")}` });
-  }
-  if (typeof amount !== "number" || amount <= 0) {
-    return res.status(400).json({ success: false, error: "Invalid amount: must be a positive number" });
-  }
-  if (typeof timestamp !== "number" || timestamp <= 0) {
-    return res.status(400).json({ success: false, error: "Invalid timestamp: must be a positive number" });
-  }
+      if (!allowedEventTypes.has(eventType)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid eventType. Allowed values are settlement_completed, settlement_initiated, settlement_failed.",
+        });
+      }
 
-  return res.status(200).json({ success: true, received: req.body });
-});
+      if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid amount. Amount must be a positive number.",
+        });
+      }
 
-export default router;
+      if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid timestamp. Timestamp must be a positive number.",
+        });
+      }
+
+      const ageMs = Date.now() - timestamp;
+      if (ageMs > 5 * 60 * 1000 || ageMs < -CLOCK_SKEW_MS) {
+        return res.status(403).json({
+          success: false,
+          error: "Rejected stale or future webhook payload.",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        received: req.body,
+      });
+    },
+  );
+}

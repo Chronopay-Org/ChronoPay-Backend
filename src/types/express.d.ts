@@ -16,19 +16,10 @@ declare module "express-serve-static-core" {
       exp?: number;
       [key: string]: unknown;
     };
+
     /**
-     * Authentication context set by JWT-based auth middleware.
-     * Contains userId, role, and verified claims from the token.
+     * Raw request body buffer captured for signature verification.
      */
-    auth?: {
-      userId: string;
-      role: string;
-      claims?: Record<string, unknown>;
-    };
-    /**
-     * API key identifier (SHA-256 hash) set by requireApiKey middleware.
-     */
-    apiKeyId?: string;
-    flags?: FeatureFlagAccessor;
+    rawBody?: Buffer;
   }
 }
