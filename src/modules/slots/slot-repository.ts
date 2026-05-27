@@ -20,6 +20,8 @@ export interface SlotRepository {
     endTime: number,
     excludeId?: string,
   ): boolean;
+  /** Atomically update the bookable flag on a slot. */
+  updateBookable(slotId: string, bookable: boolean): void;
 }
 
 const DEFAULT_SLOTS: SlotRecord[] = [
@@ -75,5 +77,13 @@ export class InMemorySlotRepository implements SlotRepository {
         s.startTime < endTime &&
         s.endTime > startTime,
     );
+  }
+
+  updateBookable(slotId: string, bookable: boolean): void {
+    const slot = this.slots.find((s) => s.id === slotId);
+    if (!slot) {
+      throw new Error(`Slot ${slotId} not found`);
+    }
+    slot.bookable = bookable;
   }
 }

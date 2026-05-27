@@ -42,146 +42,33 @@ export type Slot = {
 
 const router = Router();
 
-// ─── In-memory store (for Redis-cache route tests) ────────────────────────────
-let nextId = 1;
-const slotStore: Slot[] = [];
+router.get("/", async (req: Request, res: Response) => {
+  const cursorQ = req.query.cursor as string | undefined;
+  const limitQ = req.query.limit;
+  const sortQ = (req.query.sort as string) || "asc";
 
-export function resetSlotStore(): void {
-  slotStore.length = 0;
-  nextId = 1;
-  slotService.reset(); // also resets appSlots in index.ts via monkey-patch
-}
+  const limit = limitQ === undefined ? 10 : Number(limitQ);
 
-export function findSlotById(id: number): Slot | undefined {
-  return slotStore.find((slot) => slot.id === id);
-}
-
-export function removeSlotById(id: number): Slot | undefined {
-  const index = slotStore.findIndex((slot) => slot.id === id);
-  if (index < 0) {
-    return undefined;
+  if (!Number.isInteger(limit) || limit < 1) {
+    return res.status(400).json({ success: false, error: "Invalid limit" });
   }
-  const [removed] = slotStore.splice(index, 1);
-  return removed;
-}
 
-export function listStoredSlots(): Slot[] {
-  return [...slotStore];
-}
+  if (limit > MAX_LIMIT) {
+    return res.status(400).json({ success: false, error: `limit must be <= ${MAX_LIMIT}` });
+  }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+  if (!["asc", "desc"].includes(sortQ)) {
+    return res.status(400).json({ success: false, error: "Invalid sort; must be 'asc' or 'desc'" });
+  }
 
-/**
- * @openapi
- * /api/v1/slots:
- *   get:
- *     summary: List all available slots
- *     description: >
- *       Returns the full list of slots.  Results are served from the Redis
- *       cache when available (TTL controlled by REDIS_SLOT_TTL_SECONDS env
- *       var, default 60 s).  The `X-Cache` response header indicates whether
- *       the response was a cache HIT or MISS.
- *     tags: [Slots]
- *     security:
- *       - chronoPayAuth: []
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: A list of slot objects.
- *         headers:
- *           X-Cache:
- *             schema:
- *               type: string
- *               enum: [HIT, MISS]
- *             description: Indicates whether the response came from cache.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 slots:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/Slot'
- *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
- *       403:
- *         $ref: '#/components/responses/ForbiddenError'
- */
-router.get("/", async (_req: Request, res: Response): Promise<void> => {
-  const { slots, cacheStatus } = await getOrFetchSlots(async () => [...slotStore]);
+  const { data, total, nextCursor } = await listSlotsCursor({ cursor: cursorQ || null, limit, sort: sortQ as "asc" | "desc" });
 
-  res.set("X-Cache", cacheStatus === "HIT" ? "HIT" : "MISS");
-  res.json({ slots });
+  res.json({ data, cursor: cursorQ || null, nextCursor, limit, total });
 });
 
-/**
- * @openapi
- * /api/v1/slots:
- *   post:
- *     summary: Create a new slot
- *     description: >
- *       Creates a slot and invalidates the `slots:all` cache so the next GET
- *       reflects the new record. Requires API key authentication for service access.
- *     tags: [Slots]
- *     security:
- *       - apiKeyAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/CreateSlotInput'
- *     responses:
- *       201:
- *         description: Slot created successfully.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 slot:
- *                   $ref: '#/components/schemas/Slot'
- *       400:
- *         description: Missing required fields.
- *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
- *       403:
- *         $ref: '#/components/responses/ForbiddenError'
- *
- * @openapi
- * components:
- *   schemas:
- *     Slot:
- *       type: object
- *       properties:
- *         id:
- *           type: integer
- *         professional:
- *           type: string
- *         startTime:
- *           type: string
- *           format: date-time
- *         endTime:
- *           type: string
- *           format: date-time
- *     CreateSlotInput:
- *       type: object
- *       required: [professional, startTime, endTime]
- *       properties:
- *         professional:
- *           type: string
- *         startTime:
- *           type: string
- *           format: date-time
- *         endTime:
- *           type: string
- *           format: date-time
- */
 router.post(
   "/",
+  requireAuth("chronopay"),
   validateRequiredFields(["professional", "startTime", "endTime"]),
   idempotencyMiddleware,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {

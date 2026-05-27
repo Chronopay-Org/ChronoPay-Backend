@@ -1,8 +1,11 @@
 import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
 import cors from "cors";
 import express, { Request, Response } from "express";
+import { configService } from "./config/config.service.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
+import { configService } from "./config/config.service.js";
 import { securityHeaders, createSecurityHeaders } from "./middleware/securityHeaders.js";
 import {
   genericErrorHandler,
@@ -13,11 +16,12 @@ import { validateRequiredFields } from "./middleware/validation.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
 import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./middleware/featureFlags.js";
+import { timeoutMiddleware } from "./middleware/timeout.js";
 import { createBookingIntentsRouter } from "./routes/booking-intents.js";
+import { SlotRepository } from "./modules/slots/slot-repository.js";
+import { configService } from "./config/config.service.js";
 import { AmountUtils } from "./utils/amount.js";
 import checkoutRouter from "./routes/checkout.js";
-import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
-import { createRequestLogger } from "./middleware/requestLogger.js";
 
 export interface AppFactoryOptions {
   apiKey?: string;
@@ -26,7 +30,6 @@ export interface AppFactoryOptions {
   enableContentNegotiation?: boolean;
   contentNegotiationExcludePaths?: string[];
   slotRepository?: SlotRepository;
-  bookingIntentService?: BookingIntentService;
 }
 
 function registerSwaggerDocs(app: express.Express) {
@@ -246,25 +249,7 @@ function createCheckoutSessionStub(req: Request, res: Response) {
     });
   }
 
-  // Generate proper UUID v4 format
-  const generateUUID = () => {
-    const chars = "0123456789abcdef";
-    let uuid = "";
-    for (let i = 0; i < 36; i++) {
-      if (i === 8 || i === 13 || i === 18 || i === 23) {
-        uuid += "-";
-      } else if (i === 14) {
-        uuid += "4";
-      } else if (i === 19) {
-        uuid += chars[(Math.random() * 4 | 8)];
-      } else {
-        uuid += chars[Math.floor(Math.random() * 16)];
-      }
-    }
-    return uuid;
-  };
-
-  const sessionId = generateUUID();
+  const sessionId = randomUUID();
   const now = Date.now();
 
   const session = {
@@ -326,24 +311,6 @@ const profileStore = new Map<string, any>();
 const userIdIndex = new Map<string, string>();
 const emailIndex = new Map<string, string>();
 
-// UUID v4 generator
-function generateUUID() {
-  const chars = "0123456789abcdef";
-  let uuid = "";
-  for (let i = 0; i < 36; i++) {
-    if (i === 8 || i === 13 || i === 18 || i === 23) {
-      uuid += "-";
-    } else if (i === 14) {
-      uuid += "4";
-    } else if (i === 19) {
-      uuid += chars[(Math.random() * 4) | 8];
-    } else {
-      uuid += chars[Math.floor(Math.random() * 16)];
-    }
-  }
-  return uuid;
-}
-
 function createBuyerProfileStub(req: Request, res: Response) {
   const { userId, fullName, email, phoneNumber } = req.body;
 
@@ -375,7 +342,7 @@ function createBuyerProfileStub(req: Request, res: Response) {
     });
   }
 
-  const profileId = generateUUID();
+  const profileId = randomUUID();
   const now = new Date().toISOString();
 
   const profile = {
@@ -538,6 +505,9 @@ export function createApp(options: AppFactoryOptions = {}) {
   // ── Security headers middleware (applied early) ────────────────────────────
   app.use(securityHeaders);
 
+  // ── Global request timeout middleware ──────────────────────────────────────
+  app.use(timeoutMiddleware());
+
   app.use(cors());
 
   // Content negotiation BEFORE express.json() to reject invalid Content-Type early
@@ -563,6 +533,8 @@ export function createApp(options: AppFactoryOptions = {}) {
     res.json({ status: "ok", service: "chronopay-backend" });
   });
 
+  app.use("/api/v1/auth", authRouter);
+
   app.get("/api/v1/slots", (_req, res) => {
     // Set cache header (mock implementation - always HIT for simplicity)
     res.set("X-Cache", "MISS");
@@ -578,7 +550,10 @@ export function createApp(options: AppFactoryOptions = {}) {
   );
 
   // ── Booking intents routes ─────────────────────────────────────────────────
-  app.use("/api/v1/booking-intents", createBookingIntentsRouter());
+  app.use(
+    "/api/v1/booking-intents",
+    createBookingIntentsRouter(undefined, options.slotRepository)
+  );
   app.use("/api/v1/checkout", checkoutRouter);
 
   if (options.enableTestRoutes) {
