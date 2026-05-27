@@ -35,7 +35,7 @@ export type { SlotInput } from "../repositories/slotRepository.js";
 
 // ─── Internal Slot type (kept for backward compat with app.ts stub) ───────────
 export interface Slot {
-  id: number;
+  id: string;
   professional: string;
   startTime: number;
   endTime: number;
@@ -56,7 +56,7 @@ export class SlotValidationError extends Error {
 }
 
 export class SlotNotFoundError extends Error {
-  constructor(id: number) {
+  constructor(id: string) {
     super(`Slot ${id} was not found`);
     this.name = "SlotNotFoundError";
   }
