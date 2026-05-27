@@ -1,5 +1,4 @@
 import { createServer, type Server, IncomingMessage, ServerResponse } from "http";
-import { createApp } from "./app.js";
 import { loadEnvConfig, type EnvConfig } from "./config/env.js";
 import { stopScheduler } from "./scheduler/reminderScheduler.js";
 import { closePool } from "./db/connection.js";
@@ -67,6 +66,7 @@ async function shutdownWithTimeout(): Promise<void> {
 }
 
 if (process.env.NODE_ENV !== "test") {
+  const { createApp } = await import("./app.js");
   const config = loadEnvConfig();
   const app = createApp();
   server = createServer(app);
