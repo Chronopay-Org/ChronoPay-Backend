@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import cors from "cors";
 import express, { Request, Response } from "express";
-import { configService } from "./config/config.service.js";
+import { register, metricsMiddleware } from "./metrics.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
 import { securityHeaders } from "./middleware/securityHeaders.js";
@@ -522,7 +522,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   }
 
   app.use(express.json({ limit: "100kb" }));
-  app.use(requestIdMiddleware);
+  app.use(metricsMiddleware);
   app.use(createRequestLogger());
 
   // ── Feature flag context middleware (makes flags available to routes) ──────
@@ -536,7 +536,14 @@ export function createApp(options: AppFactoryOptions = {}) {
     res.json({ status: "ok", service: "chronopay-backend" });
   });
 
-  app.use("/api/v1/auth", authRouter);
+  app.get("/metrics", async (_req, res) => {
+    try {
+      res.set("Content-Type", register.contentType);
+      res.end(await register.metrics());
+    } catch (err) {
+      res.status(500).end(String(err));
+    }
+  });
 
   app.get("/api/v1/slots", (_req, res) => {
     // Set cache header (mock implementation - always HIT for simplicity)
