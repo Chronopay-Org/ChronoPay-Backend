@@ -47,7 +47,7 @@ export class BookingIntentService {
     return new SchedulingService(this.slotRepository, this.bookingIntentRepository);
   }
 
-  createIntent(input: CreateBookingIntentInput, actor: AuthContext): BookingIntentRecord {
+  async createIntent(input: CreateBookingIntentInput, actor: AuthContext): Promise<BookingIntentRecord> {
     const slot = this.slotRepository.findById(input.slotId);
     if (!slot) {
       throw new BookingIntentError(404, "Selected slot was not found.");

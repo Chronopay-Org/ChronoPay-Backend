@@ -13,43 +13,41 @@ export interface VerifiedJwtPayload extends JWTPayload {
 export async function verifyJwt(token: string, options?: { issuer?: string; audience?: string }) {
   const secrets = configService.getAllSecretVersions("JWT_SECRET");
   const encoder = new TextEncoder();
+  const verifyOptions: { issuer?: string; audience?: string } = {};
 
-    // Audience shape validation
-    const aud = decoded.aud;
-    if (aud !== undefined) {
-      if (typeof aud !== "string" && !Array.isArray(aud)) {
-        throw new Error("Invalid audience shape: must be string or array of strings");
-      }
-      if (Array.isArray(aud) && !aud.every((a) => typeof a === "string")) {
-        throw new Error("Invalid audience shape: array must contain only strings");
-      }
-    }
-
-    if (typeof decoded.exp !== "number" || typeof decoded.iat !== "number") {
-      throw new Error("Token missing required numeric exp or iat claims");
-    }
-
-    const now = Math.floor(Date.now() / 1000);
-    if (decoded.iat > now + config.leewaySeconds) {
-      throw new Error("Token iat is too far in the future");
-    }
-
-    return decoded as VerifiedJwtPayload;
-  } catch {
-    throw new Error("INVALID_TOKEN");
+  if (options?.issuer ?? configService.jwtIssuer) {
+    verifyOptions.issuer = options?.issuer ?? configService.jwtIssuer;
   }
+
   if (options?.audience ?? configService.jwtAudience) {
     verifyOptions.audience = options?.audience ?? configService.jwtAudience;
   }
 
   for (const secret of secrets) {
     try {
-      const { payload } = await jwtVerify(token, encoder.encode(secret), verifyOptions);
-      if (typeof payload.exp !== "number") {
-        throw new Error("Token missing exp claim");
+      const { payload: decoded } = await jwtVerify(token, encoder.encode(secret), verifyOptions);
+
+      // Audience shape validation
+      const aud = decoded.aud;
+      if (aud !== undefined) {
+        if (typeof aud !== "string" && !Array.isArray(aud)) {
+          throw new Error("Invalid audience shape: must be string or array of strings");
+        }
+        if (Array.isArray(aud) && !aud.every((a) => typeof a === "string")) {
+          throw new Error("Invalid audience shape: array must contain only strings");
+        }
       }
 
-      return payload as VerifiedJwtPayload;
+      if (typeof decoded.exp !== "number" || typeof decoded.iat !== "number") {
+        throw new Error("Token missing required numeric exp or iat claims");
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      if (decoded.iat > now + 300) {
+        throw new Error("Token iat is too far in the future");
+      }
+
+      return decoded as VerifiedJwtPayload;
     } catch {
       // try next secret
     }

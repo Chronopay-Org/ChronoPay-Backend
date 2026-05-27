@@ -16,11 +16,10 @@ export interface BookingIntentRecord {
 
 
 export interface BookingIntentRepository {
-  create(intent: Omit<BookingIntentRecord, "id">): BookingIntentRecord;
+  create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord>;
   findById(id: string): BookingIntentRecord | undefined;
   findBySlotId(slotId: string): BookingIntentRecord | undefined;
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
-  findById(id: string): BookingIntentRecord | undefined;
   listByCustomer(customerId: string): BookingIntentRecord[];
   listAll(): BookingIntentRecord[];
 }
@@ -42,6 +41,13 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
   findBySlotId(slotId: string): BookingIntentRecord | undefined {
     const intent = this.intents.find(
       (entry) => entry.slotId === slotId && entry.status === "pending",
+    );
+    return intent ? { ...intent } : undefined;
+  }
+
+  findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined {
+    const intent = this.intents.find(
+      (entry) => entry.slotId === slotId && entry.customerId === customerId && entry.status === "pending",
     );
     return intent ? { ...intent } : undefined;
   }

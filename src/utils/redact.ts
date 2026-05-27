@@ -167,3 +167,27 @@ export const wouldBeRedacted = (fieldName: string): boolean => {
 export const getSensitiveFields = (): string[] => {
   return Array.from(SENSITIVE_FIELDS);
 };
+
+/**
+ * Redacts a phone number for secure logging
+ * Shows country code and last 4 digits, masks the rest
+ *
+ * @param phone - The phone number to redact (E.164 format expected)
+ * @returns Redacted phone number (e.g., "+1***50123")
+ */
+export const redactPhone = (phone: string): string => {
+  if (!phone || typeof phone !== "string") {
+    return "***";
+  }
+
+  const trimmed = phone.trim();
+
+  if (trimmed.length < 8) {
+    return "***";
+  }
+
+  // Show country code (e.g., +1) and last 4 digits
+  const countryCode = trimmed.substring(0, 2);
+  const lastDigits = trimmed.substring(trimmed.length - 4);
+  return `${countryCode}***${lastDigits}`;
+};

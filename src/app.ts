@@ -16,6 +16,8 @@ import { authenticateToken as requireAuth } from "./middleware/auth.js";
 import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
+import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
+import { createRequestLogger } from "./middleware/requestLogger.js";
 
 // Import routers
 import checkoutRouter from "./routes/checkout.js";
@@ -30,6 +32,8 @@ export interface AppFactoryOptions {
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
+  enableContentNegotiation?: boolean;
+  contentNegotiationExcludePaths?: string[];
   slotRepository?: any;
   bookingIntentService?: any;
 }
@@ -173,6 +177,15 @@ function registerSwaggerDocs(app: express.Express) {
 }
 
 export function createApp(options: AppFactoryOptions = {}) {
+  const nodeEnv = process.env.NODE_ENV || "development";
+
+  // Security guard: prevent test routes from being enabled in production
+  if (options.enableTestRoutes && nodeEnv === "production") {
+    throw new Error(
+      "Test routes cannot be enabled in production. enableTestRoutes is true but NODE_ENV is 'production'."
+    );
+  }
+
   const app = express();
 
   // 0. Global Middleware
