@@ -534,15 +534,10 @@ function isValidUUID(uuid: string): boolean {
 function isValidIPAddress(ip: string): boolean {
   // IPv4 basic validation
   const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-  // IPv6 basic validation (simplified)
-  const ipv6Regex = /^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/;
-  // IPv4-mapped IPv6, which Express may return for localhost
-  const ipv4MappedIpv6Regex = /^::ffff:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
-
-  return (
-    ipv4Regex.test(ip) ||
-    ipv6Regex.test(ip) ||
-    ipv4MappedIpv6Regex.test(ip) ||
-    ip === "::1"
-  );
+  // IPv6 basic validation (simplified but handles common cases)
+  const ipv6Regex = /^(?:[0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F]{1,4}$/;
+  // Handle IPv4-mapped IPv6 (e.g., ::ffff:127.0.0.1)
+  const ipv4MappedIpv6Regex = /^::ffff:(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+  
+  return ipv4Regex.test(ip) || ipv6Regex.test(ip) || ipv4MappedIpv6Regex.test(ip) || ip === "::1" || ip === "::";
 }

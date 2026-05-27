@@ -5,7 +5,7 @@
  */
 
 import { Request, Response, NextFunction } from "express";
-import { verifyJwt, VerifiedJwtPayload } from "../utils/jwt.js";
+import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
 
 export enum UserRole {
   USER = "user",

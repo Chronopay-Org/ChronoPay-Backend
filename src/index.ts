@@ -52,4 +52,48 @@ export function __resetSlotsForTests() {
   resetSlotStore();
 }
 
-export default app;
+async function shutdownWithTimeout(): Promise<void> {
+  let forceExit = false;
+  const timer = setTimeout(() => {
+    forceExit = true;
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+
+  try {
+    await gracefulShutdown();
+  } finally {
+    clearTimeout(timer);
+    if (!forceExit) {
+      process.exit(0);
+    }
+  }
+}
+
+if (process.env.NODE_ENV !== "test") {
+  const { createApp } = await import("./app.js");
+  const config = loadEnvConfig();
+  const app = createApp();
+  server = createServer(app);
+
+  server.on("request", (req: IncomingMessage, res: ServerResponse) => {
+    activeRequests.add(req);
+    const cleanup = () => activeRequests.delete(req);
+    res.on("finish", cleanup);
+    res.on("close", cleanup);
+  });
+
+  server.listen(config.port, () => {
+    console.log(`Server running on port ${config.port}`);
+  });
+
+  const handleSignal = () => {
+    if (!isShuttingDown) {
+      void shutdownWithTimeout();
+    }
+  };
+
+  process.on("SIGTERM", handleSignal);
+  process.on("SIGINT", handleSignal);
+}
+
+export default server;

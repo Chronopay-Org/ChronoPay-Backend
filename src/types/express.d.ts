@@ -4,8 +4,8 @@ import { AuthenticatedUser } from "../middleware/auth.middleware.js";
 declare module "express-serve-static-core" {
   interface Request {
     /**
-     * Decoded JWT payload attached by the authenticateToken middleware.
-     * Present only on routes protected by authenticateToken.
+     * Decoded JWT payload attached by JWT authentication middleware.
+     * Present only on routes protected by authenticateToken or authenticate.
      */
     user?: AuthenticatedUser & Record<string, any>;
     /**

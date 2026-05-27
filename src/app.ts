@@ -1,9 +1,11 @@
 import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
 import cors from "cors";
 import express, { Request, Response } from "express";
+import { register, metricsMiddleware } from "./metrics.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
-import { securityHeaders, createSecurityHeaders } from "./middleware/securityHeaders.js";
+import { securityHeaders } from "./middleware/securityHeaders.js";
 import {
   genericErrorHandler,
   jsonParseErrorHandler,
@@ -179,6 +181,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   }
 
   app.use(express.json({ limit: "100kb" }));
+  app.use(metricsMiddleware);
   app.use(createRequestLogger());
 
   // ── Feature flag context middleware (makes flags available to routes) ──────

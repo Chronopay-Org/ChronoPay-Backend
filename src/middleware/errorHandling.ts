@@ -61,13 +61,7 @@ export function genericErrorHandler(
   ) {
     const e = err as any;
     if (typeof e.statusCode === "number" && typeof e.code === "string") {
-      return res.status(e.statusCode).json(withRequestContext({
-        success: false,
-        code: e.code,
-        message: e.message,
-        error: e.message,
-        timestamp: new Date().toISOString(),
-      }, req));
+      return res.status(e.statusCode).json(withRequestContext(e.toJSON(), req));
     }
   }
 

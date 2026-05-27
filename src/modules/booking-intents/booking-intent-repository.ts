@@ -1,3 +1,5 @@
+export type BookingIntentStatus = "pending" | "cancelled" | "expired";
+
 export interface BookingIntentRecord {
   id: string;
   slotId: string;
@@ -5,22 +7,29 @@ export interface BookingIntentRecord {
   customerId: string;
   startTime: number;
   endTime: number;
-  status: "pending";
+  status: BookingIntentStatus;
   note?: string;
+  tokenAsset?: string;
+  mintTxHash?: string;
   createdAt: string;
 }
 
+
 export interface BookingIntentRepository {
   create(intent: Omit<BookingIntentRecord, "id">): BookingIntentRecord;
+  findById(id: string): BookingIntentRecord | undefined;
   findBySlotId(slotId: string): BookingIntentRecord | undefined;
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
+  findById(id: string): BookingIntentRecord | undefined;
+  listByCustomer(customerId: string): BookingIntentRecord[];
+  listAll(): BookingIntentRecord[];
 }
 
 export class InMemoryBookingIntentRepository implements BookingIntentRepository {
   private readonly intents: BookingIntentRecord[] = [];
   private sequence = 1;
 
-  create(intent: Omit<BookingIntentRecord, "id">): BookingIntentRecord {
+  async create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> {
     const created: BookingIntentRecord = {
       id: `intent-${this.sequence++}`,
       ...intent,
@@ -31,14 +40,22 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
   }
 
   findBySlotId(slotId: string): BookingIntentRecord | undefined {
-    const intent = this.intents.find((entry) => entry.slotId === slotId);
+    const intent = this.intents.find(
+      (entry) => entry.slotId === slotId && entry.status === "pending",
+    );
     return intent ? { ...intent } : undefined;
   }
 
-  findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined {
-    const intent = this.intents.find(
-      (entry) => entry.slotId === slotId && entry.customerId === customerId,
-    );
+  findById(id: string): BookingIntentRecord | undefined {
+    const intent = this.intents.find((entry) => entry.id === id);
     return intent ? { ...intent } : undefined;
+  }
+
+  listByCustomer(customerId: string): BookingIntentRecord[] {
+    return this.intents.filter((entry) => entry.customerId === customerId).map((i) => ({ ...i }));
+  }
+
+  listAll(): BookingIntentRecord[] {
+    return this.intents.map((i) => ({ ...i }));
   }
 }

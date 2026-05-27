@@ -2,10 +2,17 @@ import { PaginatedSlots, Slot } from "../types.js";
 export type { Slot };
 import { getSlotsCount, getSlotsPage } from "../repositories/slotRepository.js";
 import { withSpan } from "../tracing/hooks.js";
+import { recordListLatency, recordSlotOperation } from "../metrics/slotMetrics.js";
 
-// Internal Slot type for SlotService
+export type { SlotRecord } from "../repositories/slotRepository.js";
+export type { SlotRecord as Slot } from "../repositories/slotRepository.js";
+
+// ─── Re-export SlotInput so callers don't need to import from two places ──────
+export type { SlotInput } from "../repositories/slotRepository.js";
+
+// ─── Internal Slot type (kept for backward compat with app.ts stub) ───────────
 export interface Slot {
-  id: number;
+  id: string;
   professional: string;
   startTime: number;
   endTime: number;
@@ -192,7 +199,6 @@ export const listSlots = async (
   return service.list(options);
 };
 
-export const listSlotsWithFailure = async (options: PaginationOptions): Promise<PaginatedSlots> => {
-  return listSlots(options);
-};
-
+export const listSlotsWithFailure = async (
+  options: PaginationOptions,
+): Promise<PaginatedSlots> => listSlots(options);
