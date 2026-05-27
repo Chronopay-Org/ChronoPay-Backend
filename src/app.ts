@@ -83,16 +83,16 @@ function registerSwaggerDocs(app: express.Express) {
                   type: "boolean",
                   example: false
                 },
-                error: {
-                  type: "string",
-                  description: "Human-readable error message"
-                },
                 code: {
                   type: "string",
                   description: "Machine-readable error code for programmatic handling"
-                }
+                },
+                message: {
+                  type: "string",
+                  description: "Human-readable error message"
+                },
               },
-              required: ["success"]
+              required: ["success", "code", "message"]
             },
             UnauthorizedError: {
               allOf: [
@@ -100,7 +100,7 @@ function registerSwaggerDocs(app: express.Express) {
                 {
                   type: "object",
                   properties: {
-                    error: {
+                    message: {
                       type: "string",
                       enum: ["Authentication required", "Missing API key", "Missing required header: x-chronopay-admin-token"]
                     }
@@ -114,7 +114,7 @@ function registerSwaggerDocs(app: express.Express) {
                 {
                   type: "object", 
                   properties: {
-                    error: {
+                    message: {
                       type: "string",
                       enum: ["Role is not authorized for this action", "Invalid API key", "Invalid admin token", "Insufficient permissions"]
                     }
