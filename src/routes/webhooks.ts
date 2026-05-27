@@ -4,6 +4,24 @@ const router = Router();
 
 const VALID_EVENT_TYPES = ["settlement_completed", "settlement_initiated", "settlement_failed"];
 
+interface ProcessedEvent {
+  eventType: string;
+  processedAt: number;
+  response: { success: boolean; received: unknown };
+}
+
+// In-process dedup store: transactionId → ProcessedEvent.
+// Injectable via _setProcessedTransactions() for test isolation.
+let _processedTransactions: Map<string, ProcessedEvent> = new Map();
+
+export function _setProcessedTransactions(store: Map<string, ProcessedEvent>): void {
+  _processedTransactions = store;
+}
+
+export function _resetProcessedTransactions(): void {
+  _processedTransactions = new Map();
+}
+
 router.post("/settlements", (req: Request, res: Response) => {
   const { eventType, transactionId, amount, timestamp } = req.body ?? {};
 
@@ -22,7 +40,21 @@ router.post("/settlements", (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: "Invalid timestamp: must be a positive number" });
   }
 
-  return res.status(200).json({ success: true, received: req.body });
+  // Idempotency check: short-circuit duplicate transactionIds.
+  const existing = _processedTransactions.get(String(transactionId));
+  if (existing) {
+    return res.status(200).json(existing.response);
+  }
+
+  const responseBody = { success: true, received: req.body };
+
+  _processedTransactions.set(String(transactionId), {
+    eventType: String(eventType),
+    processedAt: Date.now(),
+    response: responseBody,
+  });
+
+  return res.status(200).json(responseBody);
 });
 
 export default router;
