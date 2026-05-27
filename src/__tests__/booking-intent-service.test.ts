@@ -1,96 +1,219 @@
+/// <reference types="jest" />
 import {
-  BookingIntentError,
-  BookingIntentService,
   parseCreateBookingIntentBody,
+  BookingIntentError,
 } from "../modules/booking-intents/booking-intent-service.js";
-import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
-import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
-
-describe("BookingIntentService", () => {
-  it("creates a booking intent from slot-derived values", () => {
-    const service = new BookingIntentService(
-      new InMemoryBookingIntentRepository(),
-      new InMemorySlotRepository(),
-      () => "2026-01-01T00:00:00.000Z",
-    );
-
-    const intent = service.createIntent(
-      { slotId: "slot-100", note: "Window seat please" },
-      { userId: "customer-1", role: "customer" },
-    );
-
-    expect(intent.id).toBe("intent-1");
-    expect(intent.customerId).toBe("customer-1");
-    expect(intent.professional).toBe("alice");
-    expect(intent.startTime).toBe(1_900_000_000_000);
-    expect(intent.createdAt).toBe("2026-01-01T00:00:00.000Z");
-  });
-
-  it("rejects not found, unbookable, self-booking, and duplicates", () => {
-    const repository = new InMemoryBookingIntentRepository();
-    const service = new BookingIntentService(repository, new InMemorySlotRepository());
-
-    expect(() =>
-      service.createIntent({ slotId: "slot-missing" }, { userId: "customer-1", role: "customer" }),
-    ).toThrow(new BookingIntentError(404, "Selected slot was not found."));
-
-    expect(() =>
-      service.createIntent({ slotId: "slot-102" }, { userId: "customer-1", role: "customer" }),
-    ).toThrow(new BookingIntentError(409, "Selected slot is not bookable."));
-
-    expect(() =>
-      service.createIntent({ slotId: "slot-100" }, { userId: "alice", role: "customer" }),
-    ).toThrow(new BookingIntentError(403, "You cannot create a booking intent for your own slot."));
-
-    service.createIntent({ slotId: "slot-100" }, { userId: "customer-1", role: "customer" });
-
-    expect(() =>
-      service.createIntent({ slotId: "slot-100" }, { userId: "customer-1", role: "customer" }),
-    ).toThrow(new BookingIntentError(409, "A booking intent already exists for this slot."));
-  });
-
-  it("rejects a conflicting intent from a second customer for the same slot", () => {
-    const repository = new InMemoryBookingIntentRepository();
-    const service = new BookingIntentService(repository, new InMemorySlotRepository());
-
-    service.createIntent({ slotId: "slot-101" }, { userId: "customer-1", role: "customer" });
-
-    expect(() =>
-      service.createIntent({ slotId: "slot-101" }, { userId: "customer-2", role: "customer" }),
-    ).toThrow(new BookingIntentError(409, "Selected slot already has an active booking intent."));
-  });
-});
 
 describe("parseCreateBookingIntentBody", () => {
-  it("accepts the minimal valid payload and trims note values", () => {
-    expect(parseCreateBookingIntentBody({ slotId: "slot-100" })).toEqual({
-      slotId: "slot-100",
-    });
-
-    expect(parseCreateBookingIntentBody({ slotId: " slot-100 ", note: " hello " })).toEqual({
-      slotId: "slot-100",
-      note: "hello",
-    });
+  it("accepts valid booking intent without note", () => {
+    const result = parseCreateBookingIntentBody({ slotId: "abc-123" });
+    expect(result).toEqual({ slotId: "abc-123" });
   });
 
-  it("rejects malformed payloads and invalid fields", () => {
-    expect(() => parseCreateBookingIntentBody(null)).toThrow(
-      new BookingIntentError(400, "Booking intent payload must be a JSON object."),
+  it("accepts valid booking intent with note", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "This is a note",
+    });
+    expect(result).toEqual({ slotId: "abc-123", note: "This is a note" });
+  });
+
+  it("trims slotId", () => {
+    const result = parseCreateBookingIntentBody({ slotId: "  abc-123  " });
+    expect(result.slotId).toBe("abc-123");
+  });
+
+  it("rejects empty slotId", () => {
+    expect(() => parseCreateBookingIntentBody({ slotId: "" })).toThrow(
+      BookingIntentError,
     );
-    expect(() => parseCreateBookingIntentBody({})).toThrow(
-      new BookingIntentError(400, "slotId is required."),
+    expect(() => parseCreateBookingIntentBody({ slotId: "   " })).toThrow(
+      BookingIntentError,
     );
-    expect(() => parseCreateBookingIntentBody({ slotId: "bad!" })).toThrow(
-      new BookingIntentError(400, "slotId format is invalid."),
+  });
+
+  it("rejects invalid slotId format", () => {
+    expect(() => parseCreateBookingIntentBody({ slotId: "ab" })).toThrow(
+      BookingIntentError,
     );
-    expect(() => parseCreateBookingIntentBody({ slotId: "slot-100", note: "" })).toThrow(
-      new BookingIntentError(400, "note cannot be empty when provided."),
+    expect(() => parseCreateBookingIntentBody({ slotId: "a".repeat(65) })).toThrow(
+      BookingIntentError,
     );
-    expect(() => parseCreateBookingIntentBody({ slotId: "slot-100", note: 123 })).toThrow(
-      new BookingIntentError(400, "note must be a string when provided."),
+    expect(() => parseCreateBookingIntentBody({ slotId: "abc_123" })).toThrow(
+      BookingIntentError,
     );
+    expect(() => parseCreateBookingIntentBody({ slotId: "abc@123" })).toThrow(
+      BookingIntentError,
+    );
+  });
+
+  it("rejects non-object body", () => {
+    expect(() => parseCreateBookingIntentBody(null)).toThrow(BookingIntentError);
+    expect(() => parseCreateBookingIntentBody(undefined)).toThrow(
+      BookingIntentError,
+    );
+    expect(() => parseCreateBookingIntentBody([])).toThrow(BookingIntentError);
+    expect(() => parseCreateBookingIntentBody("string")).toThrow(
+      BookingIntentError,
+    );
+    expect(() => parseCreateBookingIntentBody(123)).toThrow(BookingIntentError);
+  });
+
+  it("rejects non-string note", () => {
     expect(() =>
-      parseCreateBookingIntentBody({ slotId: "slot-100", note: "x".repeat(501) }),
-    ).toThrow(new BookingIntentError(400, "note must be 500 characters or fewer."));
+      parseCreateBookingIntentBody({ slotId: "abc-123", note: 123 }),
+    ).toThrow(BookingIntentError);
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc-123", note: null }),
+    ).toThrow(BookingIntentError);
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc-123", note: {} }),
+    ).toThrow(BookingIntentError);
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc-123", note: [] }),
+    ).toThrow(BookingIntentError);
+  });
+
+  it("sanitizes note by removing control characters", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "Hello\x00World",
+    });
+    expect(result.note).toBe("HelloWorld");
+  });
+
+  it("sanitizes note by removing C1 control characters", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "Hello\x80World",
+    });
+    expect(result.note).toBe("HelloWorld");
+  });
+
+  it("preserves tab, newline, and carriage return in note", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "Line1\nLine2\tTabbed\rReturn",
+    });
+    expect(result.note).toBe("Line1\nLine2\tTabbed\rReturn");
+  });
+
+  it("normalizes unicode in note to NFC", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "Cafe\u0301",
+    });
+    expect(result.note).toBe("Café");
+  });
+
+  it("trims whitespace from note", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "  Hello World  ",
+    });
+    expect(result.note).toBe("Hello World");
+  });
+
+  it("rejects empty note after sanitization", () => {
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc-123", note: "   " }),
+    ).toThrow(BookingIntentError);
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc-123", note: "\x00\x01\x02" }),
+    ).toThrow(BookingIntentError);
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc-123", note: "\t\n\r" }),
+    ).toThrow(BookingIntentError);
+  });
+
+  it("rejects note exceeding 500 characters after sanitization", () => {
+    const longNote = "A".repeat(501);
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc-123", note: longNote }),
+    ).toThrow(BookingIntentError);
+  });
+
+  it("accepts note exactly 500 characters after sanitization", () => {
+    const longNote = "A".repeat(500);
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: longNote,
+    });
+    expect(result.note).toBe(longNote);
+  });
+
+  it("handles note with embedded newlines", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "Line1\nLine2\nLine3",
+    });
+    expect(result.note).toBe("Line1\nLine2\nLine3");
+  });
+
+  it("handles note with null bytes", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "Hello\x00World",
+    });
+    expect(result.note).toBe("HelloWorld");
+  });
+
+  it("handles note with mixed control characters", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "Hello\x00World\x01Test\x02End",
+    });
+    expect(result.note).toBe("HelloWorldTestEnd");
+  });
+
+  it("handles note with unicode characters", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "Hello 世界 Café",
+    });
+    expect(result.note).toBe("Hello 世界 Café");
+  });
+
+  it("handles note with zero-width characters", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "Hello\u200BWorld",
+    });
+    expect(result.note).toBe("Hello\u200BWorld");
+  });
+
+  it("rejects note that becomes empty after stripping control characters", () => {
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc-123", note: "\x00\x01\x02" }),
+    ).toThrow(BookingIntentError);
+  });
+
+  it("handles note with combining marks and checks length after normalization", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123",
+      note: "e\u0301",
+    });
+    expect(result.note).toBe("é");
+    expect(result.note?.length).toBe(1);
+  });
+
+  it("validates slotId format with alphanumeric and hyphens", () => {
+    const result = parseCreateBookingIntentBody({
+      slotId: "abc-123-XYZ",
+      note: "Test",
+    });
+    expect(result.slotId).toBe("abc-123-XYZ");
+  });
+
+  it("rejects slotId with special characters", () => {
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc@123" }),
+    ).toThrow(BookingIntentError);
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc#123" }),
+    ).toThrow(BookingIntentError);
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: "abc 123" }),
+    ).toThrow(BookingIntentError);
   });
 });

@@ -24,7 +24,7 @@ const pool = new Pool({
  * 3. Pool Error Handling
  * Handles unexpected errors on idle PostgreSQL clients.
  */
-pool.on("error", (err) => {
+pool.on("error", (err: Error) => {
   console.error("Unexpected error on idle PostgreSQL client", err);
 });
 

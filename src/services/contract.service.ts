@@ -1,4 +1,9 @@
 import { RetryPolicy } from "../utils/retry-policy.js";
+import {
+  ContractProviderUnavailableError,
+  mapContractError,
+  shouldRetryContractError,
+} from "../errors/contractErrors.js";
 
 /**
  * Interface for blockchain network details.
@@ -17,6 +22,10 @@ export interface NetworkConfig {
  */
 export class ContractService {
   private retryPolicy: RetryPolicy;
+  private consecutiveFailures = 0;
+  private circuitOpenUntil = 0;
+  private readonly failureThreshold = 5;
+  private readonly circuitOpenDurationMs = 30_000;
 
   /**
    * Initializes the ContractService.
@@ -25,6 +34,21 @@ export class ContractService {
    */
   constructor(retryPolicy?: RetryPolicy) {
     this.retryPolicy = retryPolicy ?? new RetryPolicy();
+  }
+
+  private isCircuitOpen(): boolean {
+    return Date.now() < this.circuitOpenUntil;
+  }
+
+  private recordSuccess(): void {
+    this.consecutiveFailures = 0;
+  }
+
+  private recordFailure(): void {
+    this.consecutiveFailures += 1;
+    if (this.consecutiveFailures >= this.failureThreshold) {
+      this.circuitOpenUntil = Date.now() + this.circuitOpenDurationMs;
+    }
   }
 
   /**
@@ -36,27 +60,32 @@ export class ContractService {
    * @throws The error from the contract call if retries are exhausted or the error is non-retryable.
    */
   async call<T>(description: string, action: () => Promise<T>): Promise<T> {
+    if (this.isCircuitOpen()) {
+      throw new ContractProviderUnavailableError();
+    }
+
     try {
-      return await this.retryPolicy.execute(action, (error) => {
-        // Retry on transient network/node errors
-        const errorMessage = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-        
-        return (
-          errorMessage.includes("rate limit") ||
-          errorMessage.includes("timeout") ||
-          errorMessage.includes("network") ||
-          errorMessage.includes("504") || // Gateway Timeout
-          errorMessage.includes("502") || // Bad Gateway
-          errorMessage.includes("503") || // Service Unavailable
-          errorMessage.includes("500") || // Internal Server Error (sometimes transient in RPCs)
-          errorMessage.includes("connection reset") ||
-          errorMessage.includes("econnreset") ||
-          errorMessage.includes("etimedout")
-        );
-      });
+      const result = await this.retryPolicy.execute(action, shouldRetryContractError);
+      this.recordSuccess();
+      return result;
     } catch (error) {
-       console.error(`Blockchain call failed after retries: ${description}`, error);
-       throw error;
+      const appError = mapContractError(error);
+
+      if (appError.statusCode >= 500 && appError.code.startsWith("CONTRACT_")) {
+        this.recordFailure();
+      } else {
+        this.recordSuccess();
+      }
+
+      console.error(
+        `Blockchain call failed: ${description}`,
+        {
+          upstreamError: error instanceof Error ? error.message : String(error),
+          mappedCode: appError.code,
+        },
+      );
+
+      throw appError;
     }
   }
 
@@ -73,9 +102,6 @@ export class ContractService {
    * definitely occurred before the transaction was broadcasted.
    */
   async sendTransaction<T>(description: string, action: () => Promise<T>): Promise<T> {
-    // For transactions, we reuse the same logic for now, but in a production environment,
-    // we might want to be more specific about which errors are safe to retry 
-    // without risk of double-submission (e.g., only connectivity errors before broadcast).
     return this.call(description, action);
   }
 }

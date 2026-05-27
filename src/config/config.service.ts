@@ -1,12 +1,9 @@
 /**
- * Secret Management and Rotation Service
- * 
- * This service provides a centralized way to manage and rotate application secrets.
- * It supports multi-versioning for graceful secret rotation, allowing the application
- * to transition between secrets without downtime.
+ * Typed Configuration and Secret Rotation Service
  */
 
 import process from "node:process";
+import { loadEnvConfig, type EnvConfig } from "./env.js";
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -23,9 +20,11 @@ export interface SecretVersions {
 export class ConfigService {
   private static instance: ConfigService;
   private readonly secrets = new Map<string, SecretVersions>();
+  private envConfig: EnvConfig;
 
   private constructor() {
-    this.loadFromEnv();
+    this.envConfig = loadEnvConfig(process.env);
+    this.loadSecretsFromEnv();
   }
 
   public static getInstance(): ConfigService {
@@ -35,33 +34,69 @@ export class ConfigService {
     return ConfigService.instance;
   }
 
-  /**
-   * Loads secrets from environment variables.
-   * Looks for KEY and KEY_PREV patterns.
-   */
-  private loadFromEnv(): void {
+  public get nodeEnv() {
+    return this.envConfig.nodeEnv;
+  }
+
+  public get port() {
+    return this.envConfig.port;
+  }
+
+  public get timeoutMs() {
+    return this.envConfig.timeoutMs;
+  }
+
+  public get rateLimitWindowMs() {
+    return this.envConfig.rateLimitWindowMs;
+  }
+
+  public get rateLimitMax() {
+    return this.envConfig.rateLimitMax;
+  }
+
+  public get trustProxy() {
+    return this.envConfig.trustProxy;
+  }
+
+  public get webhookSecret() {
+    return this.envConfig.webhookSecret;
+  }
+
+  public get jwtIssuer() {
+    return this.envConfig.jwtIssuer;
+  }
+
+  public get jwtAudience() {
+    return this.envConfig.jwtAudience;
+  }
+
+  public get corsAllowedOrigins() {
+    return [...this.envConfig.corsAllowedOrigins];
+  }
+
+  private loadSecretsFromEnv(): void {
+    this.secrets.clear();
+
     const relevantKeys = [
       "JWT_SECRET",
       "API_KEY",
       "STELLAR_SECRET_KEY",
-      // Add more secret keys as needed
+      "WEBHOOK_SECRET",
     ];
 
     for (const key of relevantKeys) {
-      const primary = process.env[key];
-      const previous = process.env[`${key}_PREV`];
+      const primary = process.env[key]?.trim();
+      const previous = process.env[`${key}_PREV`]?.trim();
 
       if (primary) {
-        this.secrets.set(key, { primary, previous });
+        this.secrets.set(key, {
+          primary,
+          previous: previous || undefined,
+        });
       }
     }
   }
 
-  /**
-   * Retrieves the primary version of a secret.
-   * Use this for new operations (e.g., signing a new token).
-   * @throws ConfigError if the secret is not found.
-   */
   public getSecret(key: string): string {
     const versions = this.secrets.get(key);
     if (!versions) {
@@ -70,33 +105,21 @@ export class ConfigService {
     return versions.primary;
   }
 
-  /**
-   * Retrieves all active versions of a secret.
-   * Use this for validation operations (e.g., verifying an existing token).
-   */
   public getAllSecretVersions(key: string): string[] {
     const versions = this.secrets.get(key);
-    if (!versions) {
-      return [];
-    }
+    if (!versions) return [];
+
     const result = [versions.primary];
-    if (versions.previous) {
-      result.push(versions.previous);
-    }
+    if (versions.previous) result.push(versions.previous);
+
     return result;
   }
 
-  /**
-   * Manual refresh of secrets from environment.
-   * Useful in scenarios where environment variables might be updated dynamically.
-   */
   public refresh(): void {
-    this.loadFromEnv();
+    this.envConfig = loadEnvConfig(process.env);
+    this.loadSecretsFromEnv();
   }
 
-  /**
-   * Validates if a secret is configured correctly.
-   */
   public validateConfig(key: string): boolean {
     const versions = this.secrets.get(key);
     return !!versions && versions.primary.length > 0;

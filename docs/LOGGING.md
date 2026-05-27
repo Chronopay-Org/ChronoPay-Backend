@@ -13,6 +13,7 @@ ChronoPay Backend uses **pino**, a high-performance JSON logging library, for pr
 - **Environment-Aware**: Different log levels and formats for development/production/test
 - **Error Serialization**: Comprehensive error tracking with stack traces and causes
 - **Request ID Tracking**: Distributed tracing support via request correlation IDs
+- **Standardized Log Fields**: Consistent fields across all middleware (requestId, route, method, status, duration, userId, apiKeyId)
 
 ## Installation
 
@@ -159,15 +160,28 @@ Complete redaction (field removed entirely) for:
 
 ## HTTP Request Logging
 
-All HTTP requests are automatically logged with:
+All HTTP requests are automatically logged with standardized fields:
 
-- Request ID (auto-generated or from `x-request-id` header)
-- Method and URL
-- Status code
-- Response time
-- User agent
-- Client IP
-- Query parameters (sanitized)
+| Field | Type | Description |
+|-------|------|-------------|
+| `requestId` | string | Unique request identifier (auto-generated or from `x-request-id` header) |
+| `route` | string | Route pattern (path parameters sanitized, e.g., `/users/:id` → `/users/:REDACTED`) |
+| `method` | string | HTTP method (GET, POST, etc.) |
+| `status` | number | HTTP status code |
+| `duration` | number | Request processing time in milliseconds |
+| `userId` | string? | Authenticated user ID (if available) |
+| `apiKeyId` | string? | API key identifier (if used) |
+| `ip` | string? | Client IP address |
+| `userAgent` | string? | Client user agent |
+
+### Identity Fields
+
+Identity fields (`userId`, `apiKeyId`) are populated from:
+1. Auth middleware (via `x-chronopay-user-id` header)
+2. API key middleware (via `x-api-key` header)
+3. Custom `x-api-key-id` header
+
+**Security**: Sensitive data (tokens, emails, passwords) are NEVER logged. Only stable, non-sensitive identifiers are included.
 
 ### Example Request Log
 
@@ -175,25 +189,14 @@ All HTTP requests are automatically logged with:
 {
   "level": "INFO",
   "time": "2026-03-24T12:34:56.789Z",
-  "request": {
-    "id": "req_1234567890_abc",
-    "method": "POST",
-    "url": "/api/v1/payment",
-    "query": {},
-    "params": {},
-    "headers": {
-      "content-type": "application/json"
-    },
-    "remoteAddress": "192.168.1.100",
-    "userAgent": "Mozilla/5.0..."
-  },
-  "response": {
-    "statusCode": 201,
-    "headers": {
-      "content-type": "application/json"
-    },
-    "responseTime": 145
-  },
+  "requestId": "req_1234567890_abc",
+  "route": "/api/v1/payment",
+  "method": "POST",
+  "status": 201,
+  "duration": 145,
+  "userId": "user-123",
+  "ip": "192.168.1.100",
+  "userAgent": "Mozilla/5.0...",
   "msg": "POST /api/v1/payment completed in 145ms [201]"
 }
 ```
@@ -267,6 +270,43 @@ logDbOperation('SELECT', 'users', 15, 100, {
 });
 // Output: "DB SELECT on users in 15ms"
 ```
+
+## Log Context Builder
+
+Use the log context builder for standardized fields across middleware:
+
+```typescript
+import {
+  buildRequestLogContext,
+  addIdentityToContext,
+  addResponseData,
+  extractIdentity
+} from './utils/logContext.js';
+
+// Build base context from request
+const context = buildRequestLogContext(req);
+
+// Add identity (userId or apiKeyId)
+const identity = extractIdentity(req);
+const contextWithIdentity = addIdentityToContext(context, identity);
+
+// Add response data
+const finalContext = addResponseData(contextWithIdentity, res.statusCode, duration);
+
+// Result includes: requestId, route, method, status, duration, userId, apiKeyId, ip, userAgent
+```
+
+### Route Sanitization
+
+Route parameters are automatically sanitized to prevent sensitive data in logs:
+- `/users/:id` → `/users/:REDACTED`
+- `/payments/:paymentId/refund` → `/payments/:REDACTED/refund`
+
+### Security Notes
+
+- **NEVER log**: tokens, emails, passwords, phone numbers, API keys (values)
+- **SAFE to log**: user IDs, API key IDs (identifiers only), IP addresses, user agents
+- Identity fields are populated from auth middleware automatically
 
 ### External Call Logging
 
