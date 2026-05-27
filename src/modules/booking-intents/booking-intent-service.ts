@@ -6,18 +6,31 @@ import type {
 } from "./booking-intent-repository.js";
 import { SchedulingService } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
+import { sanitizeNote } from "../../utils/redact.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
   note?: string;
 }
 
-export class BookingIntentError extends Error {
+export class BookingIntentError extends AppError {
   constructor(
     readonly status: number,
     message: string,
   ) {
-    super(message);
+    const code =
+      status === 400
+        ? ERROR_CODES.BAD_REQUEST.code
+        : status === 403
+          ? ERROR_CODES.FORBIDDEN.code
+          : status === 404
+            ? ERROR_CODES.NOT_FOUND.code
+            : status === 409
+              ? ERROR_CODES.CONFLICT.code
+              : status === 422
+                ? ERROR_CODES.UNPROCESSABLE_ENTITY.code
+                : ERROR_CODES.INTERNAL_ERROR.code;
+    super(message, status, code, true);
     this.name = "BookingIntentError";
   }
 }
@@ -47,7 +60,7 @@ export class BookingIntentService {
       throw new BookingIntentError(403, "You cannot create a booking intent for your own slot.");
     }
 
-    const existingForCustomer = this.bookingIntentRepository.findBySlotIdAndCustomer(
+    const existingForCustomer = await this.bookingIntentRepository.findBySlotIdAndCustomer(
       input.slotId,
       actor.userId,
     );
@@ -55,7 +68,7 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "A booking intent already exists for this slot.");
     }
 
-    const existingForSlot = this.bookingIntentRepository.findBySlotId(input.slotId);
+    const existingForSlot = await this.bookingIntentRepository.findBySlotId(input.slotId);
     if (existingForSlot) {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
@@ -147,17 +160,17 @@ export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntent
     throw new BookingIntentError(400, "note must be a string when provided.");
   }
 
-  const normalizedNote = note.trim();
-  if (normalizedNote.length === 0) {
+  const sanitizedNote = sanitizeNote(note);
+  if (sanitizedNote === null) {
     throw new BookingIntentError(400, "note cannot be empty when provided.");
   }
 
-  if (normalizedNote.length > 500) {
+  if (sanitizedNote.length > 500) {
     throw new BookingIntentError(400, "note must be 500 characters or fewer.");
   }
 
   return {
     slotId: normalizedSlotId,
-    note: normalizedNote,
+    note: sanitizedNote,
   };
 }

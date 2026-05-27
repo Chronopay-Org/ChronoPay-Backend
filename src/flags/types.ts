@@ -1,4 +1,4 @@
-export const FEATURE_FLAG_NAMES = ["CREATE_SLOT", "CREATE_BOOKING_INTENT"] as const;
+export const FEATURE_FLAG_NAMES = ["CREATE_SLOT", "CREATE_BOOKING_INTENT", "CHECKOUT"] as const;
 
 export type FeatureFlagName = (typeof FEATURE_FLAG_NAMES)[number];
 

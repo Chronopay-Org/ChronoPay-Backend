@@ -9,6 +9,8 @@ export interface BookingIntentRecord {
   endTime: number;
   status: BookingIntentStatus;
   note?: string;
+  tokenAsset?: string;
+  mintTxHash?: string;
   createdAt: string;
 }
 
@@ -24,7 +26,7 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
   private readonly intents: BookingIntentRecord[] = [];
   private sequence = 1;
 
-  create(intent: Omit<BookingIntentRecord, "id">): BookingIntentRecord {
+  async create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> {
     const created: BookingIntentRecord = {
       id: `intent-${this.sequence++}`,
       ...intent,
@@ -41,7 +43,7 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
     return intent ? { ...intent } : undefined;
   }
 
-  findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined {
+  async findBySlotIdAndCustomer(slotId: string, customerId: string): Promise<BookingIntentRecord | undefined> {
     const intent = this.intents.find(
       (entry) =>
         entry.slotId === slotId &&
