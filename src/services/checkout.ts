@@ -17,6 +17,8 @@ import {
   CheckoutError,
   CheckoutErrorCode,
 } from "../types/checkout.js";
+import { defaultAuditLogger } from "./auditLogger.js";
+import { withSpan } from "../tracing/hooks.js";
 
 /**
  * Session storage configuration
@@ -35,6 +37,23 @@ const sessionStore = new Map<string, CheckoutSession>();
  */
 export class CheckoutSessionService {
   /**
+   * Helper to emit audit events safely while sanitizing data
+   */
+  private static emitAuditEvent(
+    action: string,
+    status: string | number,
+    resource: string,
+    metadata: Record<string, any>
+  ): void {
+    defaultAuditLogger.log({
+      action: `checkout.${action}`,
+      status,
+      resource,
+      metadata,
+    }).catch(console.error);
+  }
+
+  /**
    * Creates a new checkout session
    * 
    * @param request - Checkout session creation request
@@ -46,9 +65,18 @@ export class CheckoutSessionService {
     request: CreateCheckoutSessionRequest,
     authorizationToken?: string,
   ): CheckoutSession {
+    this.emitAuditEvent("initiated", "success", `customer:${request.customer.customerId}`, {
+      amount: request.payment.amount,
+      currency: request.payment.currency,
+      paymentMethod: request.payment.paymentMethod,
+    });
+
     // Validate authorization if token is required
     // In production, verify token against auth service
     if (process.env.REQUIRE_AUTH === "true" && !authorizationToken) {
+      this.emitAuditEvent("validated", "failed", `customer:${request.customer.customerId}`, {
+        reason: "Authorization required",
+      });
       throw new CheckoutError(
         CheckoutErrorCode.UNAUTHORIZED,
         "Authorization required",
@@ -61,12 +89,17 @@ export class CheckoutSessionService {
 
     // Check storage limit
     if (sessionStore.size >= MAX_SESSIONS_STORED) {
+      this.emitAuditEvent("validated", "failed", `customer:${request.customer.customerId}`, {
+        reason: "Session limit reached",
+      });
       throw new CheckoutError(
         CheckoutErrorCode.INTERNAL_ERROR,
         "Session limit reached",
         503,
       );
     }
+
+    this.emitAuditEvent("validated", "success", `customer:${request.customer.customerId}`, {});
 
     const now = Date.now();
     const sessionId = randomUUID();
@@ -86,6 +119,14 @@ export class CheckoutSessionService {
     };
 
     sessionStore.set(sessionId, session);
+
+    this.emitAuditEvent("reserved", "success", `session:${sessionId}`, {
+      customerId: request.customer.customerId,
+      amount: request.payment.amount,
+      currency: request.payment.currency,
+      paymentMethod: request.payment.paymentMethod,
+    });
+
     return session;
   }
 
@@ -136,6 +177,10 @@ export class CheckoutSessionService {
 
     // Only allow completion from pending state
     if (session.status !== CheckoutSessionStatus.PENDING) {
+      this.emitAuditEvent("paid", "failed", `session:${sessionId}`, {
+        reason: `Cannot complete session in ${session.status} state`,
+        currentState: session.status,
+      });
       throw new CheckoutError(
         CheckoutErrorCode.INVALID_SESSION_STATE,
         `Cannot complete session in ${session.status} state`,
@@ -149,6 +194,15 @@ export class CheckoutSessionService {
     session.updatedAt = Math.floor(Date.now() / 1000);
 
     sessionStore.set(sessionId, session);
+
+    this.emitAuditEvent("paid", "success", `session:${sessionId}`, {
+      customerId: session.customer.customerId,
+      amount: session.payment.amount,
+      currency: session.payment.currency,
+      paymentMethod: session.payment.paymentMethod,
+      tokenProvided: !!paymentToken,
+    });
+
     return session;
   }
 
@@ -165,6 +219,10 @@ export class CheckoutSessionService {
 
     // Only allow failure from pending state
     if (session.status !== CheckoutSessionStatus.PENDING) {
+      this.emitAuditEvent("failed", "failed", `session:${sessionId}`, {
+        reason: `Cannot fail session in ${session.status} state`,
+        currentState: session.status,
+      });
       throw new CheckoutError(
         CheckoutErrorCode.INVALID_SESSION_STATE,
         `Cannot fail session in ${session.status} state`,
@@ -179,6 +237,12 @@ export class CheckoutSessionService {
     session.metadata.failureReason = reason || "Unknown";
 
     sessionStore.set(sessionId, session);
+
+    this.emitAuditEvent("failed", "success", `session:${sessionId}`, {
+      customerId: session.customer.customerId,
+      reason: reason || "Unknown",
+    });
+
     return session;
   }
 
@@ -194,6 +258,10 @@ export class CheckoutSessionService {
 
     // Only allow cancellation from pending state
     if (session.status !== CheckoutSessionStatus.PENDING) {
+      this.emitAuditEvent("cancelled", "failed", `session:${sessionId}`, {
+        reason: `Cannot cancel session in ${session.status} state`,
+        currentState: session.status,
+      });
       throw new CheckoutError(
         CheckoutErrorCode.INVALID_SESSION_STATE,
         `Cannot cancel session in ${session.status} state`,
@@ -206,6 +274,11 @@ export class CheckoutSessionService {
     session.updatedAt = Math.floor(Date.now() / 1000);
 
     sessionStore.set(sessionId, session);
+
+    this.emitAuditEvent("cancelled", "success", `session:${sessionId}`, {
+      customerId: session.customer.customerId,
+    });
+
     return session;
   }
 
@@ -250,5 +323,42 @@ export class CheckoutSessionService {
    */
   static getSessionCount(): number {
     return sessionStore.size;
+  }
+
+  // ── Traced wrappers ──────────────────────────────────────────────────────────
+
+  static createSessionTraced(
+    request: CreateCheckoutSessionRequest,
+    authorizationToken?: string,
+  ): Promise<CheckoutSession> {
+    return withSpan(
+      "checkout.createSession",
+      { route: "POST /api/v1/checkout/sessions", paymentMethod: request.payment.paymentMethod },
+      () => this.createSession(request, authorizationToken),
+    );
+  }
+
+  static getSessionTraced(sessionId: string): Promise<CheckoutSession> {
+    return withSpan(
+      "checkout.getSession",
+      { route: "GET /api/v1/checkout/sessions/:sessionId" },
+      () => this.getSession(sessionId),
+    );
+  }
+
+  static completeSessionTraced(sessionId: string, paymentToken?: string): Promise<CheckoutSession> {
+    return withSpan(
+      "checkout.completeSession",
+      { route: "POST /api/v1/checkout/sessions/:sessionId/complete" },
+      () => this.completeSession(sessionId, paymentToken),
+    );
+  }
+
+  static cancelSessionTraced(sessionId: string): Promise<CheckoutSession> {
+    return withSpan(
+      "checkout.cancelSession",
+      { route: "POST /api/v1/checkout/sessions/:sessionId/cancel" },
+      () => this.cancelSession(sessionId),
+    );
   }
 }

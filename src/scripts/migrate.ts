@@ -19,6 +19,7 @@ import { getPool, closePool } from "../db/connection.js";
 import * as repo from "../db/migrationRepository.js";
 import { MigrationRunner } from "../db/migrationRunner.js";
 import { migrations } from "../db/migrations/index.js";
+import { detectDrift, validateMigrationOrder } from "../db/driftDetector.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ function printUsage(): void {
   console.error("Commands:");
   console.error("  status          Show which migrations have been applied");
   console.error("  validate        Validate migration definitions (no DB needed)");
+  console.error("  drift-check     Check for schema drift and naming issues");
   console.error("  up [count]      Apply pending migrations (all if count omitted)");
   console.error("  down [count]    Roll back migrations (default: 1)\n");
 }
@@ -46,7 +48,7 @@ function parseCount(raw: string | undefined, defaultValue?: number): number | un
 async function main(): Promise<void> {
   const [, , command, ...args] = process.argv;
 
-  const validCommands = ["up", "down", "status", "validate"];
+  const validCommands = ["up", "down", "status", "validate", "drift-check"];
 
   if (!command || !validCommands.includes(command)) {
     printUsage();
@@ -66,6 +68,63 @@ async function main(): Promise<void> {
       }
       console.error("");
       process.exit(1);
+    }
+    return;
+  }
+
+  // `drift-check` validates order and checks database for drift.
+  if (command === "drift-check") {
+    console.log("\n  Running migration drift check...\n");
+    
+    console.log("  [1/2] Validating migration order and naming...");
+    const orderResult = validateMigrationOrder(migrations);
+    
+    if (orderResult.errors.length > 0) {
+      console.error("\n  Validation failed:");
+      for (const err of orderResult.errors) {
+        console.error(`    - ${err}`);
+      }
+      console.error("");
+      process.exit(1);
+    }
+
+    if (orderResult.warnings.length > 0) {
+      console.log("\n  Warnings:");
+      for (const warn of orderResult.warnings) {
+        console.log(`    - ${warn}`);
+      }
+      console.log("");
+    }
+
+    const pool = getPool();
+    try {
+      console.log("  [2/2] Checking for schema drift...");
+      await repo.ensureMigrationsTable(pool);
+      const applied = await repo.getAppliedMigrations(pool);
+      const driftResult = detectDrift(migrations, applied);
+
+      if (driftResult.hasDrift) {
+        console.error("\n  Schema drift detected:");
+        for (const err of driftResult.errors) {
+          console.error(`    - ${err}`);
+        }
+        console.error("");
+        process.exit(1);
+      }
+
+      if (driftResult.warnings.length > 0) {
+        console.log("\n  Warnings:");
+        for (const warn of driftResult.warnings) {
+          console.log(`    - ${warn}`);
+        }
+        console.log("");
+      }
+
+      console.log("\n  Summary:");
+      console.log(`    Registered: ${migrations.length}, Applied: ${applied.length}, Pending: ${migrations.length - applied.length}`);
+      console.log("\n  All checks passed.\n");
+    } finally {
+      await closePool();
     }
     return;
   }

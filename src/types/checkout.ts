@@ -40,6 +40,8 @@ export interface PaymentInfo {
   paymentMethod: PaymentMethod;
   /** Optional payment descriptor */
   description?: string;
+  /** Stellar asset identifier (AssetCode:Issuer or 'native') */
+  asset?: string;
 }
 
 /**
@@ -164,6 +166,7 @@ export class CheckoutError extends Error {
  */
 export const CheckoutErrorCode = {
   INVALID_AMOUNT: "INVALID_AMOUNT",
+  INVALID_ASSET: "INVALID_ASSET",
   INVALID_CURRENCY: "INVALID_CURRENCY",
   INVALID_EMAIL: "INVALID_EMAIL",
   INVALID_PAYMENT_METHOD: "INVALID_PAYMENT_METHOD",

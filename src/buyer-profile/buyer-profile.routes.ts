@@ -8,6 +8,7 @@
 import { Router } from "express";
 import { buyerProfileController } from "./buyer-profile.controller.js";
 import { authenticate, authorize, UserRole } from "../middleware/auth.middleware.js";
+import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import {
   validateCreateBuyerProfile,
   validateUpdateBuyerProfile,
@@ -24,6 +25,7 @@ const router = Router();
 router.post(
   "/",
   authenticate,
+  createAuthAwareRateLimiter(),
   validateCreateBuyerProfile,
   buyerProfileController.create.bind(buyerProfileController)
 );
@@ -36,6 +38,7 @@ router.post(
 router.get(
   "/me",
   authenticate,
+  createAuthAwareRateLimiter(),
   buyerProfileController.getMyProfile.bind(buyerProfileController)
 );
 
@@ -48,6 +51,7 @@ router.get(
   "/",
   authenticate,
   authorize(UserRole.ADMIN),
+  createAuthAwareRateLimiter(),
   buyerProfileController.list.bind(buyerProfileController)
 );
 
@@ -59,6 +63,7 @@ router.get(
 router.get(
   "/:id",
   authenticate,
+  createAuthAwareRateLimiter(),
   validateUUID,
   buyerProfileController.getById.bind(buyerProfileController)
 );
@@ -71,6 +76,7 @@ router.get(
 router.patch(
   "/:id",
   authenticate,
+  createAuthAwareRateLimiter(),
   validateUUID,
   validateUpdateBuyerProfile,
   buyerProfileController.update.bind(buyerProfileController)
@@ -84,6 +90,7 @@ router.patch(
 router.delete(
   "/:id",
   authenticate,
+  createAuthAwareRateLimiter(),
   validateUUID,
   buyerProfileController.delete.bind(buyerProfileController)
 );

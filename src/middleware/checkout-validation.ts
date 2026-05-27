@@ -17,6 +17,8 @@ import {
   PaymentMethod,
 } from "../types/checkout.js";
 
+import { AmountUtils } from "../utils/amount.js";
+
 /**
  * Validates email format
  * @param email - Email address to validate
@@ -29,16 +31,34 @@ export function isValidEmail(email: string): boolean {
 
 /**
  * Validates payment amount
- * @param amount - Amount in smallest unit (cents/stroops)
- * @returns true if amount is valid (positive integer, reasonable limit)
+ * @param amount - Amount in smallest unit
+ * @returns true if amount is valid integer
  */
 export function isValidAmount(amount: unknown): boolean {
-  if (typeof amount !== "number") return false;
-  if (!Number.isInteger(amount)) return false;
-  if (amount <= 0) return false;
-  // Max limit: 1 billion in smallest units (prevents overflow)
-  if (amount > 1e9) return false;
-  return true;
+  return AmountUtils.validate(amount);
+}
+
+/**
+ * Validates Stellar asset identifier
+ * @param asset - Asset identifier (AssetCode:Issuer or 'native')
+ * @returns true if asset identifier is valid
+ */
+export function isValidAsset(asset: unknown): boolean {
+  if (typeof asset !== "string") return false;
+  if (asset === "native") return true;
+
+  // Asset format: AssetCode:IssuerAddress
+  // AssetCode: 1-12 alphanumeric characters
+  // IssuerAddress: 56 characters (Stellar public key format: starting with G)
+  const assetParts = asset.split(":");
+  if (assetParts.length !== 2) return false;
+
+  const [code, issuer] = assetParts;
+  
+  const codeRegex = /^[a-zA-Z0-9]{1,12}$/;
+  const issuerRegex = /^G[A-Z2-7]{55}$/;
+
+  return codeRegex.test(code) && issuerRegex.test(issuer);
 }
 
 /**
@@ -103,10 +123,22 @@ export function validateCreateCheckoutSession() {
       if (!isValidAmount(payment.amount)) {
         throw new CheckoutError(
           CheckoutErrorCode.INVALID_AMOUNT,
-          "Amount must be a positive integer (in smallest currency unit)",
+          "Amount must be a strictly positive integer representing minor units",
           400,
           { field: "payment.amount", provided: payment.amount },
         );
+      }
+
+      // Validate asset if provided (required for crypto payment method)
+      if (payment.paymentMethod === "crypto" || payment.asset) {
+        if (!isValidAsset(payment.asset)) {
+          throw new CheckoutError(
+            CheckoutErrorCode.INVALID_ASSET,
+            "Invalid Stellar asset identifier. Must be 'native' or 'AssetCode:Issuer'",
+            400,
+            { field: "payment.asset", provided: payment.asset },
+          );
+        }
       }
 
       // Validate currency

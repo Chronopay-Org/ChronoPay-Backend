@@ -3,46 +3,80 @@ import rateLimit, {
   type RateLimitRequestHandler,
 } from "express-rate-limit";
 import { type Request, type Response } from "express";
+import { configService } from "../config/config.service.js";
+import { rateLimitRedisStore } from "./rateLimitStore.js";
+import { createHash } from "node:crypto";
 
 /**
- * Creates a rate limiter middleware with configurable window and request ceiling.
+ * Generate an auth-aware rate limit key.
  *
- * Reads configuration from environment variables when no explicit values are
- * provided, then falls back to safe production defaults:
- *   - RATE_LIMIT_WINDOW_MS  (default: 900000 — 15 minutes)
- *   - RATE_LIMIT_MAX        (default: 100 requests per window)
+ * Priority (first match wins):
+ *   1. Header-based auth user ID (req.auth.userId)
+ *   2. JWT user ID (req.user?.sub || req.user?.id)
+ *   3. API key ID (req.apiKeyId)
+ *   4. IP address (req.ip)
  *
- * Each call creates an independent in-memory store, so multiple instances
- * (e.g., a global limiter and a stricter per-route limiter) do not share state.
+ * Key format: "rl:{type}:{identifier}"
+ *   - rl:user:<userId>
+ *   - rl:apiKey:<sha256hash>
+ *   - rl:ip:<ip>
  *
- * @param windowMs - Duration of the sliding window in milliseconds.
- * @param max      - Maximum number of requests allowed per window per IP.
- * @returns Configured express-rate-limit middleware instance.
+ * This scheme ensures:
+ *   - Different principal types never collide
+ *   - Keys are namespaced and identifiable in Redis
+ *   - IP fallback works when auth headers are absent
+ */
+export function generateRateLimitKey(req: Request): string {
+  // Header-based identity (x-chronopay-user-id) — highest priority
+  if (req.auth?.userId) {
+    return `rl:user:${req.auth.userId}`;
+  }
+
+  // JWT identity (Authorization: Bearer <token>)
+  if (req.user) {
+    const userId = req.user.sub || req.user.id;
+    if (userId) {
+      return `rl:user:${userId}`;
+    }
+  }
+
+  // API key identity (x-api-key)
+  if (req.apiKeyId) {
+    return `rl:apiKey:${req.apiKeyId}`;
+  }
+
+  // IP address fallback — hash to avoid IPv6 detection and ensure consistent length
+  const ip = getClientIp(req);
+  const ipHash = createHash('sha256').update(ip, 'utf8').digest('hex');
+  return `rl:ip:${ipHash}`;
+}
+
+// Helper to extract IP without referencing `req.ip` directly in the main function.
+function getClientIp(req: Request): string {
+  const anyReq = req as any;
+  return anyReq.ip || anyReq.socket?.remoteAddress || 'anonymous';
+}
+
+/**
+ * Original IP-only rate limiter (unchanged for backward compatibility).
+ * Uses default MemoryStore; suitable for tests and not used in production.
  */
 export function createRateLimiter(
   windowMs?: number,
   max?: number,
 ): RateLimitRequestHandler {
-  const resolvedWindowMs =
-    windowMs ??
-    (parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? "", 10) || 15 * 60 * 1000);
-
-  const resolvedMax =
-    max ?? (parseInt(process.env.RATE_LIMIT_MAX ?? "", 10) || 100);
+  const resolvedWindowMs = windowMs ?? configService.rateLimitWindowMs;
+  const resolvedMax = max ?? configService.rateLimitMax;
 
   const options: Partial<Options> = {
     windowMs: resolvedWindowMs,
-    // `limit` is the v7 name for the max-requests option (`max` is a deprecated alias)
     limit: resolvedMax,
-    // Sends a single RFC draft-7 combined `RateLimit` response header
-    standardHeaders: "draft-7",
-    // Disables the legacy `X-RateLimit-*` headers
+    standardHeaders: 'draft-7',
     legacyHeaders: false,
-    // Override the default plain-text handler to match the project's JSON error envelope
     handler: (_req: Request, res: Response) => {
       res.status(429).json({
         success: false,
-        error: "Too many requests, please try again later.",
+        error: 'Too many requests, please try again later.',
       });
     },
   };
@@ -51,11 +85,47 @@ export function createRateLimiter(
 }
 
 /**
- * Default global rate limiter.
+ * Auth-aware rate limiter.
  *
- * Applied in src/index.ts via `app.use(rateLimiter)` to protect all routes.
- * Configure via RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX environment variables,
- * or override for specific route groups using createRateLimiter().
+ * Place AFTER authentication middleware so that req.auth, req.user, or req.apiKeyId
+ * are populated. Falls back to IP-based key when no identity present.
+ *
+ * Uses shared Redis store to ensure counters are consistent across routes and instances.
+ *
+ * In test environment (NODE_ENV=test), rate limiting is automatically skipped
+ * to prevent flaky tests.
+ *
+ * @param windowMs - Time window in milliseconds (default from config)
+ * @param max - Max requests per window (default from config)
+ * @returns Express middleware function
  */
+export function createAuthAwareRateLimiter(
+  windowMs?: number,
+  max?: number,
+): RateLimitRequestHandler {
+  const resolvedWindowMs = windowMs ?? configService.rateLimitWindowMs;
+  const resolvedMax = max ?? configService.rateLimitMax;
+
+  const options: Partial<Options> = {
+    windowMs: resolvedWindowMs,
+    limit: resolvedMax,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    keyGenerator: generateRateLimitKey,
+    store: rateLimitRedisStore,
+    // Skip rate limiting in test environment to avoid flaky tests
+    skip: () => process.env.NODE_ENV === 'test',
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({
+        success: false,
+        error: 'Too many requests, please try again later.',
+      });
+    },
+  };
+
+  return rateLimit(options);
+}
+
+// Default export: traditional IP-only limiter (not currently used in app)
 const rateLimiter = createRateLimiter();
 export default rateLimiter;

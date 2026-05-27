@@ -1,102 +1,157 @@
-import { Request, Response, NextFunction } from "express";
-import { getRedisClient } from "../utils/redis.js";
+import type { NextFunction, Request, Response } from "express";
+import { getRedisClient } from "../cache/redisClient.js";
 import { generateRequestHash } from "../utils/hash.js";
+import { getIdempotencyPayloadCodec } from "../utils/idempotencyPayloadCodec.js";
+import { IdempotencyError } from "../errors/AppError.js";
+import { ERROR_CODES } from "../errors/errorCodes.js";
+import { sendErrorResponse } from "../errors/sendError.js";
 
-const IDEMPOTENCY_EXPIRATION = 86400; // 24 hours
+const IDEMPOTENCY_EXPIRATION_SECONDS = 86400;
+
+interface IdempotencyProcessingState {
+  status: "processing";
+  requestHash: string;
+}
+
+interface IdempotencyCompletedState {
+  status: "completed";
+  requestHash: string;
+  statusCode: number;
+  responseBody: unknown;
+}
+
+type IdempotencyState = IdempotencyProcessingState | IdempotencyCompletedState;
 
 export const idempotencyMiddleware = async (
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<void> => {
   const idempotencyKey = req.header("Idempotency-Key");
 
   if (!idempotencyKey) {
-    // Proceed normally if no key is provided (Opt-in mode)
-    return next();
+    next();
+    return;
+  }
+
+  const redis = getRedisClient();
+  if (!redis) {
+    // Fail closed: without Redis we cannot guarantee idempotency, so reject
+    // rather than silently allowing duplicate processing.
+    res.status(503).json({
+      success: false,
+      code: "DEPENDENCY_UNAVAILABLE",
+      error: "Redis is currently unavailable",
+    });
+    return;
+  }
+
+  // --- Header validation: reject malformed keys before touching Redis ---
+  const keyValidation = validateIdempotencyKey(idempotencyKey);
+  if (!keyValidation.valid) {
+    sendErrorResponse(
+      res,
+      new IdempotencyError(
+        keyValidation.reason,
+        ERROR_CODES.IDEMPOTENCY_KEY_INVALID.code,
+      ),
+      req,
+    );
+    return;
   }
 
   try {
-    const redis = getRedisClient();
     const storageKey = `idempotency:req:${idempotencyKey}`;
     const incomingHash = generateRequestHash(req.method, req.originalUrl, req.body);
-
+    const codec = getIdempotencyPayloadCodec();
     const existingData = await redis.get(storageKey);
 
     if (existingData) {
-      const parsedData = JSON.parse(existingData);
+      const parsedData = codec.deserialize<IdempotencyState>(existingData);
 
-      // Concurrent request check
       if (parsedData.status === "processing") {
-        res.status(409).json({
-          success: false,
-          error: "Conflict: This transaction is actively running.",
-        });
+        sendErrorResponse(
+          res,
+          new IdempotencyError(
+            "Conflict: This transaction is actively running.",
+            ERROR_CODES.IDEMPOTENCY_IN_PROGRESS.code,
+          ),
+          req,
+        );
         return;
       }
 
-      // Payload mismatch check
       if (parsedData.requestHash !== incomingHash) {
-        res.status(422).json({
-          success: false,
-          error: "Unprocessable Entity: Idempotency-Key used with different payload.",
-        });
+        sendErrorResponse(
+          res,
+          new IdempotencyError(
+            "Unprocessable Entity: Idempotency-Key used with different payload.",
+            ERROR_CODES.IDEMPOTENCY_KEY_MISMATCH.code,
+          ),
+          req,
+        );
         return;
       }
 
-      // Duplicate request (Happy Path): Serve cached result
-      if (parsedData.status === "completed") {
-        res.status(parsedData.statusCode).json(parsedData.responseBody);
-        return;
-      }
-    }
-
-    // Cache Miss: Safely attempt to claim the atomic lock using NX (Not Exists)
-    const processingState = {
-      status: "processing",
-      requestHash: incomingHash,
-    };
-    
-    const lockAcquired = await redis.set(
-      storageKey, 
-      JSON.stringify(processingState), 
-      "EX", 
-      IDEMPOTENCY_EXPIRATION, 
-      "NX"
-    );
-
-    if (lockAcquired !== "OK") {
-      // Race Condition caught - another duplicate snagged the lock in the same millisecond!
-      res.status(409).json({
-        success: false,
-        error: "Conflict: This transaction is actively running.",
-      });
+      res.status(parsedData.statusCode).json(parsedData.responseBody);
       return;
     }
 
-    // Attach hook natively into Express res.json method
+    const processingState: IdempotencyProcessingState = {
+      status: "processing",
+      requestMethod: req.method,
+      requestPath: req.originalUrl,
+      requestHash: incomingHash,
+    };
+
+    const lockAcquired = await redis.set(
+      storageKey,
+      codec.serialize(processingState),
+      "EX",
+      IDEMPOTENCY_EXPIRATION_SECONDS,
+      "NX",
+    );
+
+    if (lockAcquired !== "OK") {
+      sendErrorResponse(
+        res,
+        new IdempotencyError(
+          "Conflict: This transaction is actively running.",
+          ERROR_CODES.IDEMPOTENCY_IN_PROGRESS.code,
+        ),
+        req,
+      );
+      return;
+    }
+
     const originalJson = res.json.bind(res);
 
-    res.json = (body: any) => {
-      // Lock in final resolved response values and write passively
-      const completedState = {
+    res.json = ((body: unknown) => {
+      const completedState: IdempotencyCompletedState = {
         status: "completed",
+        requestMethod: req.method,
+        requestPath: req.originalUrl,
         requestHash: incomingHash,
         statusCode: res.statusCode,
         responseBody: body,
       };
 
-      redis.set(storageKey, JSON.stringify(completedState), "EX", IDEMPOTENCY_EXPIRATION).catch((err: Error) => {
-        console.error("Failed to safely commit final idempotency state:", err.message);
-      });
+      redis
+        .set(
+          storageKey,
+          codec.serialize(completedState),
+          "EX",
+          IDEMPOTENCY_EXPIRATION_SECONDS,
+        )
+        .catch((error: Error) => {
+          console.error("Failed to persist idempotency response:", error.message);
+        });
 
-      // Stream original data out
       return originalJson(body);
-    };
+    }) as Response["json"];
 
     next();
-  } catch (err) {
-    // Kick complex infrastructure failures to the main global ErrorHandler safely
-    next(err);
+  } catch (error) {
+    next(error);
   }
 };

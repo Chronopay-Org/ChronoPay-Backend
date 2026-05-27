@@ -42,34 +42,51 @@ const getLogLevel = (): string => {
 const sanitizeForLogging = (
   obj: Record<string, unknown>
 ): Record<string, unknown> => {
-  const sensitiveFields = [
+  const sensitiveFields = new Set([
     "password",
     "secret",
     "token",
     "apiKey",
     "api_key",
+    "x-api-key",
     "authorization",
     "Authorization",
     "cookie",
     "session",
     "privateKey",
     "private_key",
-  ];
+  ]);
 
-  const sanitized: Record<string, unknown> = { ...obj };
+  const maskValue = (value: string): string =>
+    value.length > 4
+      ? `${value.substring(0, 2)}***${value.substring(value.length - 2)}`
+      : "***";
 
-  for (const field of sensitiveFields) {
-    if (field in sanitized && typeof sanitized[field] === "string") {
-      const value = sanitized[field] as string;
-      // Mask but don't completely remove - shows that data was present
-      sanitized[field] =
-        value.length > 4
-          ? `${value.substring(0, 2)}***${value.substring(value.length - 2)}`
-          : "***";
+  const sanitize = (input: unknown): unknown => {
+    if (Array.isArray(input)) {
+      return input.map(sanitize);
     }
-  }
 
-  return sanitized;
+    if (input && typeof input === "object") {
+      const result: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+        if (value === undefined) {
+          continue;
+        }
+
+        if (sensitiveFields.has(key) && typeof value === "string") {
+          result[key] = maskValue(value);
+        } else {
+          result[key] = sanitize(value);
+        }
+      }
+      return result;
+    }
+
+    return input;
+  };
+
+  return sanitize(obj) as Record<string, unknown>;
 };
 
 /**
@@ -125,8 +142,10 @@ const createLoggerConfig = (): any => {
       paths: [
         "headers.authorization",
         "headers.cookie",
+        "headers['x-api-key']",
         "req.headers.authorization",
         "req.headers.cookie",
+        "req.headers['x-api-key']",
         "body.password",
         "body.secret",
         "query.token",

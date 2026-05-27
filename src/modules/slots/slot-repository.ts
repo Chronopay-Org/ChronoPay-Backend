@@ -9,6 +9,17 @@ export interface SlotRecord {
 export interface SlotRepository {
   list(): SlotRecord[];
   findById(slotId: string): SlotRecord | undefined;
+  /**
+   * Returns true if any existing slot for the same professional overlaps
+   * [startTime, endTime). Adjacency (end == start) is NOT a conflict.
+   * Optionally excludes a slot by id (used during updates).
+   */
+  hasConflict(
+    professional: string,
+    startTime: number,
+    endTime: number,
+    excludeId?: string,
+  ): boolean;
 }
 
 const DEFAULT_SLOTS: SlotRecord[] = [
@@ -49,5 +60,20 @@ export class InMemorySlotRepository implements SlotRepository {
   findById(slotId: string): SlotRecord | undefined {
     const slot = this.slots.find((entry) => entry.id === slotId);
     return slot ? { ...slot } : undefined;
+  }
+
+  hasConflict(
+    professional: string,
+    startTime: number,
+    endTime: number,
+    excludeId?: string,
+  ): boolean {
+    return this.slots.some(
+      (s) =>
+        s.professional === professional &&
+        s.id !== excludeId &&
+        s.startTime < endTime &&
+        s.endTime > startTime,
+    );
   }
 }

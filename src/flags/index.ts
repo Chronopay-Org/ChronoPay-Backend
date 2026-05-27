@@ -1,4 +1,5 @@
 export { FEATURE_FLAGS } from "./registry.js";
+export { getAllGuardedFeatureRoutes, isGuardedRouteRegistered } from "./registry.js";
 export {
   getFeatureFlagAccessor,
   getFeatureFlagsSnapshot,
