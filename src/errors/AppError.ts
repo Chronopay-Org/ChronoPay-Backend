@@ -14,7 +14,8 @@ import { ERROR_CODES, type ErrorCodeString } from "./errorCodes.js";
 export interface AppErrorEnvelope {
   success: false;
   code: ErrorCodeString | string;
-  error: string;
+  message: string;
+  error?: string;
   timestamp: string;
   requestId?: string;
   details?: unknown;
@@ -53,6 +54,7 @@ export class AppError extends Error {
     const envelope: AppErrorEnvelope = {
       success: false,
       code: this.code,
+      message: this.message,
       error: this.message,
       timestamp: this.timestamp,
     };
