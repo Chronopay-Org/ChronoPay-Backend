@@ -10,6 +10,7 @@ import {
   extractIdentity,
   RequestLogContext,
 } from "../utils/logContext.js";
+import { validateRequestId } from "./headerValidation.js";
 
 /**
  * Extended Express request interface to include timing and custom properties
@@ -18,6 +19,7 @@ declare module "express" {
   interface Request {
     startTime?: number;
     logContext?: RequestLogContext;
+    requestId?: string;
   }
 }
 
