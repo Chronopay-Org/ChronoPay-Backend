@@ -20,7 +20,7 @@ export interface IdentityContext {
 const ROUTE_PLACEHOLDER = "__route_placeholder__";
 
 export function buildRequestLogContext(req: Request): RequestLogContext {
-  const requestId = (req as any).id || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const requestId = (req as any).requestId || (req as any).id || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const route = req.route?.path || req.path || req.originalUrl || ROUTE_PLACEHOLDER;
 
   return {

@@ -10,6 +10,10 @@
 
 import { Redis } from 'ioredis';
 
+/** @internal - Exposed for testing only. */
+export let _isTestMock = false;
+export function _setTestMock(val: boolean) { _isTestMock = val; }
+
 /**
  * Dummy store for test mode (rate limiting is skipped anyway).
  */
@@ -38,7 +42,10 @@ function createRedisClient(): Redis {
     maxRetriesPerRequest: null, // No limit on retries for commands
     enableReadyCheck: true,
     lazyConnect: true,
+    showFriendlyErrorStack: process.env.NODE_ENV !== 'production',
     retryStrategy: (times) => {
+      // In test mode, don't retry to avoid hanging tests
+      if (process.env.NODE_ENV === 'test') return null;
       // Give up after 10 attempts, delay capped at 2s
       if (times > 10) return null;
       return Math.min(times * 100, 2000);
@@ -58,8 +65,19 @@ function createRedisClient(): Redis {
  *
  * `expiryTime` is an absolute Unix timestamp in milliseconds.
  */
+export interface RateLimitStore extends ReturnType<typeof createRedisStore> {
+  close?: () => Promise<void>;
+}
+
 function createRedisStore() {
   const client = createRedisClient();
+
+  // Handle errors to prevent process crashes and hanging tests
+  client.on('error', (err) => {
+    if (process.env.NODE_ENV !== 'test') {
+      console.error('Redis RateLimitStore Error:', err);
+    }
+  });
 
   return {
     async incr(key: string, expiryTime?: number, callback?: (err: Error | null, count?: number) => void): Promise<number> {
@@ -73,8 +91,9 @@ function createRedisStore() {
           }
         }
         const results = await multi.exec();
-        // results is an array of command results; first is the incremented count
-        const count = results?.[0] as number;
+        // results is an array of [error, result] pairs.
+        // The first command was INCR, so its result is at index 0, position 1.
+        const count = results?.[0]?.[1] as number;
         callback?.(null, count);
         return count;
       } catch (err) {
@@ -105,6 +124,10 @@ function createRedisStore() {
         callback?.(error);
       }
     },
+
+    async close(): Promise<void> {
+      await client.quit();
+    }
   };
 }
 
@@ -112,12 +135,27 @@ function createRedisStore() {
  * Shared store instance.
  * In test mode: uses a dummy no-op store.
  * In production: uses Redis.
+ *
+ * @internal - Exposed for testing only.
  */
-export const rateLimitRedisStore = (() => {
-  if (process.env.NODE_ENV === 'test') {
+export function _createStore(env: string = process.env.NODE_ENV || 'development'): RateLimitStore {
+  if (env === 'test' && !_isTestMock) {
     return createNoopStore();
   }
   return createRedisStore();
-})();
+}
+
+let memoizedStore: RateLimitStore | undefined;
+export function _resetStore() { memoizedStore = undefined; }
+
+export const rateLimitRedisStore = new Proxy({} as RateLimitStore, {
+  get(_target, prop: keyof RateLimitStore) {
+    if (!memoizedStore) {
+      memoizedStore = _createStore();
+    }
+    const val = memoizedStore[prop];
+    return typeof val === 'function' ? val.bind(memoizedStore) : val;
+  }
+});
 
 

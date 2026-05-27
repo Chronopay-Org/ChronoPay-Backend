@@ -40,9 +40,10 @@ export type Slot = {
 
 const router = Router();
 
-// ─── In-memory store (for Redis-cache route tests) ────────────────────────────
-let nextId = 1;
-const slotStore: Slot[] = [];
+router.get("/", async (req: Request, res: Response) => {
+  const cursorQ = req.query.cursor as string | undefined;
+  const limitQ = req.query.limit;
+  const sortQ = (req.query.sort as string) || "asc";
 
 export function resetSlotStore(): void {
   slotStore.length = 0;
@@ -50,24 +51,17 @@ export function resetSlotStore(): void {
   slotService.reset();
 }
 
-export function findSlotById(id: number): Slot | undefined {
-  return slotStore.find((slot) => slot.id === id);
-}
-
-export function removeSlotById(id: number): Slot | undefined {
-  const index = slotStore.findIndex((slot) => slot.id === id);
-  if (index < 0) {
-    return undefined;
+  if (!Number.isInteger(limit) || limit < 1) {
+    return res.status(400).json({ success: false, error: "Invalid limit" });
   }
-  const [removed] = slotStore.splice(index, 1);
-  return removed;
-}
 
-export function listStoredSlots(): Slot[] {
-  return [...slotStore];
-}
+  if (limit > MAX_LIMIT) {
+    return res.status(400).json({ success: false, error: `limit must be <= ${MAX_LIMIT}` });
+  }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+  if (!["asc", "desc"].includes(sortQ)) {
+    return res.status(400).json({ success: false, error: "Invalid sort; must be 'asc' or 'desc'" });
+  }
 
 /**
  * @openapi
@@ -109,80 +103,15 @@ export function listStoredSlots(): Slot[] {
 router.get("/", async (_req: Request, res: Response): Promise<void> => {
   const { slots, cacheStatus } = await getOrFetchSlots(async () => [...slotStore] as unknown as CacheSlot[]);
 
-  res.set("X-Cache", cacheStatus === "HIT" ? "HIT" : "MISS");
-  res.json({ slots });
+  res.json({ data, cursor: cursorQ || null, nextCursor, limit, total });
 });
 
-/**
- * @openapi
- * /api/v1/slots:
- *   post:
- *     summary: Create a new slot
- *     description: >
- *       Creates a slot and invalidates the `slots:all` cache so the next GET
- *       reflects the new record. Requires API key authentication for service access.
- *     tags: [Slots]
- *     security:
- *       - apiKeyAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/CreateSlotInput'
- *     responses:
- *       201:
- *         description: Slot created successfully.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 slot:
- *                   $ref: '#/components/schemas/Slot'
- *       400:
- *         description: Missing required fields.
- *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
- *       403:
- *         $ref: '#/components/responses/ForbiddenError'
- *
- * @openapi
- * components:
- *   schemas:
- *     Slot:
- *       type: object
- *       properties:
- *         id:
- *           type: integer
- *         professional:
- *           type: string
- *         startTime:
- *           type: string
- *           format: date-time
- *         endTime:
- *           type: string
- *           format: date-time
- *     CreateSlotInput:
- *       type: object
- *       required: [professional, startTime, endTime]
- *       properties:
- *         professional:
- *           type: string
- *         startTime:
- *           type: string
- *           format: date-time
- *         endTime:
- *           type: string
- *           format: date-time
- */
 router.post(
   "/",
+  requireAuth("chronopay"),
   validateRequiredFields(["professional", "startTime", "endTime"]),
   idempotencyMiddleware,
-  async (req: Request, res: Response): Promise<void> => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const { professional, startTime, endTime } = req.body as {
       professional: string;
       startTime: string | number;
@@ -194,8 +123,7 @@ router.post(
     const end = typeof endTime === "number" ? endTime : Date.parse(endTime);
 
     if (!isNaN(start) && !isNaN(end) && start >= end) {
-      res.status(400).json({ success: false, error: "endTime must be greater than startTime" });
-      return;
+      throw new BadRequestError("endTime must be greater than startTime");
     }
 
     try {
@@ -228,10 +156,10 @@ router.post(
       res.status(201).json({ success: true, slot, meta: { invalidatedKeys } });
     } catch (err) {
       if (err instanceof SlotValidationError) {
-        res.status(400).json({ success: false, error: err.message });
+        next(new BadRequestError(err.message));
         return;
       }
-      res.status(500).json({ success: false, error: "Slot creation failed" });
+      next(new InternalServerError("Slot creation failed"));
     }
   },
 );
@@ -274,11 +202,11 @@ router.post(
  *       404:
  *         description: Slot not found
  */
-router.get("/:id", async (req: Request, res: Response): Promise<void> => {
+router.get("/:id", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   const id = Number(req.params.id);
 
   if (!Number.isInteger(id) || id <= 0) {
-    res.status(400).json({ success: false, error: "Invalid slot id" });
+    next(new BadRequestError("Invalid slot id"));
     return;
   }
 
@@ -288,7 +216,7 @@ router.get("/:id", async (req: Request, res: Response): Promise<void> => {
     if (cached !== null) {
       const slot = (cached as CacheSlot[]).find((s) => s.id === id);
       if (!slot) {
-        res.status(404).json({ success: false, error: "Slot not found" });
+        next(new NotFoundError("Slot not found"));
         return;
       }
       res.set("X-Cache", "HIT");
@@ -296,12 +224,12 @@ router.get("/:id", async (req: Request, res: Response): Promise<void> => {
       return;
     }
   } catch (err) {
-    console.error("Redis GET failed for slot by id:", err);
+    logger.error({ err, requestId: req.requestId ?? req.id }, "Redis GET failed for slot by id");
   }
 
   const slot = slotStore.find((s) => s.id === id);
   if (!slot) {
-    res.status(404).json({ success: false, error: "Slot not found" });
+    next(new NotFoundError("Slot not found"));
     return;
   }
 

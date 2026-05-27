@@ -1,6 +1,12 @@
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 
+declare module "express" {
+  interface Request {
+    requestId?: string;
+  }
+}
+
 export const REQUEST_ID_HEADER = "x-request-id";
 const REQUEST_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9\-_.]{7,127}$/;
 
