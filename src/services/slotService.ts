@@ -215,6 +215,19 @@ export class SlotService {
     return { ...updated };
   }
 
+  findById(id: number): SlotRecord | undefined {
+    return this.slots.find((slot) => slot.id === id);
+  }
+
+  deleteSlot(id: number): void {
+    const index = this.slots.findIndex((slot) => slot.id === id);
+    if (index === -1) {
+      throw new SlotNotFoundError(id);
+    }
+    this.slots.splice(index, 1);
+    this.cache?.invalidate(SLOT_LIST_CACHE_KEY);
+  }
+
   /** Traced wrapper — use this from route handlers. */
   updateSlotTraced(
     id: number,
