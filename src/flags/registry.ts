@@ -34,12 +34,14 @@ export const FEATURE_FLAGS: Record<FeatureFlagName, FeatureFlagDefinition> = {
     description: "Enable booking intent creation via POST /api/v1/booking-intents",
     // Default false for safe rollout; enable explicitly in production.
     defaultEnabled: false,
+    guardedRoutes: [],
   },
   CHECKOUT: {
     envVar: "FF_CHECKOUT",
     description: "Enable checkout endpoints (POST/GET /api/v1/checkout/sessions). Set to false to kill-switch during incidents.",
     // Default true: checkout is enabled unless explicitly disabled.
     defaultEnabled: true,
+    guardedRoutes: [],
   },
   SMS_NOTIFICATIONS: {
     envVar: "FF_SMS_NOTIFICATIONS",
