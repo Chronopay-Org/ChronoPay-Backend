@@ -5,7 +5,7 @@
  */
 
 import { Request, Response, NextFunction } from "express";
-import { verifyJwt, VerifiedJwtPayload } from "../utils/jwt.js";
+import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
 
 export enum UserRole {
   USER = "user",
@@ -43,13 +43,14 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
     return res.status(401).json({ success: false, error: "Unauthorized" });
   }
 
-  try {
-    const decoded = verifyJwt(token);
-    req.user = decoded;
-    next();
-  } catch (error) {
-    return res.status(401).json({ success: false, error: "Unauthorized" });
-  }
+  void verifyJwt(token)
+    .then((decoded) => {
+      req.user = decoded;
+      next();
+    })
+    .catch(() => {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    });
 }
 
 /**
