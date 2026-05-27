@@ -5,8 +5,7 @@ import express, { Request, Response } from "express";
 import { configService } from "./config/config.service.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
-import { configService } from "./config/config.service.js";
-import { securityHeaders, createSecurityHeaders } from "./middleware/securityHeaders.js";
+import { securityHeaders } from "./middleware/securityHeaders.js";
 import {
   genericErrorHandler,
   jsonParseErrorHandler,
@@ -22,6 +21,9 @@ import { createBookingIntentsRouter } from "./routes/booking-intents.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
 import { AmountUtils } from "./utils/amount.js";
 import checkoutRouter from "./routes/checkout.js";
+import { configService } from "./config/config.service.js";
+import type { SlotRepository } from "./modules/slots/slot-repository.js";
+import type { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
 
 export interface AppFactoryOptions {
   apiKey?: string;

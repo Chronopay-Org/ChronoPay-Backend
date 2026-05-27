@@ -1,15 +1,13 @@
 import type { NextFunction, Request, Response } from "express";
-import { configService } from "../config/config.service.js";
-import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
-
-function emitAuthAudit(
-  _req: Request,
-  _action: string,
-  _status: number,
-  _meta?: Record<string, unknown>,
-): void {
-  // Stub — wired to the audit system in production.
-}
+import { jwtVerify } from "jose";
+import {
+  ForbiddenError,
+  InternalServerError,
+  UnauthorizedError,
+} from "../errors/AppError.js";
+import { ERROR_CODES } from "../errors/errorCodes.js";
+import { sendErrorResponse } from "../errors/sendError.js";
+import { defaultAuditLogger } from "../services/auditLogger.js";
 
 export type ChronoPayRole = "customer" | "admin" | "professional";
 
@@ -107,3 +105,25 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[] = ["cust
     }
   };
 }
+
+function emitAuthAudit(
+  req: Request,
+  action: string,
+  status: number,
+  extra?: Record<string, unknown>,
+): void {
+  defaultAuditLogger.log(
+    `auth.${action}`,
+    {
+      method: req.method,
+      ...extra,
+    },
+    {
+      actorIp: req.ip || req.socket?.remoteAddress,
+      resource: req.originalUrl,
+      status,
+    },
+  ).catch(() => {}); // Fire and forget
+}
+
+// Removed duplicate export of authenticateToken
