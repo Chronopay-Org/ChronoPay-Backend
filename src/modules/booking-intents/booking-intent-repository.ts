@@ -14,12 +14,15 @@ export interface BookingIntentRecord {
   createdAt: string;
 }
 
+
 export interface BookingIntentRepository {
   create(intent: Omit<BookingIntentRecord, "id">): BookingIntentRecord;
   findById(id: string): BookingIntentRecord | undefined;
   findBySlotId(slotId: string): BookingIntentRecord | undefined;
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
-  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord;
+  findById(id: string): BookingIntentRecord | undefined;
+  listByCustomer(customerId: string): BookingIntentRecord[];
+  listAll(): BookingIntentRecord[];
 }
 
 export class InMemoryBookingIntentRepository implements BookingIntentRepository {
@@ -43,27 +46,16 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
     return intent ? { ...intent } : undefined;
   }
 
-  async findBySlotIdAndCustomer(slotId: string, customerId: string): Promise<BookingIntentRecord | undefined> {
-    const intent = this.intents.find(
-      (entry) =>
-        entry.slotId === slotId &&
-        entry.customerId === customerId &&
-        entry.status === "pending",
-    );
-    return intent ? { ...intent } : undefined;
-  }
-
   findById(id: string): BookingIntentRecord | undefined {
     const intent = this.intents.find((entry) => entry.id === id);
     return intent ? { ...intent } : undefined;
   }
 
-  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord {
-    const index = this.intents.findIndex((entry) => entry.id === id);
-    if (index === -1) {
-      throw new Error(`Booking intent ${id} not found`);
-    }
-    this.intents[index] = { ...this.intents[index], status };
-    return { ...this.intents[index] };
+  listByCustomer(customerId: string): BookingIntentRecord[] {
+    return this.intents.filter((entry) => entry.customerId === customerId).map((i) => ({ ...i }));
+  }
+
+  listAll(): BookingIntentRecord[] {
+    return this.intents.map((i) => ({ ...i }));
   }
 }
