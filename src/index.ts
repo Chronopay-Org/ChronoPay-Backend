@@ -1,30 +1,95 @@
-import { createApp } from "./app.js";
+import { createServer, type Server, IncomingMessage, ServerResponse } from "http";
 import { loadEnvConfig, type EnvConfig } from "./config/env.js";
-import { logInfo } from "./utils/logger.js";
+import { stopScheduler } from "./scheduler/reminderScheduler.js";
+import { closePool } from "./db/connection.js";
 
-// If you want to add global middleware (like timeout), do it in createApp in app.js
+export const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+let server: Server | undefined;
+let isShuttingDown = false;
+const activeRequests = new Set<IncomingMessage>();
+
+export function setServer(s: Server | undefined): void {
+  server = s;
+}
+
+export function resetShutdownFlag(): void {
+  isShuttingDown = false;
+}
+
+export function getActiveRequestCount(): number {
+  return activeRequests.size;
+}
 
 export function startServer(
-  server: { listen: (port: number, callback?: () => void) => unknown },
+  listener: { listen: (port: number, callback?: () => void) => unknown },
   config: EnvConfig,
 ) {
-  return server.listen(config.port, () => {
+  return listener.listen(config.port, () => {
     console.log(`ChronoPay API listening on http://localhost:${config.port}`);
   });
 }
 
-const config = loadEnvConfig();
-const app = createApp();
+export async function gracefulShutdown(): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
 
-const PORT = process.env.PORT || 3000;
+  stopScheduler();
 
-// Error handler (must be last)
-// If not already in createApp, add: app.use(errorHandler);
+  if (server) {
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+  }
 
-if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+  const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
+  while (activeRequests.size > 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  await closePool();
 }
 
-export default app;
+async function shutdownWithTimeout(): Promise<void> {
+  let forceExit = false;
+  const timer = setTimeout(() => {
+    forceExit = true;
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+
+  try {
+    await gracefulShutdown();
+  } finally {
+    clearTimeout(timer);
+    if (!forceExit) {
+      process.exit(0);
+    }
+  }
+}
+
+if (process.env.NODE_ENV !== "test") {
+  const { createApp } = await import("./app.js");
+  const config = loadEnvConfig();
+  const app = createApp();
+  server = createServer(app);
+
+  server.on("request", (req: IncomingMessage, res: ServerResponse) => {
+    activeRequests.add(req);
+    const cleanup = () => activeRequests.delete(req);
+    res.on("finish", cleanup);
+    res.on("close", cleanup);
+  });
+
+  server.listen(config.port, () => {
+    console.log(`Server running on port ${config.port}`);
+  });
+
+  const handleSignal = () => {
+    if (!isShuttingDown) {
+      void shutdownWithTimeout();
+    }
+  };
+
+  process.on("SIGTERM", handleSignal);
+  process.on("SIGINT", handleSignal);
+}
+
+export default server;
