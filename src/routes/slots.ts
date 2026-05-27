@@ -118,19 +118,38 @@ router.post(
       endTime: string | number;
     };
 
-    // Validate time range
+    // Parse and validate time values
     const start = typeof startTime === "number" ? startTime : Date.parse(startTime);
     const end = typeof endTime === "number" ? endTime : Date.parse(endTime);
 
-    if (!isNaN(start) && !isNaN(end) && start >= end) {
-      throw new BadRequestError("endTime must be greater than startTime");
+    // Reject unparseable times with 422
+    if (isNaN(start)) {
+      res.status(422).json({ success: false, error: "startTime must be a valid numeric epoch or ISO-8601 date-time string" });
+      return;
+    }
+    if (isNaN(end)) {
+      res.status(422).json({ success: false, error: "endTime must be a valid numeric epoch or ISO-8601 date-time string" });
+      return;
+    }
+
+    // Validate time range
+    if (start >= end) {
+      res.status(400).json({ success: false, error: "endTime must be greater than startTime" });
+      return;
+    }
+
+    // Add max duration guard (24 hours in milliseconds)
+    const MAX_DURATION_MS = 24 * 60 * 60 * 1000;
+    if (end - start > MAX_DURATION_MS) {
+      res.status(422).json({ success: false, error: "Slot duration cannot exceed 24 hours" });
+      return;
     }
 
     try {
       const created = slotService.createSlot({
         professional,
-        startTime: typeof startTime === "number" ? startTime : (isNaN(start) ? 0 : start),
-        endTime: typeof endTime === "number" ? endTime : (isNaN(end) ? 0 : end),
+        startTime: start,
+        endTime: end,
       });
 
       const slot: Slot = {
