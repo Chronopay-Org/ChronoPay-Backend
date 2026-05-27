@@ -19,15 +19,16 @@ import {
     BookingIntentError,
     parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
-import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
-import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
+import { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
+import { PgBookingIntentRepository } from "../modules/booking-intents/pg-booking-intent-repository.js";
+import { SlotRepository, InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 
-export function createBookingIntentsRouter() {
+export function createBookingIntentsRouter(
+    bookingIntentRepository: BookingIntentRepository = new PgBookingIntentRepository(),
+    slotRepository: SlotRepository = new InMemorySlotRepository(),
+) {
     const router = Router();
 
-    // ─── Repositories (replace with DB layer in production) ────────────────────
-    const bookingIntentRepository = new InMemoryBookingIntentRepository();
-    const slotRepository = new InMemorySlotRepository();
     const bookingIntentService = new BookingIntentService(
         bookingIntentRepository,
         slotRepository,
@@ -39,10 +40,10 @@ export function createBookingIntentsRouter() {
         requireAuthenticatedActor(["customer", "admin"]),
         createAuthAwareRateLimiter(),
         auditMiddleware("CREATE_BOOKING_INTENT"),
-        (req: AuthenticatedRequest, res: Response): void => {
+        async (req: AuthenticatedRequest, res: Response): Promise<void> => {
             try {
                 const input = parseCreateBookingIntentBody(req.body);
-                const intent = bookingIntentService.createIntent(input, req.auth!);
+                const intent = await bookingIntentService.createIntent(input, req.auth!);
 
                 res.status(201).json({
                     success: true,

@@ -13,11 +13,12 @@ import { validateRequiredFields } from "./middleware/validation.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
 import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./middleware/featureFlags.js";
+import { timeoutMiddleware } from "./middleware/timeout.js";
 import { createBookingIntentsRouter } from "./routes/booking-intents.js";
+import { SlotRepository } from "./modules/slots/slot-repository.js";
+import { configService } from "./config/config.service.js";
 import { AmountUtils } from "./utils/amount.js";
 import checkoutRouter from "./routes/checkout.js";
-import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
-import { createRequestLogger } from "./middleware/requestLogger.js";
 
 export interface AppFactoryOptions {
   apiKey?: string;
@@ -26,7 +27,6 @@ export interface AppFactoryOptions {
   enableContentNegotiation?: boolean;
   contentNegotiationExcludePaths?: string[];
   slotRepository?: SlotRepository;
-  bookingIntentService?: BookingIntentService;
 }
 
 function registerSwaggerDocs(app: express.Express) {
@@ -538,6 +538,9 @@ export function createApp(options: AppFactoryOptions = {}) {
   // ── Security headers middleware (applied early) ────────────────────────────
   app.use(securityHeaders);
 
+  // ── Global request timeout middleware ──────────────────────────────────────
+  app.use(timeoutMiddleware());
+
   app.use(cors());
 
   // Content negotiation BEFORE express.json() to reject invalid Content-Type early
@@ -578,7 +581,10 @@ export function createApp(options: AppFactoryOptions = {}) {
   );
 
   // ── Booking intents routes ─────────────────────────────────────────────────
-  app.use("/api/v1/booking-intents", createBookingIntentsRouter());
+  app.use(
+    "/api/v1/booking-intents",
+    createBookingIntentsRouter(undefined, options.slotRepository)
+  );
   app.use("/api/v1/checkout", checkoutRouter);
 
   if (options.enableTestRoutes) {
