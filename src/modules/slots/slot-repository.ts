@@ -20,25 +20,27 @@ export interface SlotRepository {
     endTime: number,
     excludeId?: string,
   ): boolean;
+  /** Atomically update the bookable flag on a slot. */
+  updateBookable(slotId: string, bookable: boolean): void;
 }
 
 const DEFAULT_SLOTS: SlotRecord[] = [
   {
-    id: "slot-100",
+    id: "slot-11111111-1111-4111-8111-111111111111",
     professional: "alice",
     startTime: 1_900_000_000_000,
     endTime: 1_900_000_360_000,
     bookable: true,
   },
   {
-    id: "slot-101",
+    id: "slot-22222222-2222-4222-8222-222222222222",
     professional: "bob",
     startTime: 1_900_000_720_000,
     endTime: 1_900_001_080_000,
     bookable: true,
   },
   {
-    id: "slot-102",
+    id: "slot-33333333-3333-4333-8333-333333333333",
     professional: "charlie",
     startTime: 1_900_001_440_000,
     endTime: 1_900_001_800_000,
@@ -75,5 +77,13 @@ export class InMemorySlotRepository implements SlotRepository {
         s.startTime < endTime &&
         s.endTime > startTime,
     );
+  }
+
+  updateBookable(slotId: string, bookable: boolean): void {
+    const slot = this.slots.find((s) => s.id === slotId);
+    if (!slot) {
+      throw new Error(`Slot ${slotId} not found`);
+    }
+    slot.bookable = bookable;
   }
 }

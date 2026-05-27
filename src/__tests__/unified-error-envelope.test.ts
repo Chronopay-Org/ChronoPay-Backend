@@ -109,7 +109,7 @@ describe("Route adapters using shared AppError envelope", () => {
       .post("/api/v1/booking-intents")
       .set("x-chronopay-user-id", "customer-1")
       .set("x-chronopay-role", "customer")
-      .send({ slotId: "missing-slot" });
+      .send({ slotId: "slot-00000000-0000-4000-8000-000000000000" });
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual(

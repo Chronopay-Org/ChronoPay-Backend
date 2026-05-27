@@ -1,21 +1,18 @@
-import jwt, { JwtPayload } from "jsonwebtoken";
-import { getJwtConfig } from "../config/jwt.js";
+import { SignJWT, jwtVerify, type JWTPayload } from "jose";
+import { configService } from "../config/config.service.js";
 
-export interface VerifiedJwtPayload extends JwtPayload {
+export interface VerifiedJwtPayload extends JWTPayload {
+  sub?: string;
+  role?: string;
+  email?: string;
+  id?: string;
+  iat?: number;
   exp: number;
-  iat: number;
-  [key: string]: any;
 }
 
-export function verifyJwt(token: string): VerifiedJwtPayload {
-  const config = getJwtConfig();
-  try {
-    const decoded = jwt.verify(token, config.secret, {
-      issuer: config.issuer,
-      audience: config.audience,
-      algorithms: config.algorithms,
-      clockTolerance: config.leewaySeconds,
-    }) as JwtPayload;
+export async function verifyJwt(token: string, options?: { issuer?: string; audience?: string }) {
+  const secrets = configService.getAllSecretVersions("JWT_SECRET");
+  const encoder = new TextEncoder();
 
     // Audience shape validation
     const aud = decoded.aud;
@@ -23,7 +20,7 @@ export function verifyJwt(token: string): VerifiedJwtPayload {
       if (typeof aud !== "string" && !Array.isArray(aud)) {
         throw new Error("Invalid audience shape: must be string or array of strings");
       }
-      if (Array.isArray(aud) && !aud.every(a => typeof a === "string")) {
+      if (Array.isArray(aud) && !aud.every((a) => typeof a === "string")) {
         throw new Error("Invalid audience shape: array must contain only strings");
       }
     }
@@ -38,7 +35,48 @@ export function verifyJwt(token: string): VerifiedJwtPayload {
     }
 
     return decoded as VerifiedJwtPayload;
-  } catch (error) {
+  } catch {
     throw new Error("INVALID_TOKEN");
   }
+  if (options?.audience ?? configService.jwtAudience) {
+    verifyOptions.audience = options?.audience ?? configService.jwtAudience;
+  }
+
+  for (const secret of secrets) {
+    try {
+      const { payload } = await jwtVerify(token, encoder.encode(secret), verifyOptions);
+      if (typeof payload.exp !== "number") {
+        throw new Error("Token missing exp claim");
+      }
+
+      return payload as VerifiedJwtPayload;
+    } catch {
+      // try next secret
+    }
+  }
+
+  throw new Error("INVALID_TOKEN");
+}
+
+export async function signJwt(
+  payload: JWTPayload,
+  secret: string,
+  options?: { expiresInSec?: number; issuer?: string; audience?: string },
+) {
+  const encoder = new TextEncoder();
+  let jwt = new SignJWT(payload).setProtectedHeader({ alg: "HS256" });
+
+  if (options?.issuer) {
+    jwt = jwt.setIssuer(options.issuer);
+  }
+
+  if (options?.audience) {
+    jwt = jwt.setAudience(options.audience);
+  }
+
+  if (options?.expiresInSec !== undefined) {
+    jwt = jwt.setExpirationTime(Math.floor(Date.now() / 1000) + options.expiresInSec);
+  }
+
+  return jwt.sign(encoder.encode(secret));
 }

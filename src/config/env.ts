@@ -195,7 +195,7 @@ function parseBoolean(rawValue: string | undefined, key: string, defaultValue: b
   const val = rawValue.trim().toLowerCase();
   if (val === "true" || val === "1") return true;
   if (val === "false" || val === "0") return false;
-  issues.push(`${key} must be a boolean value (true/false).`);
+  issues.push(`${key} must be one of: true, false, 1, 0.`);
   return defaultValue;
 }
 

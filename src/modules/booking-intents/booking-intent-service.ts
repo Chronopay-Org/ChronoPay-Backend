@@ -4,6 +4,7 @@ import type {
   BookingIntentRecord,
   BookingIntentRepository,
 } from "./booking-intent-repository.js";
+import { SchedulingService } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
@@ -42,6 +43,10 @@ export class BookingIntentService {
     private readonly now: () => string = () => new Date().toISOString(),
   ) {}
 
+  private get schedulingService(): SchedulingService {
+    return new SchedulingService(this.slotRepository, this.bookingIntentRepository);
+  }
+
   createIntent(input: CreateBookingIntentInput, actor: AuthContext): BookingIntentRecord {
     const slot = this.slotRepository.findById(input.slotId);
     if (!slot) {
@@ -56,7 +61,7 @@ export class BookingIntentService {
       throw new BookingIntentError(403, "You cannot create a booking intent for your own slot.");
     }
 
-    const existingForCustomer = this.bookingIntentRepository.findBySlotIdAndCustomer(
+    const existingForCustomer = await this.bookingIntentRepository.findBySlotIdAndCustomer(
       input.slotId,
       actor.userId,
     );
@@ -64,12 +69,12 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "A booking intent already exists for this slot.");
     }
 
-    const existingForSlot = this.bookingIntentRepository.findBySlotId(input.slotId);
+    const existingForSlot = await this.bookingIntentRepository.findBySlotId(input.slotId);
     if (existingForSlot) {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
 
-    return this.bookingIntentRepository.create({
+    const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
       professional: slot.professional,
       customerId: actor.userId,
@@ -79,6 +84,48 @@ export class BookingIntentService {
       note: input.note,
       createdAt: this.now(),
     });
+
+    this.schedulingService.reserveSlot(input.slotId);
+
+    return intent;
+  }
+
+  cancelIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+      throw new BookingIntentError(403, "You are not authorized to cancel this booking intent.");
+    }
+
+    if (intent.status !== "pending") {
+      throw new BookingIntentError(409, `Cannot cancel intent with status "${intent.status}".`);
+    }
+
+    const updated = this.bookingIntentRepository.updateStatus(intentId, "cancelled");
+
+    this.schedulingService.releaseSlot(intent.slotId);
+
+    return updated;
+  }
+
+  expireIntent(intentId: string): BookingIntentRecord {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.status !== "pending") {
+      throw new BookingIntentError(409, `Cannot expire intent with status "${intent.status}".`);
+    }
+
+    const updated = this.bookingIntentRepository.updateStatus(intentId, "expired");
+
+    this.schedulingService.releaseSlot(intent.slotId);
+
+    return updated;
   }
 
   createIntentTraced(input: CreateBookingIntentInput, actor: AuthContext): Promise<BookingIntentRecord> {
@@ -89,6 +136,8 @@ export class BookingIntentService {
     );
   }
 }
+
+export const SLOT_ID_PATTERN = /^slot-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntentInput {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -102,7 +151,7 @@ export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntent
   }
 
   const normalizedSlotId = slotId.trim();
-  if (!/^[a-zA-Z0-9-]{3,64}$/.test(normalizedSlotId)) {
+  if (!SLOT_ID_PATTERN.test(normalizedSlotId)) {
     throw new BookingIntentError(400, "slotId format is invalid.");
   }
 
@@ -114,17 +163,17 @@ export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntent
     throw new BookingIntentError(400, "note must be a string when provided.");
   }
 
-  const normalizedNote = note.trim();
-  if (normalizedNote.length === 0) {
+  const sanitizedNote = sanitizeNote(note);
+  if (sanitizedNote === null) {
     throw new BookingIntentError(400, "note cannot be empty when provided.");
   }
 
-  if (normalizedNote.length > 500) {
+  if (sanitizedNote.length > 500) {
     throw new BookingIntentError(400, "note must be 500 characters or fewer.");
   }
 
   return {
     slotId: normalizedSlotId,
-    note: normalizedNote,
+    note: sanitizedNote,
   };
 }
