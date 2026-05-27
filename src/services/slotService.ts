@@ -1,4 +1,4 @@
-import { getSlotsCount, getSlotsAfter, encodeCursor, decodeCursor } from "../repositories/slotRepository";
+import { getSlotsCount, getSlotsAfter, encodeCursor, decodeCursor } from "../repositories/slotRepository.js";
 
 export const MAX_LIMIT = 100;
 

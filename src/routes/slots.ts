@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
-import { listSlotsCursor, MAX_LIMIT } from "../services/slotService";
-import { requireAuth } from "../middleware/auth";
-import { validateRequiredFields } from "../middleware/validation";
+import { listSlotsCursor, MAX_LIMIT } from "../services/slotService.js";
+import { requireAuth } from "../middleware/auth.js";
+import { validateRequiredFields } from "../middleware/validation.js";
 
 const router = Router();
 
@@ -29,7 +29,6 @@ router.get("/", async (req: Request, res: Response) => {
   res.json({ data, cursor: cursorQ || null, nextCursor, limit, total });
 });
 
-// Protected create slot endpoint
 router.post(
   "/",
   requireAuth("chronopay"),
@@ -37,7 +36,6 @@ router.post(
   async (req: Request, res: Response) => {
     const { professional, startTime, endTime } = req.body;
 
-    // In a real app, we would persist the slot and use req.auth for actor info.
     res.status(201).json({ success: true, slot: { id: 1, professional, startTime, endTime }, actor: req.auth });
   },
 );

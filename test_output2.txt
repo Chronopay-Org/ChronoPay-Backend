@@ -1,0 +1,118 @@
+﻿
+> chronopay-backend@0.1.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand
+
+node.exe : FAIL src/__
+tests__/validation.tes
+t.ts
+At line:1 char:1
++ & "C:\Program Files\
+nodejs/node.exe" 
+"C:\Program 
+Files\nodejs/node_mo 
+...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (FAIL src/_   
+ _tests__/validati    
+on.test.ts:String    
+) [], RemoteExcep    
+tion
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+  ΓùÅ Test suite 
+failed to run
+
+    [96msrc/index.ts
+[0m:[93m11[0m:[93m2
+3[0m - 
+[91merror[0m[90m 
+TS2307: [0mCannot 
+find module 
+'swagger-ui-express' 
+or its corresponding 
+type declarations.
+
+    [7m11[0m import 
+swaggerUi from 
+"swagger-ui-express";
+    [7m  [0m [91m  
+                    ~~
+~~~~~~~~~~~~~~~~~~[0m
+    [96msrc/index.ts
+[0m:[93m12[0m:[93m2
+6[0m - 
+[91merror[0m[90m 
+TS2307: [0mCannot 
+find module 
+'swagger-jsdoc' or 
+its corresponding 
+type declarations.
+
+    [7m12[0m import 
+swaggerJsdoc from 
+"swagger-jsdoc";
+    [7m  [0m [91m  
+                      
+ ~~~~~~~~~~~~~~~[0m
+
+FAIL src/__tests__/hea
+lth.test.ts
+  ΓùÅ Test suite 
+failed to run
+
+    [96msrc/index.ts
+[0m:[93m11[0m:[93m2
+3[0m - 
+[91merror[0m[90m 
+TS2307: [0mCannot 
+find module 
+'swagger-ui-express' 
+or its corresponding 
+type declarations.
+
+    [7m11[0m import 
+swaggerUi from 
+"swagger-ui-express";
+    [7m  [0m [91m  
+                    ~~
+~~~~~~~~~~~~~~~~~~[0m
+    [96msrc/index.ts
+[0m:[93m12[0m:[93m2
+6[0m - 
+[91merror[0m[90m 
+TS2307: [0mCannot 
+find module 
+'swagger-jsdoc' or 
+its corresponding 
+type declarations.
+
+    [7m12[0m import 
+swaggerJsdoc from 
+"swagger-jsdoc";
+    [7m  [0m [91m  
+                      
+ ~~~~~~~~~~~~~~~[0m
+
+Test Suites: 2 
+failed, 2 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        4.011 s
+Ran all test suites.
+(node:8520) 
+ExperimentalWarning: 
+VM Modules is an 
+experimental feature 
+and might change at 
+any time
+(Use `node 
+--trace-warnings ...` 
+to show where the 
+warning was created)

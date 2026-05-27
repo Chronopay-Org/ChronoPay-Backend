@@ -1,0 +1,69 @@
+
+> chronopay-backend@0.1.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand
+
+(node:10976) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+FAIL src/__tests__/db.test.ts
+  ● Database Pool Configuration › initDB() should log success on connection
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: "Successfully initialized PostgreSQL connection pool."
+
+    Number of calls: 0
+
+    [0m [90m 77 |[39m
+     [90m 78 |[39m     expect(mockQuery)[33m.[39mtoHaveBeenCalledWith([32m"SELECT 1 AS connected"[39m)[33m;[39m
+    [31m[1m>[22m[39m[90m 79 |[39m     expect(mockConsoleLog)[33m.[39mtoHaveBeenCalledWith([32m"Successfully initialized PostgreSQL connection pool."[39m)[33m;[39m
+     [90m    |[39m                            [31m[1m^[22m[39m
+     [90m 80 |[39m
+     [90m 81 |[39m     mockConsoleLog[33m.[39mmockRestore()[33m;[39m
+     [90m 82 |[39m   })[33m;[39m[0m
+
+      at Object.<anonymous> (src/__tests__/db.test.ts:79:28)
+
+  ● Database Pool Configuration › query() wrapper should execute and log success
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: StringMatching /Executed query in \d+ms/, ObjectContaining {"rows": 5, "text": "SELECT * FROM users WHERE id = $1"}
+
+    Number of calls: 0
+
+    [0m [90m  98 |[39m     expect(mockQuery)[33m.[39mtoHaveBeenCalledWith([32m"SELECT * FROM users WHERE id = $1"[39m[33m,[39m [[35m1[39m])[33m;[39m
+     [90m  99 |[39m     expect(result[33m.[39mrowCount)[33m.[39mtoBe([35m5[39m)[33m;[39m
+    [31m[1m>[22m[39m[90m 100 |[39m     expect(mockConsoleLog)[33m.[39mtoHaveBeenCalledWith(
+     [90m     |[39m                            [31m[1m^[22m[39m
+     [90m 101 |[39m       expect[33m.[39mstringMatching([35m/Executed query in \d+ms/[39m)[33m,[39m
+     [90m 102 |[39m       expect[33m.[39mobjectContaining({ text[33m:[39m [32m"SELECT * FROM users WHERE id = $1"[39m[33m,[39m rows[33m:[39m [35m5[39m })
+     [90m 103 |[39m     )[33m;[39m[0m
+
+      at Object.<anonymous> (src/__tests__/db.test.ts:100:28)
+
+  ● Database Pool Configuration › query() wrapper should safely catch and throw errors
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: "Database query failed", ObjectContaining {"message": "Syntax error", "text": "INVALID SQL"}
+
+    Number of calls: 0
+
+    [0m [90m 114 |[39m     [36mawait[39m expect(query([32m"INVALID SQL"[39m))[33m.[39mrejects[33m.[39mtoThrow([32m"Syntax error"[39m)[33m;[39m
+     [90m 115 |[39m
+    [31m[1m>[22m[39m[90m 116 |[39m     expect(mockConsoleError)[33m.[39mtoHaveBeenCalledWith(
+     [90m     |[39m                              [31m[1m^[22m[39m
+     [90m 117 |[39m       [32m"Database query failed"[39m[33m,[39m
+     [90m 118 |[39m       expect[33m.[39mobjectContaining({
+     [90m 119 |[39m         text[33m:[39m [32m"INVALID SQL"[39m[33m,[39m[0m
+
+      at Object.<anonymous> (src/__tests__/db.test.ts:116:30)
+
+PASS src/__tests__/validation.test.ts
+PASS src/__tests__/health.test.ts
+
+Test Suites: 1 failed, 2 passed, 3 total
+Tests:       3 failed, 10 passed, 13 total
+Snapshots:   0 total
+Time:        4.182 s, estimated 11 s
+Ran all test suites.

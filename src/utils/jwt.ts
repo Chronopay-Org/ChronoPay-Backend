@@ -1,40 +1,62 @@
-import { jwtVerify, SignJWT } from "jose";
-import { getAllSecretVersions } from "../config/jwt";
+import { SignJWT, jwtVerify, type JWTPayload } from "jose";
+import { configService } from "../config/config.service.js";
 
-export type JwtPayload = {
-  sub: string;
+export interface VerifiedJwtPayload extends JWTPayload {
+  sub?: string;
   role?: string;
-  iss?: string;
-  exp?: number;
-  [k: string]: any;
-};
+  email?: string;
+  id?: string;
+  iat?: number;
+  exp: number;
+}
 
-export async function verifyJwt(token: string, expectedIss?: string): Promise<JwtPayload> {
-  const versions = await getAllSecretVersions("JWT_SECRET");
-
+export async function verifyJwt(token: string, options?: { issuer?: string; audience?: string }) {
+  const secrets = configService.getAllSecretVersions("JWT_SECRET");
   const encoder = new TextEncoder();
 
-  // Try each active secret
-  for (const v of versions.filter((x) => x.active)) {
+  const verifyOptions: { issuer?: string; audience?: string } = {};
+  if (options?.issuer ?? configService.jwtIssuer) {
+    verifyOptions.issuer = options?.issuer ?? configService.jwtIssuer;
+  }
+  if (options?.audience ?? configService.jwtAudience) {
+    verifyOptions.audience = options?.audience ?? configService.jwtAudience;
+  }
+
+  for (const secret of secrets) {
     try {
-      const { payload } = await jwtVerify(token, encoder.encode(v.secret), { issuer: expectedIss });
-      return payload as JwtPayload;
-    } catch (err) {
-      // try next
+      const { payload } = await jwtVerify(token, encoder.encode(secret), verifyOptions);
+      if (typeof payload.exp !== "number") {
+        throw new Error("Token missing exp claim");
+      }
+
+      return payload as VerifiedJwtPayload;
+    } catch {
+      // try next secret
     }
   }
 
-  // If none succeeded, throw
-  throw new Error("Invalid token");
+  throw new Error("INVALID_TOKEN");
 }
 
-export async function signJwt(payload: object, secret: string, options?: { expiresInSec?: number; issuer?: string }) {
+export async function signJwt(
+  payload: JWTPayload,
+  secret: string,
+  options?: { expiresInSec?: number; issuer?: string; audience?: string },
+) {
   const encoder = new TextEncoder();
-  const exp = options?.expiresInSec ? Math.floor(Date.now() / 1000) + options.expiresInSec : undefined;
+  let jwt = new SignJWT(payload).setProtectedHeader({ alg: "HS256" });
 
-  let jwt = new SignJWT(payload as any).setProtectedHeader({ alg: "HS256" });
-  if (options?.issuer) jwt = jwt.setIssuer(options.issuer);
-  if (exp) jwt = jwt.setExpirationTime(exp);
+  if (options?.issuer) {
+    jwt = jwt.setIssuer(options.issuer);
+  }
+
+  if (options?.audience) {
+    jwt = jwt.setAudience(options.audience);
+  }
+
+  if (options?.expiresInSec !== undefined) {
+    jwt = jwt.setExpirationTime(Math.floor(Date.now() / 1000) + options.expiresInSec);
+  }
 
   return jwt.sign(encoder.encode(secret));
 }

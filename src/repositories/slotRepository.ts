@@ -5,7 +5,6 @@ type Slot = {
   endTime: number;
 };
 
-// Create a deterministic in-memory list of slots for testing/demo purposes.
 const SLOTS: Slot[] = Array.from({ length: 250 }).map((_, i) => {
   const start = 1000 + i * 60;
   return {
@@ -26,8 +25,8 @@ export function encodeCursor(slot: Slot) {
 
 export function decodeCursor(cursor: string) {
   try {
-    const s = Buffer.from(cursor, "base64").toString();
-    const [start, id] = s.split(":");
+    const raw = Buffer.from(cursor, "base64").toString();
+    const [start, id] = raw.split(":");
     return { startTime: Number(start), id: Number(id) };
   } catch {
     return null;
@@ -43,15 +42,17 @@ export async function getSlotsAfter(opts: { cursor: { startTime: number; id: num
     return cloned.slice(0, limit);
   }
 
-  const idx = cloned.findIndex((s) => {
+  const idx = cloned.findIndex((slot) => {
     if (sort === "asc") {
-      return s.startTime > cursor.startTime || (s.startTime === cursor.startTime && s.id > cursor.id);
+      return slot.startTime > cursor.startTime || (slot.startTime === cursor.startTime && slot.id > cursor.id);
     }
 
-    return s.startTime < cursor.startTime || (s.startTime === cursor.startTime && s.id < cursor.id);
+    return slot.startTime < cursor.startTime || (slot.startTime === cursor.startTime && slot.id < cursor.id);
   });
 
-  if (idx === -1) return [];
+  if (idx === -1) {
+    return [];
+  }
 
   return cloned.slice(idx, idx + limit);
 }

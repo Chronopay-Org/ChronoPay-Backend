@@ -1,0 +1,4 @@
+
+> chronopay-backend@0.1.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand
+
