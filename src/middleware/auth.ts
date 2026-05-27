@@ -8,6 +8,15 @@ import {
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
 
+function emitAuthAudit(
+  _req: Request,
+  _action: string,
+  _status: number,
+  _meta?: Record<string, unknown>,
+): void {
+  // Stub — wired to the audit system in production.
+}
+
 export type ChronoPayRole = "customer" | "admin" | "professional";
 
 export interface AuthContext {

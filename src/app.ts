@@ -14,6 +14,7 @@ import { createContentNegotiationMiddleware } from "./middleware/contentNegotiat
 import { createRequestLogger } from "./middleware/requestLogger.js";
 import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./middleware/featureFlags.js";
 import { createBookingIntentsRouter } from "./routes/booking-intents.js";
+import { createNotificationsRouter } from "./routes/notifications.js";
 import { AmountUtils } from "./utils/amount.js";
 import checkoutRouter from "./routes/checkout.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
@@ -580,6 +581,9 @@ export function createApp(options: AppFactoryOptions = {}) {
   // ── Booking intents routes ─────────────────────────────────────────────────
   app.use("/api/v1/booking-intents", createBookingIntentsRouter());
   app.use("/api/v1/checkout", checkoutRouter);
+
+  // ── Notifications routes ───────────────────────────────────────────────────
+  app.use("/api/v1/notifications", createNotificationsRouter());
 
   if (options.enableTestRoutes) {
     app.get("/__test__/explode", () => {
