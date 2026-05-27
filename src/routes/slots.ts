@@ -19,7 +19,11 @@ import {
   getOrFetchSlots,
   type Slot,
 } from "../cache/slotCache.js";
-import { logger } from "../utils/logger.js";
+import {
+  slotService,
+  SlotNotFoundError,
+  SlotValidationError,
+} from "../services/slotService.js";
 
 export type Slot = {
   id: number;
@@ -192,106 +196,6 @@ router.get("/:id", async (req: Request, res: Response, next: NextFunction): Prom
   res.json({ slot });
 });
 
-// ─── PATCH /api/v1/slots/:id ──────────────────────────────────────────────────
-router.patch("/:id", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-  const adminToken = process.env.CHRONOPAY_ADMIN_TOKEN;
-
-  if (!adminToken) {
-    next(new ServiceUnavailableError("Update slot authorization is not configured"));
-    return;
-  }
-
-  const providedToken = req.header("x-chronopay-admin-token");
-  if (!providedToken) {
-    next(new BadRequestError("Missing required header: x-chronopay-admin-token"));
-    return;
-  }
-
-  if (providedToken !== adminToken) {
-    next(new ForbiddenError("Invalid admin token"));
-    return;
-  }
-
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) {
-    next(new BadRequestError("slotId must be a positive integer"));
-    return;
-  }
-
-  const { professional, startTime, endTime } = req.body ?? {};
-  if (professional === undefined && startTime === undefined && endTime === undefined) {
-    next(new BadRequestError("update payload must include at least one field"));
-    return;
-  }
-
-  try {
-    const updated = slotService.updateSlot(id, { professional, startTime, endTime });
-    res.status(200).json({ success: true, slot: updated });
-  } catch (err) {
-    if (err instanceof SlotNotFoundError) {
-      next(new NotFoundError(`Slot ${id} was not found`));
-      return;
-    }
-    if (err instanceof SlotValidationError) {
-      next(new BadRequestError(err.message));
-      return;
-    }
-    next(new InternalServerError("Slot update failed"));
-  }
-});
-
-// ─── DELETE /api/v1/slots/:id ─────────────────────────────────────────────────
-router.delete("/:id", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-  const id = Number(req.params.id);
-
-  if (!Number.isInteger(id) || id <= 0) {
-    next(new BadRequestError("Invalid slot id"));
-    return;
-  }
-
-  const callerId = req.header("x-user-id");
-  const callerRole = req.header("x-role");
-
-  if (!callerId && !callerRole) {
-    next(new BadRequestError("Caller identity is required"));
-    return;
-  }
-
-  // Find slot in slotService (no-cache path returns array synchronously)
-  const slots = (slotService.listSlots() as unknown) as { id: number; professional: string; startTime: number; endTime: number }[];
-  const slot = slots.find((s) => s.id === id);
-
-  if (!slot) {
-    next(new NotFoundError("Slot not found"));
-    return;
-  }
-
-  const isAdmin = callerRole === "admin";
-  const isOwner = callerId === slot.professional;
-
-  if (!isAdmin && !isOwner) {
-    next(new ForbiddenError("Access denied"));
-    return;
-  }
-
-  slotService.reset(); // simple delete by resetting (test uses single slot)
-  // Re-add all slots except the deleted one
-  for (const s of slots) {
-    if (s.id !== id) {
-      slotService.createSlot(s as unknown as { professional: string; startTime: number; endTime: number });
-    }
-  }
-
-  try {
-    await invalidateSlotsCache();
-  } catch {
-    // ignore
-  }
-
-  res.status(200).json({ success: true, deletedSlotId: id });
-});
-
-export default router;
 
 // ─── PATCH /api/v1/slots/:id ──────────────────────────────────────────────────
 router.patch("/:id", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -341,8 +245,36 @@ router.patch("/:id", async (req: Request, res: Response, next: NextFunction): Pr
   }
 });
 
-// ─── DELETE /api/v1/slots/:id ─────────────────────────────────────────────────
-router.delete("/:id", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+/**
+ * @openapi
+ * /api/v1/slots/{id}:
+ *   delete:
+ *     summary: Delete a slot
+ *     description: >
+ *       Deletes a slot when requested by the owner or an admin.
+ *       Foreign callers receive 404 so slot existence cannot be inferred.
+ *     tags: [Slots]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Slot ID
+ *     security:
+ *       - chronoPayAuth: []
+ *     responses:
+ *       200:
+ *         description: Slot deleted successfully
+ *       400:
+ *         description: Invalid slot id
+ *       401:
+ *         description: Authentication required
+ *       404:
+ *         description: Slot not found or unauthorized access should not reveal existence
+ */
+// Return 404 for foreign-owned slots so callers cannot infer resource existence.
+router.delete("/:id", async (req: Request, res: Response): Promise<void> => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
     res.status(400).json({ success: false, error: "Invalid slot id" });
@@ -364,10 +296,12 @@ router.delete("/:id", async (req: Request, res: Response, next: NextFunction): P
   }
 
   if (role !== "admin" && slot.professional !== userId) {
-    res.status(403).json({ success: false, error: "Forbidden" });
+    res.status(404).json({ success: false, error: "Slot not found" });
     return;
   }
 
   slotService.deleteSlot(id);
   res.json({ success: true, deletedSlotId: id });
 });
+
+export default router;
