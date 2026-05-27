@@ -90,6 +90,8 @@ export class BookingIntentService {
   }
 }
 
+export const SLOT_ID_PATTERN = /^slot-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntentInput {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new BookingIntentError(400, "Booking intent payload must be a JSON object.");
@@ -102,7 +104,7 @@ export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntent
   }
 
   const normalizedSlotId = slotId.trim();
-  if (!/^[a-zA-Z0-9-]{3,64}$/.test(normalizedSlotId)) {
+  if (!SLOT_ID_PATTERN.test(normalizedSlotId)) {
     throw new BookingIntentError(400, "slotId format is invalid.");
   }
 
