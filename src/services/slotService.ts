@@ -2,10 +2,11 @@ import { InMemoryCache } from "../cache/inMemoryCache.js";
 import { PaginatedSlots, Slot as PaginatedSlot } from "../types.js";
 import { getSlotsCount, getSlotsPage } from "../repositories/slotRepository.js";
 import { withSpan } from "../tracing/hooks.js";
+import { randomUUID } from "crypto";
 
 // Internal Slot type for SlotService
 export interface Slot {
-  id: number;
+  id: string;
   professional: string;
   startTime: number;
   endTime: number;
@@ -30,7 +31,7 @@ export class SlotValidationError extends Error {
 }
 
 export class SlotNotFoundError extends Error {
-  constructor(id: number) {
+  constructor(id: string) {
     super(`Slot ${id} was not found`);
     this.name = "SlotNotFoundError";
   }
@@ -52,7 +53,7 @@ export interface SlotInput {
 }
 
 export interface SlotRecord {
-  id: number;
+  id: string;
   professional: string;
   startTime: number;
   endTime: number;
@@ -66,7 +67,6 @@ export type { SlotRecord as Slot };
 
 export class SlotService {
   private slots: SlotRecord[] = [];
-  private nextId = 1;
   private readonly cache: InMemoryCache<SlotRecord[]> | null;
   private readonly clock: () => Date;
 
@@ -112,7 +112,7 @@ export class SlotService {
     professional: string,
     startTime: number,
     endTime: number,
-    excludeId?: number,
+    excludeId?: string,
   ): boolean {
     return this.slots.some(
       (s) =>
@@ -136,7 +136,7 @@ export class SlotService {
 
     const now = this.clock().toISOString();
     const slot: SlotRecord = {
-      id: this.nextId++,
+      id: `slot-${randomUUID()}`,
       professional,
       startTime: input.startTime,
       endTime: input.endTime,
@@ -157,8 +157,22 @@ export class SlotService {
     );
   }
 
+  findById(id: string): SlotRecord | undefined {
+    const slot = this.slots.find((entry) => entry.id === id);
+    return slot ? { ...slot } : undefined;
+  }
+
+  deleteSlot(id: string): void {
+    const index = this.slots.findIndex((entry) => entry.id === id);
+    if (index === -1) {
+      throw new SlotNotFoundError(id);
+    }
+    this.slots.splice(index, 1);
+    this.cache?.invalidate(SLOT_LIST_CACHE_KEY);
+  }
+
   updateSlot(
-    id: number,
+    id: string,
     patch: Partial<Pick<SlotInput, "professional" | "startTime" | "endTime">>,
   ): SlotRecord {
     if (patch === null || typeof patch !== "object") {
@@ -217,7 +231,7 @@ export class SlotService {
 
   /** Traced wrapper — use this from route handlers. */
   updateSlotTraced(
-    id: number,
+    id: string,
     patch: Partial<Pick<SlotInput, "professional" | "startTime" | "endTime">>,
   ): Promise<SlotRecord> {
     return withSpan("slots.update", { route: "PATCH /api/v1/slots/:id", slotId: id }, () =>
@@ -248,7 +262,6 @@ export class SlotService {
 
   reset(): void {
     this.slots = [];
-    this.nextId = 1;
     this.cache?.clear();
   }
 }
