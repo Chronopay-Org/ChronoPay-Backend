@@ -194,6 +194,9 @@ function createSlot(req: Request, res: Response) {
 // These simplified implementations are for testing and contract validation only.
 // Production routes are in src/routes/ and src/buyer-profile/
 
+// In-memory session store for testing
+const sessionStore = new Map<string, any>();
+
 function createCheckoutSessionStub(req: Request, res: Response) {
   const { payment, customer } = req.body;
 
@@ -274,9 +277,6 @@ function createCheckoutSessionStub(req: Request, res: Response) {
     checkoutUrl: `http://localhost:3001/api/v1/checkout/sessions/${sessionId}/pay`,
   });
 }
-
-// In-memory session store for testing
-const sessionStore = new Map<string, any>();
 
 function getCheckoutSessionStub(req: Request, res: Response) {
   const { sessionId } = req.params;
