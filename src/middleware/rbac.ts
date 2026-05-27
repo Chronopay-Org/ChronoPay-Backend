@@ -39,7 +39,7 @@ function emitRbacAudit(
     resource: req.originalUrl,
     status,
     metadata: { method: req.method, ...extra },
-  });
+  }).catch(() => {});
 }
 
 export function requireRole(allowedRoles: UserRole[]) {

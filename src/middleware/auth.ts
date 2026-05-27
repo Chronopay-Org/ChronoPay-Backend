@@ -9,29 +9,6 @@ import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 
-function emitAuthAudit(
-  req: Request,
-  event: string,
-  status: number,
-  extra?: Record<string, unknown>,
-): void {
-  // Provide a fallback IP to satisfy audit validator when req.ip is unavailable (e.g. in tests)
-  const actorIp = req.ip ?? req.socket?.remoteAddress ?? "127.0.0.1";
-  Promise.resolve(
-    defaultAuditLogger.log(
-      event,
-      { ...extra },
-      {
-        actorIp,
-        resource: req.originalUrl,
-        status,
-      },
-    ),
-  ).catch(() => {
-    // Audit failures must never block or surface to the caller
-  });
-}
-
 export type ChronoPayRole = "customer" | "admin" | "professional";
 
 export interface AuthContext {
@@ -96,14 +73,25 @@ export function requireAuth(expectedIssuer?: string) {
   };
 }
 
-export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[] = ["customer", "admin"]) {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      if (!req.auth) {
-        const token = readBearerToken(req);
-        if (!token) {
-          return res.status(401).json({ success: false, error: "Authentication required." });
-        }
+function emitAuthAudit(
+  req: Request,
+  code: string,
+  status: number,
+  extra?: Record<string, unknown>,
+): void {
+  defaultAuditLogger.log({
+    action: code,
+    actorIp: req.ip || req.socket?.remoteAddress,
+    resource: req.originalUrl,
+    status,
+    metadata: { method: req.method, ...extra },
+  }).catch(() => {});
+}
+
+function parseRole(rawRole: string | undefined): ChronoPayRole {
+  if (!rawRole || rawRole.trim().length === 0) {
+    return "customer";
+  }
 
         const payload = await verifyJwt(token, { issuer: configService.jwtIssuer ?? undefined });
         req.user = payload;
