@@ -4,8 +4,8 @@ import type { FeatureFlagAccessor } from "../flags/types.js";
 declare module "express-serve-static-core" {
   interface Request {
     /**
-     * Decoded JWT payload attached by the authenticateToken middleware.
-     * Present only on routes protected by authenticateToken.
+     * Decoded JWT payload attached by JWT authentication middleware.
+     * Present only on routes protected by authenticateToken or authenticate.
      */
     user?: {
       id: string;
@@ -17,12 +17,13 @@ declare module "express-serve-static-core" {
       [key: string]: unknown;
     };
     /**
-     * Authentication context set by requireAuthenticatedActor middleware.
-     * Contains userId and role from validated headers.
+     * Authentication context set by JWT-based auth middleware.
+     * Contains userId, role, and verified claims from the token.
      */
     auth?: {
       userId: string;
       role: string;
+      claims?: Record<string, unknown>;
     };
     /**
      * API key identifier (SHA-256 hash) set by requireApiKey middleware.
