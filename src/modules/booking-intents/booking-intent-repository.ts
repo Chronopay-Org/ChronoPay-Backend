@@ -10,10 +10,14 @@ export interface BookingIntentRecord {
   createdAt: string;
 }
 
+
 export interface BookingIntentRepository {
   create(intent: Omit<BookingIntentRecord, "id">): BookingIntentRecord;
   findBySlotId(slotId: string): BookingIntentRecord | undefined;
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
+  findById(id: string): BookingIntentRecord | undefined;
+  listByCustomer(customerId: string): BookingIntentRecord[];
+  listAll(): BookingIntentRecord[];
 }
 
 export class InMemoryBookingIntentRepository implements BookingIntentRepository {
@@ -40,5 +44,18 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
       (entry) => entry.slotId === slotId && entry.customerId === customerId,
     );
     return intent ? { ...intent } : undefined;
+  }
+
+  findById(id: string): BookingIntentRecord | undefined {
+    const intent = this.intents.find((entry) => entry.id === id);
+    return intent ? { ...intent } : undefined;
+  }
+
+  listByCustomer(customerId: string): BookingIntentRecord[] {
+    return this.intents.filter((entry) => entry.customerId === customerId).map((i) => ({ ...i }));
+  }
+
+  listAll(): BookingIntentRecord[] {
+    return this.intents.map((i) => ({ ...i }));
   }
 }

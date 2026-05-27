@@ -7,6 +7,28 @@ import {
 } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
+import { defaultAuditLogger } from "../services/auditLogger.js";
+
+function emitAuthAudit(
+  req: Request,
+  event: string,
+  status: number,
+  extra?: Record<string, unknown>,
+): void {
+  try {
+    defaultAuditLogger.log(
+      event,
+      { ...extra },
+      {
+        actorIp: req.ip ?? req.socket?.remoteAddress,
+        resource: req.originalUrl,
+        status,
+      },
+    );
+  } catch {
+    // Audit failures must never block the auth response
+  }
+}
 
 export type ChronoPayRole = "customer" | "admin" | "professional";
 
