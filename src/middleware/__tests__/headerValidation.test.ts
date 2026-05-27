@@ -134,8 +134,8 @@ describe("Header Validation Express Middleware", () => {
   beforeEach(() => {
     mockRequest = {
       headers: {},
-      header: jest.fn(function (this: any, name: string) {
-        return this.headers[name.toLowerCase()];
+      header: jest.fn((name: string) => {
+        return (mockRequest.headers as any)[name.toLowerCase()];
       }),
     };
     mockResponse = {
