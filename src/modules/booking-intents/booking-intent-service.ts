@@ -41,7 +41,7 @@ export class BookingIntentService {
     private readonly now: () => string = () => new Date().toISOString(),
   ) {}
 
-  createIntent(input: CreateBookingIntentInput, actor: AuthContext): BookingIntentRecord {
+  async createIntent(input: CreateBookingIntentInput, actor: AuthContext): Promise<BookingIntentRecord> {
     const slot = this.slotRepository.findById(input.slotId);
     if (!slot) {
       throw new BookingIntentError(404, "Selected slot was not found.");
@@ -55,7 +55,7 @@ export class BookingIntentService {
       throw new BookingIntentError(403, "You cannot create a booking intent for your own slot.");
     }
 
-    const existingForCustomer = this.bookingIntentRepository.findBySlotIdAndCustomer(
+    const existingForCustomer = await this.bookingIntentRepository.findBySlotIdAndCustomer(
       input.slotId,
       actor.userId,
     );
@@ -63,7 +63,7 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "A booking intent already exists for this slot.");
     }
 
-    const existingForSlot = this.bookingIntentRepository.findBySlotId(input.slotId);
+    const existingForSlot = await this.bookingIntentRepository.findBySlotId(input.slotId);
     if (existingForSlot) {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
