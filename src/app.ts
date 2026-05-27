@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import cors from "cors";
 import express, { Request, Response } from "express";
+import { register, metricsMiddleware } from "./metrics.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import {
   genericErrorHandler,
@@ -70,6 +71,7 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   app.use(cors());
   app.use(express.json({ limit: "100kb" }));
+  app.use(metricsMiddleware);
 
   if (options.enableDocs !== false) {
     registerSwaggerDocs(app);
@@ -77,6 +79,15 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", service: "chronopay-backend" });
+  });
+
+  app.get("/metrics", async (_req, res) => {
+    try {
+      res.set("Content-Type", register.contentType);
+      res.end(await register.metrics());
+    } catch (err) {
+      res.status(500).end(String(err));
+    }
   });
 
   app.get("/api/v1/slots", (_req, res) => {
