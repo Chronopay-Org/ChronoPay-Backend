@@ -34,12 +34,36 @@ export const FEATURE_FLAGS: Record<FeatureFlagName, FeatureFlagDefinition> = {
     description: "Enable booking intent creation via POST /api/v1/booking-intents",
     // Default false for safe rollout; enable explicitly in production.
     defaultEnabled: false,
+    guardedRoutes: [],
   },
   CHECKOUT: {
     envVar: "FF_CHECKOUT",
     description: "Enable checkout endpoints (POST/GET /api/v1/checkout/sessions). Set to false to kill-switch during incidents.",
     // Default true: checkout is enabled unless explicitly disabled.
     defaultEnabled: true,
+    guardedRoutes: [],
+  },
+  SMS_NOTIFICATIONS: {
+    envVar: "FF_SMS_NOTIFICATIONS",
+    description: "Enable SMS notification sending via POST /api/v1/notifications/sms",
+    defaultEnabled: true,
+    guardedRoutes: [
+      {
+        method: "POST",
+        path: "/api/v1/notifications/sms",
+        description: "Send an SMS notification",
+        enabledExpectedStatus: 200,
+        disabledResponse: {
+          status: 503,
+          code: "FEATURE_DISABLED",
+          error: "Feature SMS_NOTIFICATIONS is currently disabled",
+        },
+        requestBody: {
+          to: "+12025550123",
+          message: "Your appointment is confirmed.",
+        },
+      },
+    ],
   },
 };
 
