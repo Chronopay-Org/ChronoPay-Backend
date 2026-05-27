@@ -4,6 +4,7 @@ import type {
   BookingIntentRecord,
   BookingIntentRepository,
 } from "./booking-intent-repository.js";
+import { SchedulingService } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
 
 export interface CreateBookingIntentInput {
@@ -27,6 +28,10 @@ export class BookingIntentService {
     private readonly slotRepository: SlotRepository,
     private readonly now: () => string = () => new Date().toISOString(),
   ) {}
+
+  private get schedulingService(): SchedulingService {
+    return new SchedulingService(this.slotRepository, this.bookingIntentRepository);
+  }
 
   createIntent(input: CreateBookingIntentInput, actor: AuthContext): BookingIntentRecord {
     const slot = this.slotRepository.findById(input.slotId);
@@ -55,7 +60,7 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
 
-    return this.bookingIntentRepository.create({
+    const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
       professional: slot.professional,
       customerId: actor.userId,
@@ -65,6 +70,48 @@ export class BookingIntentService {
       note: input.note,
       createdAt: this.now(),
     });
+
+    this.schedulingService.reserveSlot(input.slotId);
+
+    return intent;
+  }
+
+  cancelIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+      throw new BookingIntentError(403, "You are not authorized to cancel this booking intent.");
+    }
+
+    if (intent.status !== "pending") {
+      throw new BookingIntentError(409, `Cannot cancel intent with status "${intent.status}".`);
+    }
+
+    const updated = this.bookingIntentRepository.updateStatus(intentId, "cancelled");
+
+    this.schedulingService.releaseSlot(intent.slotId);
+
+    return updated;
+  }
+
+  expireIntent(intentId: string): BookingIntentRecord {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.status !== "pending") {
+      throw new BookingIntentError(409, `Cannot expire intent with status "${intent.status}".`);
+    }
+
+    const updated = this.bookingIntentRepository.updateStatus(intentId, "expired");
+
+    this.schedulingService.releaseSlot(intent.slotId);
+
+    return updated;
   }
 
   createIntentTraced(input: CreateBookingIntentInput, actor: AuthContext): Promise<BookingIntentRecord> {
