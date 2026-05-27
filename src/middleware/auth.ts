@@ -47,6 +47,8 @@ export function requireAuthenticatedActor(
   };
 }
 
+export { requireAuthenticatedActor as authenticateToken };
+
 function parseRole(rawRole: string | undefined): ChronoPayRole {
   if (!rawRole || rawRole.trim().length === 0) {
     return "customer";

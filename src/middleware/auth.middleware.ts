@@ -60,7 +60,7 @@ function validateMockToken(token: string): AuthenticatedUser | null {
  * Authentication middleware
  * Verifies the JWT token and attaches the user to the request
  */
-export function authenticate(req: Request, res: Response, next: NextFunction) {
+export function authenticateToken(req: Request, res: Response, next: NextFunction) {
   try {
     const authHeader = req.headers.authorization;
 
@@ -98,10 +98,12 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
     return res.status(500).json({
       success: false,
       error: "Authentication error",
-      message: "An error occurred during authentication",
+      message: error instanceof Error ? error.message : "An unknown error occurred",
     });
   }
 }
+
+export { authenticateToken as authenticate };
 
 /**
  * Authorization middleware factory

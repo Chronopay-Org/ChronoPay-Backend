@@ -1,7 +1,7 @@
 import request from "supertest";
 import app from "../index.js";
 import { SignJWT } from "jose";
-import { authenticateToken } from "../middleware/auth.js";
+import { authenticateToken } from "../middleware/auth.middleware.js";
 import type { Request, Response, NextFunction } from "express";
 
 const TEST_SECRET = "test-secret-key-at-least-32-chars!!";

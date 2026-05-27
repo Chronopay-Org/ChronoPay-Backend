@@ -13,6 +13,8 @@ export interface AppFactoryOptions {
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
+  slotRepository?: any;
+  bookingIntentService?: any;
 }
 
 function registerSwaggerDocs(app: express.Express) {

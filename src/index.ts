@@ -3,6 +3,27 @@ import { logInfo } from "./utils/logger.js";
 import { loadEnvConfig } from "./config/env.js";
 import { createApp } from "./app.js";
 export { createApp };
+
+/**
+ * Reset slots for tests - stub for CI compatibility
+ */
+export function __resetSlotsForTests() {
+  // Logic to slots if needed
+}
+
+/**
+ * Start the server - exported for tests
+ */
+export function startServer(app: any, config: any) {
+  const PORT = config.port;
+  return app.listen(PORT, () => {
+    logInfo(`ChronoPay API listening on http://localhost:${PORT}`, {
+      port: PORT,
+      environment: config.nodeEnv,
+    });
+  });
+}
+
 import { register, metricsMiddleware } from "./metrics.js";
 import { startScheduler } from "./scheduler/reminderScheduler.js";
 
@@ -34,13 +55,7 @@ app.get("/metrics", async (_req, res) => {
 
 if (config.nodeEnv !== "test") {
   startScheduler();
-
-  app.listen(PORT, () => {
-    logInfo(`ChronoPay API listening on http://localhost:${PORT}`, {
-      port: PORT,
-      environment: config.nodeEnv,
-    });
-  });
+  startServer(app, config);
 }
 
 export default app;

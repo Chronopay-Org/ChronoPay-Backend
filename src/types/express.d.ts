@@ -7,16 +7,14 @@ declare module "express-serve-static-core" {
      * Decoded JWT payload attached by the authenticateToken middleware.
      * Present only on routes protected by authenticateToken.
      */
-    user?: AuthenticatedUser & {
-      sub?: string;
-      email?: string;
-      iat?: number;
-      exp?: number;
-      [key: string]: unknown;
-    };
+    user?: AuthenticatedUser & Record<string, any>;
     /**
      * Feature flag accessor attached by the featureFlags middleware.
      */
     flags?: any;
+    /**
+     * Legacy auth property
+     */
+    auth?: any;
   }
 }
