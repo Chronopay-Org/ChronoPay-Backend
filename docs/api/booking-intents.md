@@ -242,10 +242,29 @@ curl -X POST http://localhost:3001/api/v1/booking-intents \
 
 ### Repositories
 
-The endpoint uses in-memory repositories for development. Replace with database layer in production:
+The endpoint uses persistent storage for booking intents:
 
-- `BookingIntentRepository`: Manages booking intent records
-- `SlotRepository`: Manages slot records
+- `BookingIntentRepository`: Manages booking intent records in PostgreSQL via `PgBookingIntentRepository`.
+- `SlotRepository`: Manages slot records (currently in-memory, to be migrated).
+
+### Database Schema
+
+Booking intents are stored in the `booking_intents` table with the following structure:
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `id` | UUID | Primary key |
+| `slot_id` | UUID | Unique reference to the slot |
+| `professional_id` | UUID | Reference to the professional (user) |
+| `customer_id` | UUID | Reference to the customer (user) |
+| `start_time` | TIMESTAMPTZ | Start of the booking window |
+| `end_time` | TIMESTAMPTZ | End of the booking window |
+| `status` | ENUM | Intent status: `pending`, `completed`, `expired`, `cancelled` |
+| `note` | TEXT | Optional customer note |
+| `created_at` | TIMESTAMPTZ | Record creation timestamp |
+| `updated_at` | TIMESTAMPTZ | Record update timestamp |
+
+A unique constraint on `slot_id` ensures only one active booking intent exists per slot.
 
 ### Service Layer
 
