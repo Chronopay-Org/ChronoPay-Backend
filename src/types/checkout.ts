@@ -7,6 +7,8 @@
  * - Error types
  */
 
+import { AppError } from "../errors/AppError.js";
+
 /**
  * Supported payment methods for checkout
  */
@@ -149,14 +151,14 @@ export interface CheckoutErrorResponse {
 /**
  * Custom error class for checkout operations
  */
-export class CheckoutError extends Error {
+export class CheckoutError extends AppError {
   constructor(
     public code: string,
     message: string,
     public status: number = 400,
     public details?: Record<string, unknown>,
   ) {
-    super(message);
+    super(message, status, code, true, details);
     this.name = "CheckoutError";
   }
 }
