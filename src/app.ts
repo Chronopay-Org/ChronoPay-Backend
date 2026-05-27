@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import cors from "cors";
 import express, { Request, Response } from "express";
+import { configService } from "./config/config.service.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
 import { securityHeaders, createSecurityHeaders } from "./middleware/securityHeaders.js";

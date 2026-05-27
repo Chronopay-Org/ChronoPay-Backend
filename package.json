@@ -18,7 +18,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "express-rate-limit": "^8.4.0",
-    "ioredis": "^5.11.0",
+    "ioredis": "^5.4.1",
     "jose": "^6.2.2",
     "pg": "^8.20.0",
     "pino": "^9.6.0",
