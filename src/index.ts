@@ -1,4 +1,4 @@
-import { createServer, type Server } from "http";
+import { createServer, type Server, IncomingMessage, ServerResponse } from "http";
 import { createApp } from "./app.js";
 import { loadEnvConfig, type EnvConfig } from "./config/env.js";
 import { stopScheduler } from "./scheduler/reminderScheduler.js";
@@ -8,6 +8,7 @@ export const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 let server: Server | undefined;
 let isShuttingDown = false;
+const activeRequests = new Set<IncomingMessage>();
 
 export function setServer(s: Server | undefined): void {
   server = s;
@@ -15,6 +16,10 @@ export function setServer(s: Server | undefined): void {
 
 export function resetShutdownFlag(): void {
   isShuttingDown = false;
+}
+
+export function getActiveRequestCount(): number {
+  return activeRequests.size;
 }
 
 export function startServer(
@@ -36,11 +41,18 @@ export async function gracefulShutdown(): Promise<void> {
     await new Promise<void>((resolve) => server!.close(() => resolve()));
   }
 
+  const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
+  while (activeRequests.size > 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
   await closePool();
 }
 
 async function shutdownWithTimeout(): Promise<void> {
+  let forceExit = false;
   const timer = setTimeout(() => {
+    forceExit = true;
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS);
 
@@ -48,7 +60,9 @@ async function shutdownWithTimeout(): Promise<void> {
     await gracefulShutdown();
   } finally {
     clearTimeout(timer);
-    process.exit(0);
+    if (!forceExit) {
+      process.exit(0);
+    }
   }
 }
 
@@ -56,14 +70,26 @@ if (process.env.NODE_ENV !== "test") {
   const config = loadEnvConfig();
   const app = createApp();
   server = createServer(app);
-  const port = config.port;
 
-  server.listen(port, () => {
-    console.log(`Server running on port ${port}`);
+  server.on("request", (req: IncomingMessage, res: ServerResponse) => {
+    activeRequests.add(req);
+    const cleanup = () => activeRequests.delete(req);
+    res.on("finish", cleanup);
+    res.on("close", cleanup);
   });
 
-  process.on("SIGTERM", () => void shutdownWithTimeout());
-  process.on("SIGINT", () => void shutdownWithTimeout());
+  server.listen(config.port, () => {
+    console.log(`Server running on port ${config.port}`);
+  });
+
+  const handleSignal = () => {
+    if (!isShuttingDown) {
+      void shutdownWithTimeout();
+    }
+  };
+
+  process.on("SIGTERM", handleSignal);
+  process.on("SIGINT", handleSignal);
 }
 
 export default server;

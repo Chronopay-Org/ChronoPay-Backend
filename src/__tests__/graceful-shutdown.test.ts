@@ -1,11 +1,12 @@
 import { jest, beforeEach, afterEach, expect, describe, it } from "@jest/globals";
-import { createServer } from "http";
+import { createServer, IncomingMessage, ServerResponse } from "http";
 import { closePool } from "../db/connection.js";
 import { stopScheduler } from "../scheduler/reminderScheduler.js";
 import {
   gracefulShutdown,
   setServer,
   resetShutdownFlag,
+  getActiveRequestCount,
 } from "../index.js";
 
 beforeEach(() => {
@@ -16,8 +17,6 @@ beforeEach(() => {
 afterEach(async () => {
   await closePool().catch(() => {});
 });
-
-// ─── HTTP server ────────────────────────────────────────────────────────────
 
 describe("gracefulShutdown closes the HTTP server", () => {
   it("closes the server when one is set", async () => {
@@ -43,11 +42,8 @@ describe("gracefulShutdown closes the HTTP server", () => {
   });
 });
 
-// ─── Database pool ──────────────────────────────────────────────────────────
-
 describe("gracefulShutdown drains the DB pool", () => {
   it("calls closePool which resolves when no pool exists", async () => {
-    // closePool is safe to call even without a pool — it's a no-op.
     await expect(gracefulShutdown()).resolves.toBeUndefined();
   });
 
@@ -57,11 +53,8 @@ describe("gracefulShutdown drains the DB pool", () => {
   });
 });
 
-// ─── Double-call guard ──────────────────────────────────────────────────────
-
 describe("isShuttingDown guard", () => {
   it("prevents double invocation", async () => {
-    // Track calls to stopScheduler indirectly via a counter module
     const server = createServer();
     let closeCount = 0;
     server.on("close", () => { closeCount++; });
@@ -70,7 +63,6 @@ describe("isShuttingDown guard", () => {
     await gracefulShutdown();
     expect(closeCount).toBe(1);
 
-    // Second call should not close again
     await gracefulShutdown();
     expect(closeCount).toBe(1);
   });
@@ -94,8 +86,6 @@ describe("isShuttingDown guard", () => {
   });
 });
 
-// ─── stopScheduler and closePool standalone ─────────────────────────────────
-
 describe("stopScheduler", () => {
   it("is safe to call when scheduler was never started", () => {
     expect(() => stopScheduler()).not.toThrow();
@@ -104,5 +94,65 @@ describe("stopScheduler", () => {
   it("is idempotent", () => {
     stopScheduler();
     expect(() => stopScheduler()).not.toThrow();
+  });
+});
+
+describe("in-flight request handling", () => {
+  it("tracks active requests and waits for them during shutdown", async () => {
+    const server = createServer();
+    let requestFinished = false;
+    let shutdownComplete = false;
+
+    const req = new IncomingMessage(server);
+    const res = new ServerResponse(req);
+
+    setServer(server);
+    expect(getActiveRequestCount()).toBe(0);
+
+    gracefulShutdown().then(() => { shutdownComplete = true; });
+
+    expect(getActiveRequestCount()).toBe(0);
+    res.emit("finish");
+
+    await new Promise(resolve => setImmediate(resolve));
+    expect(shutdownComplete).toBe(true);
+  });
+
+  it("proceeds with shutdown even if in-flight requests never finish (timeout)", async () => {
+    const server = createServer();
+    const req = new IncomingMessage(server);
+    const res = new ServerResponse(req);
+
+    setServer(server);
+
+    const result = await gracefulShutdown();
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("shutdown without DB", () => {
+  it("handles shutdown gracefully when no pool was ever created", async () => {
+    const server = createServer();
+    setServer(server);
+    await expect(gracefulShutdown()).resolves.toBeUndefined();
+  });
+
+  it("handles shutdown gracefully when closePool was already called", async () => {
+    const server = createServer();
+    setServer(server);
+    await closePool();
+    await expect(gracefulShutdown()).resolves.toBeUndefined();
+  });
+});
+
+describe("double signal protection", () => {
+  it("isShuttingDown prevents concurrent shutdown sequences", async () => {
+    const server = createServer();
+    setServer(server);
+
+    const p1 = gracefulShutdown();
+    const p2 = gracefulShutdown();
+    const results = await Promise.all([p1, p2]);
+    expect(results).toEqual([undefined, undefined]);
   });
 });
