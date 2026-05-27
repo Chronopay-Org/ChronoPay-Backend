@@ -14,6 +14,7 @@ import { requireAuthenticatedActor, type AuthenticatedRequest } from "../middlew
 import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
+import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../middleware/payloadLimit.js";
 import {
     BookingIntentService,
     parseCreateBookingIntentBody,
@@ -34,6 +35,7 @@ export function createBookingIntentsRouter() {
 
     router.post(
         "/",
+        ...payloadLimit(ROUTE_PAYLOAD_LIMITS.bookingIntent),
         requireFeatureFlag("CREATE_BOOKING_INTENT"),
         requireAuthenticatedActor(["customer", "admin"]),
         createAuthAwareRateLimiter(),

@@ -9,6 +9,7 @@ import {
   featureFlagContextMiddleware,
   initializeFeatureFlagsFromEnv,
 } from "../middleware/featureFlags.js";
+import { createApp } from "../app.js";
 
 describe("Unified error envelope", () => {
   it("AppError toJSON includes success, code, message, error, and timestamp", () => {
@@ -66,6 +67,27 @@ describe("Unified error envelope", () => {
       }),
     );
     expect(response.body.timestamp).toBeDefined();
+  });
+
+  it("genericErrorHandler sanitizes errors from /__test__/explode route", async () => {
+    const app = createApp({ enableTestRoutes: true });
+
+    const response = await request(app).get("/__test__/explode");
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        success: false,
+        code: "INTERNAL_ERROR",
+        message: "Internal server error",
+        error: "Internal server error",
+        timestamp: expect.any(String),
+      }),
+    );
+    // Assert the raw error message and stack are not present in the response
+    const responseBody = JSON.stringify(response.body);
+    expect(responseBody).not.toContain("Intentional test fault");
+    expect(responseBody).not.toContain("stack");
   });
 });
 

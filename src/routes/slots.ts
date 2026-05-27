@@ -12,6 +12,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { validateRequiredFields } from "../middleware/validation.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
+import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../middleware/payloadLimit.js";
 import {
   getCachedSlots,
   setCachedSlots,
@@ -182,6 +183,7 @@ router.get("/", async (_req: Request, res: Response): Promise<void> => {
  */
 router.post(
   "/",
+  ...payloadLimit(ROUTE_PAYLOAD_LIMITS.slots),
   validateRequiredFields(["professional", "startTime", "endTime"]),
   idempotencyMiddleware,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
