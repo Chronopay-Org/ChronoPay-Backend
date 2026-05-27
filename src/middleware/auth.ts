@@ -73,20 +73,8 @@ export function requireAuth(expectedIssuer?: string) {
   };
 }
 
-function emitAuthAudit(
-  req: Request,
-  code: string,
-  status: number,
-  extra?: Record<string, unknown>,
-): void {
-  defaultAuditLogger.log({
-    action: code,
-    actorIp: req.ip || req.socket?.remoteAddress,
-    resource: req.originalUrl,
-    status,
-    metadata: { method: req.method, ...extra },
-  }).catch(() => {});
-}
+// Named export for the header-based auth used by booking-intents
+export { requireAuthenticatedActor as authenticateToken };
 
 function parseRole(rawRole: string | undefined): ChronoPayRole {
   if (!rawRole || rawRole.trim().length === 0) {

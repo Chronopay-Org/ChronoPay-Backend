@@ -31,26 +31,21 @@ declare global {
  * Authentication middleware
  * Verifies the JWT token and attaches the decoded payload to the request
  */
-export function authenticate(req: Request, res: Response, next: NextFunction) {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader) {
-    return res.status(401).json({ success: false, error: "Unauthorized" });
-  }
-
-  const [bearer, token] = authHeader.split(" ");
-  if (bearer !== "Bearer" || !token) {
-    return res.status(401).json({ success: false, error: "Unauthorized" });
-  }
-
+export function authenticateToken(req: Request, res: Response, next: NextFunction) {
   try {
     const decoded = verifyJwt(token);
     req.user = decoded;
     next();
-  } catch {
-    return res.status(401).json({ success: false, error: "Unauthorized" });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: "Authentication error",
+      message: error instanceof Error ? error.message : "An unknown error occurred",
+    });
   }
 }
+
+export { authenticateToken as authenticate };
 
 /**
  * Authorization middleware factory

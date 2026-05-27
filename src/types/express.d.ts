@@ -1,5 +1,5 @@
 import "express";
-import type { FeatureFlagAccessor } from "../flags/types.js";
+import { AuthenticatedUser } from "../middleware/auth.middleware.js";
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -7,19 +7,14 @@ declare module "express-serve-static-core" {
      * Decoded JWT payload attached by JWT authentication middleware.
      * Present only on routes protected by authenticateToken or authenticate.
      */
-    user?: {
-      id: string;
-      sub?: string;
-      email?: string;
-      role?: string;
-      iat?: number;
-      exp?: number;
-      [key: string]: unknown;
-    };
-
+    user?: AuthenticatedUser & Record<string, any>;
     /**
-     * Raw request body buffer captured for signature verification.
+     * Feature flag accessor attached by the featureFlags middleware.
      */
-    rawBody?: Buffer;
+    flags?: any;
+    /**
+     * Legacy auth property
+     */
+    auth?: any;
   }
 }

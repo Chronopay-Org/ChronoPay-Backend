@@ -1,48 +1,55 @@
-import { createServer, type Server, IncomingMessage, ServerResponse } from "http";
-import { loadEnvConfig, type EnvConfig } from "./config/env.js";
+import "dotenv/config";
+import { logInfo } from "./utils/logger.js";
+import { loadEnvConfig } from "./config/env.js";
+import { createApp } from "./app.js";
+import { register, metricsMiddleware } from "./metrics.js";
+import { startScheduler } from "./scheduler/reminderScheduler.js";
 
-export const SHUTDOWN_TIMEOUT_MS = 10_000;
+const config = loadEnvConfig();
 
-let server: Server | undefined;
-let isShuttingDown = false;
-const activeRequests = new Set<IncomingMessage>();
+const app = createApp({
+  enableDocs: true,
+  enableTestRoutes: config.nodeEnv !== "production"
+});
 
-export function setServer(s: Server | undefined): void {
-  server = s;
-}
+// Add metrics middleware
+app.use(metricsMiddleware);
 
-export function resetShutdownFlag(): void {
-  isShuttingDown = false;
-}
+/**
+ * @api {get} /metrics Get Prometheus metrics
+ */
+app.get("/metrics", async (_req, res) => {
+  try {
+    res.set("Content-Type", register.contentType);
+    res.end(await register.metrics());
+  } catch (err) {
+    res.status(500).end(err instanceof Error ? err.message : String(err));
+  }
+});
 
-export function getActiveRequestCount(): number {
-  return activeRequests.size;
-}
-
-export function startServer(
-  listener: { listen: (port: number, callback?: () => void) => unknown },
-  config: EnvConfig,
-) {
-  return listener.listen(config.port, () => {
-    console.log(`ChronoPay API listening on http://localhost:${config.port}`);
+/**
+ * Start the server
+ */
+export function startServer(appInstance: any, configInstance: any) {
+  const PORT = configInstance.port || 3001;
+  return appInstance.listen(PORT, () => {
+    logInfo(`ChronoPay API listening on http://localhost:${PORT}`, {
+      port: PORT,
+      environment: configInstance.nodeEnv,
+    });
   });
 }
 
-loadEnvConfig();
-const app = createApp();
+if (config.nodeEnv !== "test") {
+  startScheduler();
+  startServer(app, config);
+}
 
-  stopScheduler();
-
-  if (server) {
-    await new Promise<void>((resolve) => server!.close(() => resolve()));
-  }
-
-  const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
-  while (activeRequests.size > 0 && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-
-  await closePool();
+// For compatibility with tests
+export { createApp };
+import { resetSlotStore } from "./routes/slots.js";
+export function __resetSlotsForTests() {
+  resetSlotStore();
 }
 
 async function shutdownWithTimeout(): Promise<void> {
