@@ -19,6 +19,7 @@ import {
   getOrFetchSlots,
   type Slot,
 } from "../cache/slotCache.js";
+import { logger } from "../utils/logger.js";
 
 export type Slot = {
   id: number;
@@ -286,7 +287,7 @@ router.get("/:id", async (req: Request, res: Response): Promise<void> => {
       return;
     }
   } catch (err) {
-    console.error("Redis GET failed for slot by id:", err);
+    logger.error({ err, requestId: req.requestId ?? req.id }, "Redis GET failed for slot by id");
   }
 
   const slot = slotStore.find((s) => s.id === id);

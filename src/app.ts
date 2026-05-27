@@ -12,12 +12,11 @@ import {
 import { validateRequiredFields } from "./middleware/validation.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
+import { requestIdMiddleware } from "./middleware/requestId.js";
 import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./middleware/featureFlags.js";
 import { createBookingIntentsRouter } from "./routes/booking-intents.js";
 import { AmountUtils } from "./utils/amount.js";
 import checkoutRouter from "./routes/checkout.js";
-import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
-import { createRequestLogger } from "./middleware/requestLogger.js";
 
 export interface AppFactoryOptions {
   apiKey?: string;
@@ -550,6 +549,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   }
 
   app.use(express.json({ limit: "100kb" }));
+  app.use(requestIdMiddleware);
   app.use(createRequestLogger());
 
   // ── Feature flag context middleware (makes flags available to routes) ──────

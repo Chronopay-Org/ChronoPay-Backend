@@ -21,6 +21,7 @@ import {
 } from "../modules/booking-intents/booking-intent-service.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
+import { logger } from "../utils/logger.js";
 
 export function createBookingIntentsRouter() {
     const router = Router();
@@ -53,14 +54,16 @@ export function createBookingIntentsRouter() {
                     res.status(error.status).json({
                         success: false,
                         error: error.message,
+                        requestId: req.requestId ?? req.id,
                     });
                     return;
                 }
 
-                console.error("Unexpected error in booking intent creation:", error);
+                logger.error({ err: error, requestId: req.requestId ?? req.id }, "Unexpected error in booking intent creation");
                 res.status(500).json({
                     success: false,
                     error: "Internal server error",
+                    requestId: req.requestId ?? req.id,
                 });
             }
         },

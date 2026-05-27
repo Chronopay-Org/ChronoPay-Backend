@@ -59,11 +59,7 @@ export function genericErrorHandler(
     // Emit a consistent envelope for any AppError-shaped error (includes
     // ServiceUnavailableError / 503 from dependency outages).
     if (typeof e.statusCode === "number" && typeof e.code === "string") {
-      return res.status(e.statusCode).json({
-        success: false,
-        code: e.code,
-        error: e.message,
-      });
+      return res.status(e.statusCode).json(withRequestContext(e.toJSON(), req));
     }
   }
 
