@@ -7,6 +7,7 @@ import {
 } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
+import { defaultAuditLogger } from "../services/auditLogger.js";
 
 export type ChronoPayRole = "customer" | "admin" | "professional";
 
@@ -153,6 +154,26 @@ function parseRole(rawRole: string | undefined): ChronoPayRole {
   }
 
   return "professional";
+}
+
+function emitAuthAudit(
+  req: Request,
+  action: string,
+  status: number,
+  extra?: Record<string, unknown>,
+): void {
+  defaultAuditLogger.log(
+    `auth.${action}`,
+    {
+      method: req.method,
+      ...extra,
+    },
+    {
+      actorIp: req.ip || req.socket?.remoteAddress,
+      resource: req.originalUrl,
+      status,
+    },
+  ).catch(() => {}); // Fire and forget
 }
 
 // Removed duplicate export of authenticateToken
