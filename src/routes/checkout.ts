@@ -8,7 +8,7 @@
  * - POST /api/v1/checkout/sessions/:sessionId/cancel - Cancel session
  */
 
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { CheckoutSessionService } from "../services/checkout.js";
 import {
   validateCreateCheckoutSession,
@@ -16,11 +16,8 @@ import {
 } from "../middleware/checkout-validation.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import {
-  CheckoutError,
-  CheckoutErrorCode,
   CreateCheckoutSessionResponse,
   GetCheckoutSessionResponse,
-  CheckoutErrorResponse,
 } from "../types/checkout.js";
 import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../middleware/payloadLimit.js";
@@ -134,7 +131,7 @@ checkoutRouter.post(
   ...payloadLimit(ROUTE_PAYLOAD_LIMITS.checkout),
   validateCreateCheckoutSession(),
   idempotencyMiddleware,
-  (req: Request, res: Response) => {
+  (req: Request, res: Response, next: NextFunction) => {
     try {
       const authToken = req.headers.authorization?.replace("Bearer ", "");
       const session = CheckoutSessionService.createSession(req.body, authToken);
@@ -147,7 +144,7 @@ checkoutRouter.post(
 
       res.status(201).json(response);
     } catch (error) {
-      handleCheckoutError(error, res);
+      next(error);
     }
   },
 );
@@ -219,7 +216,7 @@ checkoutRouter.post(
 checkoutRouter.get(
   "/sessions/:sessionId",
   validateSessionIdParam(),
-  (req: Request, res: Response) => {
+  (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
       const session = CheckoutSessionService.getSession(sessionId);
@@ -231,7 +228,7 @@ checkoutRouter.get(
 
       res.status(200).json(response);
     } catch (error) {
-      handleCheckoutError(error, res);
+      next(error);
     }
   },
 );
@@ -318,7 +315,7 @@ checkoutRouter.get(
 checkoutRouter.post(
   "/sessions/:sessionId/complete",
   validateSessionIdParam(),
-  (req: Request, res: Response) => {
+  (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
       const { paymentToken } = req.body;
@@ -327,6 +324,96 @@ checkoutRouter.post(
         sessionId,
         paymentToken,
       );
+
+      const response: GetCheckoutSessionResponse = {
+        success: true,
+        session,
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /api/v1/checkout/sessions/{sessionId}/pay:
+ *   post:
+ *     summary: Initiate payment for a checkout session
+ *     description: >
+ *       Initiates payment processing for a checkout session. Validates that the
+ *       session is in PENDING state and not expired. Transitions the session
+ *       to COMPLETED or FAILED based on payment result.
+ *     tags: [Checkout]
+ *     security:
+ *       - chronoPayAuth: []
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Session ID (UUID format)
+ *     responses:
+ *       200:
+ *         description: Payment processed successfully (COMPLETED or FAILED)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 session:
+ *                   type: object
+ *                   description: Updated checkout session
+ *       400:
+ *         description: Invalid session ID format
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *       404:
+ *         description: Session not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       409:
+ *         description: Session in invalid state (already completed/failed/cancelled)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       410:
+ *         description: Session expired
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
+ */
+checkoutRouter.post(
+  "/sessions/:sessionId/pay",
+  validateSessionIdParam(),
+  (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const session = CheckoutSessionService.paySession(sessionId);
 
       const response: GetCheckoutSessionResponse = {
         success: true,
@@ -422,7 +509,7 @@ checkoutRouter.post(
 checkoutRouter.post(
   "/sessions/:sessionId/fail",
   validateSessionIdParam(),
-  (req: Request, res: Response) => {
+  (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
       const { reason } = req.body;
@@ -436,7 +523,7 @@ checkoutRouter.post(
 
       res.status(200).json(response);
     } catch (error) {
-      handleCheckoutError(error, res);
+      next(error);
     }
   },
 );
@@ -514,7 +601,7 @@ checkoutRouter.post(
 checkoutRouter.post(
   "/sessions/:sessionId/cancel",
   validateSessionIdParam(),
-  (req: Request, res: Response) => {
+  (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
       const session = CheckoutSessionService.cancelSession(sessionId);
@@ -526,45 +613,9 @@ checkoutRouter.post(
 
       res.status(200).json(response);
     } catch (error) {
-      handleCheckoutError(error, res);
+      next(error);
     }
   },
 );
-
-/**
- * Error handler for checkout operations
- * Converts CheckoutError to appropriate HTTP response
- * 
- * @param error - Error object
- * @param res - Express response object
- */
-function handleCheckoutError(error: unknown, res: Response): void {
-  if (error instanceof CheckoutError) {
-    const statusCode = error.status || 400;
-    const response: CheckoutErrorResponse = {
-      success: false,
-      code: error.code,
-      message: error.message,
-      details: error.details,
-    };
-    res.status(statusCode).json(response);
-  } else if (error instanceof Error) {
-    // Unexpected error
-    const response: CheckoutErrorResponse = {
-      success: false,
-      code: CheckoutErrorCode.INTERNAL_ERROR,
-      message: "Internal server error",
-    };
-    res.status(500).json(response);
-  } else {
-    // Unknown error type
-    const response: CheckoutErrorResponse = {
-      success: false,
-      code: CheckoutErrorCode.INTERNAL_ERROR,
-      message: "Unknown error",
-    };
-    res.status(500).json(response);
-  }
-}
 
 export default checkoutRouter;

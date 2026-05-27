@@ -43,6 +43,28 @@ export const FEATURE_FLAGS: Record<FeatureFlagName, FeatureFlagDefinition> = {
     defaultEnabled: true,
     guardedRoutes: [],
   },
+  SMS_NOTIFICATIONS: {
+    envVar: "FF_SMS_NOTIFICATIONS",
+    description: "Enable SMS notification sending via POST /api/v1/notifications/sms",
+    defaultEnabled: true,
+    guardedRoutes: [
+      {
+        method: "POST",
+        path: "/api/v1/notifications/sms",
+        description: "Send an SMS notification",
+        enabledExpectedStatus: 200,
+        disabledResponse: {
+          status: 503,
+          code: "FEATURE_DISABLED",
+          error: "Feature SMS_NOTIFICATIONS is currently disabled",
+        },
+        requestBody: {
+          to: "+12025550123",
+          message: "Your appointment is confirmed.",
+        },
+      },
+    ],
+  },
 };
 
 export interface FeatureFlagGuardedRouteEntry extends FeatureFlagGuardedRoute {
