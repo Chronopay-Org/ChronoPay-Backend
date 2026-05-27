@@ -5,6 +5,7 @@ import type {
   BookingIntentRepository,
 } from "./booking-intent-repository.js";
 import { withSpan } from "../../tracing/hooks.js";
+import { sanitizeNote } from "../../utils/redact.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -100,17 +101,17 @@ export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntent
     throw new BookingIntentError(400, "note must be a string when provided.");
   }
 
-  const normalizedNote = note.trim();
-  if (normalizedNote.length === 0) {
+  const sanitizedNote = sanitizeNote(note);
+  if (sanitizedNote === null) {
     throw new BookingIntentError(400, "note cannot be empty when provided.");
   }
 
-  if (normalizedNote.length > 500) {
+  if (sanitizedNote.length > 500) {
     throw new BookingIntentError(400, "note must be 500 characters or fewer.");
   }
 
   return {
     slotId: normalizedSlotId,
-    note: normalizedNote,
+    note: sanitizedNote,
   };
 }
