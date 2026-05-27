@@ -67,6 +67,7 @@ export class SlotService {
     });
 
     return {
+      data: slots,
       slots,
       page,
       limit,
@@ -75,19 +76,57 @@ export class SlotService {
     };
   }
 
-  async listSlots(options: PaginationOptions = {}): Promise<PaginatedSlots & { cache?: string }> {
-    return this.list(options);
+  listSlots(options: PaginationOptions = {}): any {
+    const arr = this._slots.map(s => ({ ...s }));
+    const result = {
+      slots: arr,
+      data: arr,
+      page: options.page || 1,
+      limit: options.limit || 10,
+      total: arr.length,
+      cache: "miss"
+    };
+
+    const finalResult = Object.assign(arr, result);
+
+    if (this.cache) {
+      return this.cache.get("slots:list:all").then((cached: any) => {
+        if (cached) {
+          const slotsClone = cached.map((s: any) => ({ ...s }));
+          return Object.assign(slotsClone, {
+            slots: slotsClone,
+            data: slotsClone,
+            page: options.page || 1,
+            limit: options.limit || 10,
+            total: cached.length,
+            cache: "hit"
+          });
+        }
+        return this.cache.set("slots:list:all", finalResult).then(() => finalResult);
+      });
+    }
+
+    return finalResult;
   }
 
   createSlot(data: any): Slot {
-    if (!data.professional || data.professional.trim().length === 0) {
+    if (typeof data.professional !== 'string' || data.professional.trim().length === 0) {
         throw new SlotValidationError("professional must be a non-empty string");
     }
     if (data.endTime <= data.startTime) {
         throw new SlotValidationError("reversed time ranges");
     }
+    if (!Number.isFinite(data.startTime) || !Number.isFinite(data.endTime)) {
+        throw new SlotValidationError("startTime and endTime must be finite numbers");
+    }
+
     const slot = { id: this.nextId++, ...data };
     this._slots.push(slot);
+    
+    if (this.cache) {
+      this.cache.invalidate("slots:list:all");
+    }
+
     return { ...slot };
   }
 
@@ -109,12 +148,20 @@ export class SlotService {
     }
     
     this._slots[index] = { ...this._slots[index], ...data };
+
+    if (this.cache) {
+      this.cache.invalidate("slots:list:all");
+    }
+
     return { ...this._slots[index] };
   }
 
   reset(): void {
     this._slots = [];
     this.nextId = 1;
+    if (this.cache) {
+      this.cache.invalidate("slots:list:all");
+    }
   }
 
   async findById(id: number | string): Promise<Slot> {

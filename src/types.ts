@@ -9,6 +9,7 @@ export interface Slot {
 
 export interface PaginatedSlots {
   slots: Slot[];
+  data: Slot[];
   page: number;
   limit: number;
   total: number;

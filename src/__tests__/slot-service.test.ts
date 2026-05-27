@@ -1,3 +1,4 @@
+import { Slot } from "../types.js";
 import {
   SlotNotFoundError,
   SlotService,
@@ -28,11 +29,11 @@ describe("SlotService", () => {
       endTime: 4000,
     });
 
-    const list = service.listSlots();
+    const list = service.listSlots() as any[];
 
-    expect(list.map((slot) => slot.id)).toEqual([first.id, second.id]);
+    expect(list.map((slot: Slot) => slot.id)).toEqual([first.id, second.id]);
     list[0].professional = "tampered";
-    expect(service.listSlots()[0].professional).toBe("alice");
+    expect((service.listSlots() as any)[0].professional).toBe("alice");
   });
 
   it("throws when updating with invalid payload type", () => {

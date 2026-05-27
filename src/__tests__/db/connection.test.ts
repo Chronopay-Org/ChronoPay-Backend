@@ -25,9 +25,9 @@ const mockClient = { query: mockQueryFn, release: mockReleaseFn } as unknown as 
 
 // ─── Mock pool instance ───────────────────────────────────────────────────────
 
-let mockConnectFn: jest.MockedFunction<() => Promise<PoolClient>>;
-let mockEndFn: jest.MockedFunction<() => Promise<void>>;
-let mockOnFn: jest.MockedFunction<() => void>;
+let mockConnectFn: jest.MockedFunction<(...args: any[]) => Promise<PoolClient>>;
+let mockEndFn: jest.MockedFunction<(...args: any[]) => Promise<void>>;
+let mockOnFn: jest.MockedFunction<(...args: any[]) => void>;
 let mockPoolInstance: Pool;
 
 const FAKE_URL = "postgresql://user:pass@localhost:5432/test";
@@ -79,7 +79,7 @@ describe("getPool()", () => {
 
   it("creates a Pool using the factory with the DATABASE_URL", () => {
     process.env.DATABASE_URL = FAKE_URL;
-    const factoryFn = jest.fn<() => Pool>().mockReturnValue(mockPoolInstance);
+    const factoryFn = jest.fn<(...args: any[]) => Pool>().mockReturnValue(mockPoolInstance);
     _setPoolFactory(factoryFn as unknown as (url: string) => Pool);
     getPool();
     expect(factoryFn).toHaveBeenCalledWith(FAKE_URL);

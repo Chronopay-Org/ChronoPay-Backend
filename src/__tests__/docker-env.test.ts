@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import { Request, Response, NextFunction } from "express";
 import { validateRequiredFields } from "../middleware/validation.js";
 

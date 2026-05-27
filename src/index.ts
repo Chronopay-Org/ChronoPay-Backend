@@ -2,33 +2,10 @@ import "dotenv/config";
 import { logInfo } from "./utils/logger.js";
 import { loadEnvConfig } from "./config/env.js";
 import { createApp } from "./app.js";
-export { createApp };
-
-/**
- * Reset slots for tests - stub for CI compatibility
- */
-export function __resetSlotsForTests() {
-  // Logic to slots if needed
-}
-
-/**
- * Start the server - exported for tests
- */
-export function startServer(app: any, config: any) {
-  const PORT = config.port;
-  return app.listen(PORT, () => {
-    logInfo(`ChronoPay API listening on http://localhost:${PORT}`, {
-      port: PORT,
-      environment: config.nodeEnv,
-    });
-  });
-}
-
 import { register, metricsMiddleware } from "./metrics.js";
 import { startScheduler } from "./scheduler/reminderScheduler.js";
 
 const config = loadEnvConfig();
-const PORT = config.port;
 
 const app = createApp({
   enableDocs: true,
@@ -40,9 +17,6 @@ app.use(metricsMiddleware);
 
 /**
  * @api {get} /metrics Get Prometheus metrics
- * @apiName GetMetrics
- * @apiGroup Monitoring
- * @apiDescription Exposes application metrics in Prometheus format.
  */
 app.get("/metrics", async (_req, res) => {
   try {
@@ -53,9 +27,29 @@ app.get("/metrics", async (_req, res) => {
   }
 });
 
+/**
+ * Start the server
+ */
+export function startServer(appInstance: any, configInstance: any) {
+  const PORT = configInstance.port || 3001;
+  return appInstance.listen(PORT, () => {
+    logInfo(`ChronoPay API listening on http://localhost:${PORT}`, {
+      port: PORT,
+      environment: configInstance.nodeEnv,
+    });
+  });
+}
+
 if (config.nodeEnv !== "test") {
   startScheduler();
   startServer(app, config);
+}
+
+// For compatibility with tests
+export { createApp };
+import { resetSlotStore } from "./routes/slots.js";
+export function __resetSlotsForTests() {
+  resetSlotStore();
 }
 
 export default app;

@@ -47,6 +47,7 @@ export function requireAuthenticatedActor(
   };
 }
 
+// Named export for the header-based auth used by booking-intents
 export { requireAuthenticatedActor as authenticateToken };
 
 function parseRole(rawRole: string | undefined): ChronoPayRole {
