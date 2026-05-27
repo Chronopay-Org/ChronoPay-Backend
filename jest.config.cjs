@@ -15,6 +15,7 @@ module.exports = {
   testEnvironment: "node",
   extensionsToTreatAsEsm: [".ts"],
   moduleNameMapper: {
+    "^ioredis$": "<rootDir>/src/mocks/ioredis.ts",
     "^(\\.{1,2}/.*)\\.js$": "$1",
     "^(\\.{1,2}/.*)$": "$1",
   },
