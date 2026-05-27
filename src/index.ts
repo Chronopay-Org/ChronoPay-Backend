@@ -1,64 +1,95 @@
-import "dotenv/config";
-import express, { Request, Response } from "express";
-import cors from "cors";
-import { logInfo } from "./utils/logger.js";
-import {
-  createRequestLogger,
-  errorLoggerMiddleware,
-} from "./middleware/requestLogger.js";
-import { validateRequiredFields } from "./middleware/validation.js";
-import rateLimiter from "./middleware/rateLimiter.js";
-import { registerWebhookRoutes } from "./routes/webhooks.js";
+import { createServer, type Server, IncomingMessage, ServerResponse } from "http";
+import { loadEnvConfig, type EnvConfig } from "./config/env.js";
+import { stopScheduler } from "./scheduler/reminderScheduler.js";
+import { closePool } from "./db/connection.js";
 
-// If you want to add global middleware (like timeout), do it in createApp in app.ts
+export const SHUTDOWN_TIMEOUT_MS = 10_000;
 
-interface AppListener {
-  listen(port: number, callback?: () => void): unknown;
+let server: Server | undefined;
+let isShuttingDown = false;
+const activeRequests = new Set<IncomingMessage>();
+
+export function setServer(s: Server | undefined): void {
+  server = s;
 }
 
-export function createApp(options?: {
-  slotRepository?: InMemorySlotRepository;
-  bookingIntentService?: BookingIntentService;
-  settlementWebhookSecret?: string;
-}) {
-  const app = express();
-  const slotRepository = options?.slotRepository ?? new InMemorySlotRepository();
-  const bookingIntentService =
-    options?.bookingIntentService ??
-    new BookingIntentService(new InMemoryBookingIntentRepository(), slotRepository);
+export function resetShutdownFlag(): void {
+  isShuttingDown = false;
+}
 
-  function captureRawBody(req: Request, _res: Response, buf: Buffer) {
-    if (Buffer.isBuffer(buf) && buf.length > 0) {
-      req.rawBody = buf;
-    }
+export function getActiveRequestCount(): number {
+  return activeRequests.size;
+}
+
+export function startServer(
+  listener: { listen: (port: number, callback?: () => void) => unknown },
+  config: EnvConfig,
+) {
+  return listener.listen(config.port, () => {
+    console.log(`ChronoPay API listening on http://localhost:${config.port}`);
+  });
+}
+
+export async function gracefulShutdown(): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  stopScheduler();
+
+  if (server) {
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
   }
 
-  // Request logging middleware (must be first)
-  app.use(createRequestLogger());
-  
-  app.use(cors());
-  app.use(express.json({ limit: "100kb", verify: captureRawBody }));
+  const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
+  while (activeRequests.size > 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
 
-  registerWebhookRoutes(app, {
-    signingSecret:
-      options?.settlementWebhookSecret ?? process.env.SETTLEMENTS_WEBHOOK_SECRET,
-  });
-
-  app.get("/health", (_req, res) => {
-    const healthStatus = { status: "ok", service: "chronopay-backend" };
-    logInfo("Health check endpoint called", { endpoint: "/health" });
-    res.json(healthStatus);
-  });
+  await closePool();
 }
 
-const app = createApp();
+async function shutdownWithTimeout(): Promise<void> {
+  let forceExit = false;
+  const timer = setTimeout(() => {
+    forceExit = true;
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
 
-const PORT = process.env.PORT || 3000;
+  try {
+    await gracefulShutdown();
+  } finally {
+    clearTimeout(timer);
+    if (!forceExit) {
+      process.exit(0);
+    }
+  }
+}
 
 if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+  const { createApp } = await import("./app.js");
+  const config = loadEnvConfig();
+  const app = createApp();
+  server = createServer(app);
+
+  server.on("request", (req: IncomingMessage, res: ServerResponse) => {
+    activeRequests.add(req);
+    const cleanup = () => activeRequests.delete(req);
+    res.on("finish", cleanup);
+    res.on("close", cleanup);
   });
+
+  server.listen(config.port, () => {
+    console.log(`Server running on port ${config.port}`);
+  });
+
+  const handleSignal = () => {
+    if (!isShuttingDown) {
+      void shutdownWithTimeout();
+    }
+  };
+
+  process.on("SIGTERM", handleSignal);
+  process.on("SIGINT", handleSignal);
 }
 
-export default app;
+export default server;
