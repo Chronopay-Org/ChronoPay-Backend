@@ -283,6 +283,41 @@ export class CheckoutSessionService {
   }
 
   /**
+   * Processes payment for a session
+   * 
+   * @param sessionId - Unique session identifier
+   * @returns Updated session
+   * @throws CheckoutError if session not found or in invalid state
+   */
+  static paySession(sessionId: string): CheckoutSession {
+    const session = this.getSession(sessionId);
+
+    // Only allow payment from pending state
+    if (session.status !== CheckoutSessionStatus.PENDING) {
+      this.emitAuditEvent("paid", "failed", `session:${sessionId}`, {
+        reason: `Cannot pay for session in ${session.status} state`,
+        currentState: session.status,
+      });
+      throw new CheckoutError(
+        CheckoutErrorCode.INVALID_SESSION_STATE,
+        `Cannot pay for session in ${session.status} state`,
+        409,
+        { currentState: session.status },
+      );
+    }
+
+    // Simulate payment processing logic
+    // 90% success rate
+    const paymentSuccessful = Math.random() > 0.1;
+
+    if (paymentSuccessful) {
+      return this.completeSession(sessionId, "mock_token_123");
+    } else {
+      return this.failSession(sessionId, "Payment provider declined transaction");
+    }
+  }
+
+  /**
    * Gets all sessions (for admin/testing purposes)
    * In production, this should be protected and paginated
    * 
@@ -359,6 +394,14 @@ export class CheckoutSessionService {
       "checkout.cancelSession",
       { route: "POST /api/v1/checkout/sessions/:sessionId/cancel" },
       () => this.cancelSession(sessionId),
+    );
+  }
+
+  static paySessionTraced(sessionId: string): Promise<CheckoutSession> {
+    return withSpan(
+      "checkout.paySession",
+      { route: "POST /api/v1/checkout/sessions/:sessionId/pay" },
+      () => this.paySession(sessionId),
     );
   }
 }
