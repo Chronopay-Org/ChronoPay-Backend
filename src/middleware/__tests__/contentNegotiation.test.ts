@@ -1,6 +1,23 @@
+import { jest } from "@jest/globals";
 import express from "express";
 import request from "supertest";
 import { createContentNegotiationMiddleware } from "../contentNegotiation.js";
+
+jest.unstable_mockModule("../rateLimitStore.js", () => ({
+  rateLimitRedisStore: {
+    async incr() {
+      return 1;
+    },
+    async decrement() {},
+    async resetKey() {},
+  },
+}));
+
+let createApp: typeof import("../../app.js").createApp;
+
+beforeAll(async () => {
+  ({ createApp } = await import("../../app.js"));
+});
 
 function createHarness(options?: { excludePaths?: string[] }) {
   const app = express();
@@ -123,5 +140,30 @@ describe("content negotiation middleware", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ bypassed: true });
+  });
+
+  it("is wired before JSON parsing in the real app factory", async () => {
+    const rejected = await request(createApp({ enableDocs: false }))
+      .post("/api/v1/slots")
+      .set("Content-Type", "text/plain")
+      .set("Accept", "application/json")
+      .send("not json");
+
+    expect(rejected.status).toBe(415);
+    expect(rejected.body.code).toBe("UNSUPPORTED_MEDIA_TYPE");
+
+    const excluded = await request(
+      createApp({
+        enableDocs: false,
+        contentNegotiationExcludePaths: ["/api/v1/slots"],
+      }),
+    )
+      .post("/api/v1/slots")
+      .set("Content-Type", "text/plain")
+      .set("Accept", "text/html")
+      .send("not json");
+
+    expect(excluded.status).toBe(400);
+    expect(excluded.body.code).toBe("MISSING_REQUIRED_FIELD");
   });
 });

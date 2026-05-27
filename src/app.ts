@@ -16,6 +16,7 @@ import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./m
 import { createBookingIntentsRouter } from "./routes/booking-intents.js";
 import { AmountUtils } from "./utils/amount.js";
 import checkoutRouter from "./routes/checkout.js";
+import { configService } from "./config/config.service.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
 
