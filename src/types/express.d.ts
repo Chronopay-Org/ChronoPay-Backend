@@ -13,5 +13,10 @@ declare module "express-serve-static-core" {
       exp?: number;
       [key: string]: unknown;
     };
+
+    /**
+     * Raw request body buffer captured for signature verification.
+     */
+    rawBody?: Buffer;
   }
 }

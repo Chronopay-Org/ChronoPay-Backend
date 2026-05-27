@@ -64,6 +64,9 @@ Currently validated variables used by `src`:
   - optional
   - default: `3001`
   - must be an integer in the range `1` to `65535`
+- `SETTLEMENTS_WEBHOOK_SECRET`
+  - optional for startup, but required for `POST /api/v1/webhooks/settlements`
+  - must be a non-empty secret used to verify webhook payload signatures
 
 ### Startup failure behavior
 
@@ -111,6 +114,18 @@ Additional reviewer-focused notes live in:
     - `500` for backend errors
   - Example:
     - `/api/v1/slots?page=2&limit=5`
+- `POST /api/v1/webhooks/settlements` — Settlement webhook endpoint
+  - Requires `x-webhook-signature` header with HMAC SHA256 over the raw JSON payload
+  - Requires `SETTLEMENTS_WEBHOOK_SECRET` on the host for valid signature verification
+  - Payload fields:
+    - `eventType` — one of `settlement_completed`, `settlement_initiated`, `settlement_failed`
+    - `transactionId` — string
+    - `amount` — positive number
+    - `timestamp` — positive number (millisecond epoch)
+  - Error responses:
+    - `401` when the signature header is missing
+    - `403` when the signature mismatches or the timestamp is stale
+    - `400` for invalid event payload
 
 ## Rate Limiting
 
