@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
 import cors from "cors";
 import express, { Request, Response } from "express";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
@@ -246,25 +247,7 @@ function createCheckoutSessionStub(req: Request, res: Response) {
     });
   }
 
-  // Generate proper UUID v4 format
-  const generateUUID = () => {
-    const chars = "0123456789abcdef";
-    let uuid = "";
-    for (let i = 0; i < 36; i++) {
-      if (i === 8 || i === 13 || i === 18 || i === 23) {
-        uuid += "-";
-      } else if (i === 14) {
-        uuid += "4";
-      } else if (i === 19) {
-        uuid += chars[(Math.random() * 4 | 8)];
-      } else {
-        uuid += chars[Math.floor(Math.random() * 16)];
-      }
-    }
-    return uuid;
-  };
-
-  const sessionId = generateUUID();
+  const sessionId = randomUUID();
   const now = Date.now();
 
   const session = {
@@ -326,24 +309,6 @@ const profileStore = new Map<string, any>();
 const userIdIndex = new Map<string, string>();
 const emailIndex = new Map<string, string>();
 
-// UUID v4 generator
-function generateUUID() {
-  const chars = "0123456789abcdef";
-  let uuid = "";
-  for (let i = 0; i < 36; i++) {
-    if (i === 8 || i === 13 || i === 18 || i === 23) {
-      uuid += "-";
-    } else if (i === 14) {
-      uuid += "4";
-    } else if (i === 19) {
-      uuid += chars[(Math.random() * 4) | 8];
-    } else {
-      uuid += chars[Math.floor(Math.random() * 16)];
-    }
-  }
-  return uuid;
-}
-
 function createBuyerProfileStub(req: Request, res: Response) {
   const { userId, fullName, email, phoneNumber } = req.body;
 
@@ -375,7 +340,7 @@ function createBuyerProfileStub(req: Request, res: Response) {
     });
   }
 
-  const profileId = generateUUID();
+  const profileId = randomUUID();
   const now = new Date().toISOString();
 
   const profile = {
