@@ -12,12 +12,24 @@ export interface CreateBookingIntentInput {
   note?: string;
 }
 
-export class BookingIntentError extends Error {
+export class BookingIntentError extends AppError {
   constructor(
     readonly status: number,
     message: string,
   ) {
-    super(message);
+    const code =
+      status === 400
+        ? ERROR_CODES.BAD_REQUEST.code
+        : status === 403
+          ? ERROR_CODES.FORBIDDEN.code
+          : status === 404
+            ? ERROR_CODES.NOT_FOUND.code
+            : status === 409
+              ? ERROR_CODES.CONFLICT.code
+              : status === 422
+                ? ERROR_CODES.UNPROCESSABLE_ENTITY.code
+                : ERROR_CODES.INTERNAL_ERROR.code;
+    super(message, status, code, true);
     this.name = "BookingIntentError";
   }
 }
