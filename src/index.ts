@@ -1,30 +1,69 @@
+import { createServer, type Server } from "http";
 import { createApp } from "./app.js";
 import { loadEnvConfig, type EnvConfig } from "./config/env.js";
-import { logInfo } from "./utils/logger.js";
+import { stopScheduler } from "./scheduler/reminderScheduler.js";
+import { closePool } from "./db/connection.js";
 
-// If you want to add global middleware (like timeout), do it in createApp in app.js
+export const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+let server: Server | undefined;
+let isShuttingDown = false;
+
+export function setServer(s: Server | undefined): void {
+  server = s;
+}
+
+export function resetShutdownFlag(): void {
+  isShuttingDown = false;
+}
 
 export function startServer(
-  server: { listen: (port: number, callback?: () => void) => unknown },
+  listener: { listen: (port: number, callback?: () => void) => unknown },
   config: EnvConfig,
 ) {
-  return server.listen(config.port, () => {
+  return listener.listen(config.port, () => {
     console.log(`ChronoPay API listening on http://localhost:${config.port}`);
   });
 }
 
-const config = loadEnvConfig();
-const app = createApp();
+export async function gracefulShutdown(): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
 
-const PORT = process.env.PORT || 3000;
+  stopScheduler();
 
-// Error handler (must be last)
-// If not already in createApp, add: app.use(errorHandler);
+  if (server) {
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+  }
 
-if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+  await closePool();
 }
 
-export default app;
+async function shutdownWithTimeout(): Promise<void> {
+  const timer = setTimeout(() => {
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+
+  try {
+    await gracefulShutdown();
+  } finally {
+    clearTimeout(timer);
+    process.exit(0);
+  }
+}
+
+if (process.env.NODE_ENV !== "test") {
+  const config = loadEnvConfig();
+  const app = createApp();
+  server = createServer(app);
+  const port = config.port;
+
+  server.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+  });
+
+  process.on("SIGTERM", () => void shutdownWithTimeout());
+  process.on("SIGINT", () => void shutdownWithTimeout());
+}
+
+export default server;
