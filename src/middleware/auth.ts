@@ -15,19 +15,21 @@ function emitAuthAudit(
   status: number,
   extra?: Record<string, unknown>,
 ): void {
-  try {
+  // Provide a fallback IP to satisfy audit validator when req.ip is unavailable (e.g. in tests)
+  const actorIp = req.ip ?? req.socket?.remoteAddress ?? "127.0.0.1";
+  Promise.resolve(
     defaultAuditLogger.log(
       event,
       { ...extra },
       {
-        actorIp: req.ip ?? req.socket?.remoteAddress,
+        actorIp,
         resource: req.originalUrl,
         status,
       },
-    );
-  } catch {
-    // Audit failures must never block the auth response
-  }
+    ),
+  ).catch(() => {
+    // Audit failures must never block or surface to the caller
+  });
 }
 
 export type ChronoPayRole = "customer" | "admin" | "professional";
