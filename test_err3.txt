@@ -1,0 +1,50 @@
+
+> chronopay-backend@0.1.0 test
+> node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand
+
+(node:6660) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS src/__tests__/db.test.ts
+  ● Console
+
+    console.log
+      [dotenv@17.3.1] injecting env (1) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+
+      at _log (node_modules/dotenv/lib/main.js:139:11)
+
+    console.log
+      [dotenv@17.3.1] injecting env (0) from .env -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+
+      at _log (node_modules/dotenv/lib/main.js:139:11)
+
+    console.log
+      [dotenv@17.3.1] injecting env (0) from .env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+
+      at _log (node_modules/dotenv/lib/main.js:139:11)
+
+    console.log
+      [dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+
+      at _log (node_modules/dotenv/lib/main.js:139:11)
+
+    console.log
+      Closing PostgreSQL connection pool...
+
+      at shutdown (src/db/pool.ts:47:11)
+
+    console.log
+      PostgreSQL connection pool closed.
+
+      at shutdown (src/db/pool.ts:49:11)
+
+  ●  process.exit called with "1"
+
+    [0m [90m 70 |[39m       [90m// Exclude sensitive data by ONLY logging the generic message/stack[39m
+     [90m 71 |[39m     })[33m;[39m
+    [31m[1m>[22m[39m[90m 72 |[39m     process[33m.[39mexit([35m1[39m)[33m;[39m
+     [90m    |[39m             [31m[1m^[22m[39m
+     [90m 73 |[39m   }
+     [90m 74 |[39m }[33m;[39m
+     [90m 75 |[39m[0m
+
+      at initDB (src/db/pool.ts:72:13)

@@ -1,55 +1,29 @@
-import express from "express";
-import cors from "cors";
-import { validateRequiredFields } from "./middleware/validation";
-import slotsRouter from "./routes/slots";
+import { createApp } from "./app.js";
+import { loadEnvConfig, type EnvConfig } from "./config/env.js";
+import { logInfo } from "./utils/logger.js";
 
-const app = express();
-const PORT = process.env.PORT ?? 3001;
+// If you want to add global middleware (like timeout), do it in createApp in app.js
 
-app.use(cors());
-app.use(express.json());
+export function startServer(
+  server: { listen: (port: number, callback?: () => void) => unknown },
+  config: EnvConfig,
+) {
+  return server.listen(config.port, () => {
+    console.log(`ChronoPay API listening on http://localhost:${config.port}`);
+  });
+}
 
-import swaggerUi from "swagger-ui-express";
-import swaggerJsdoc from "swagger-jsdoc";
+const config = loadEnvConfig();
+const app = createApp();
 
-const options = {
-  swaggerDefinition: {
-    openapi: "3.0.0",
-    info: { title: "ChronoPay API", version: "1.0.0" },
-  },
-  apis: ["./src/routes/*.ts"], // adjust if needed
-};
+const PORT = process.env.PORT || 3000;
 
-const specs = swaggerJsdoc(options);
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs));
-
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", service: "chronopay-backend" });
-});
-
-app.use("/api/v1/slots", slotsRouter);
-
-app.post(
-  "/api/v1/slots",
-  validateRequiredFields(["professional", "startTime", "endTime"]),
-  (req, res) => {
-    const { professional, startTime, endTime } = req.body;
-
-    res.status(201).json({
-      success: true,
-      slot: {
-        id: 1,
-        professional,
-        startTime,
-        endTime,
-      },
-    });
-  },
-);
+// Error handler (must be last)
+// If not already in createApp, add: app.use(errorHandler);
 
 if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {
-    console.log(`ChronoPay API listening on http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
   });
 }
 
