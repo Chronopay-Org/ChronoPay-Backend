@@ -6,3 +6,13 @@ dist/
 *.log
 .DS_Store
 coverage/
+
+# Local debug artifacts and virtual environments
+test_output*.txt
+err*.txt
+build_err*.txt
+jest_errors.txt
+task*.md
+test-full-suite.ipynb
+.venv*/
+.venv*

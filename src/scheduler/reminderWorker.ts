@@ -24,7 +24,7 @@ export async function processReminders() {
       reminder.status = "sent";
       reminderMetrics.increment("delivered");
       console.log(`[reminder] delivered id=${reminder.id}`);
-    } catch (error) {
+    } catch {
       reminder.attempts += 1;
       if (reminder.attempts >= MAX_RETRIES) {
         reminder.status = "failed";
