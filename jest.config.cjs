@@ -23,4 +23,21 @@ module.exports = {
   transform: { "^.+\\.tsx?$": ["ts-jest", { useESM: true }] },
   testMatch: ["**/__tests__/**/*.test.ts"],
   clearMocks: true,
+  coverageDirectory: "coverage",
+  coverageReporters: ["lcov", "text-summary"],
+  collectCoverageFrom: [
+    "src/**/*.ts",
+    "!src/index.ts",
+    "!src/**/__tests__/**",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts",
+  ],
+  coverageThreshold: {
+    global: {
+      branches: 80,
+      functions: 80,
+      lines: 80,
+      statements: 80,
+    },
+  },
 };
