@@ -10,9 +10,26 @@ const allowedEventTypes = new Set([
 
 const CLOCK_SKEW_MS = 60 * 1000; // 1 minute
 
-export interface WebhookRouteOptions {
-  signingSecret?: string;
+interface ProcessedEvent {
+  eventType: string;
+  processedAt: number;
+  response: { success: boolean; received: unknown };
 }
+
+// In-process dedup store: transactionId → ProcessedEvent.
+// Injectable via _setProcessedTransactions() for test isolation.
+let _processedTransactions: Map<string, ProcessedEvent> = new Map();
+
+export function _setProcessedTransactions(store: Map<string, ProcessedEvent>): void {
+  _processedTransactions = store;
+}
+
+export function _resetProcessedTransactions(): void {
+  _processedTransactions = new Map();
+}
+
+router.post("/settlements", (req: Request, res: Response) => {
+  const { eventType, transactionId, amount, timestamp } = req.body ?? {};
 
 export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions = {}) {
   app.post(
@@ -29,12 +46,22 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
         });
       }
 
-      if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
-        return res.status(400).json({
-          success: false,
-          error: "Invalid amount. Amount must be a positive number.",
-        });
-      }
+  // Idempotency check: short-circuit duplicate transactionIds.
+  const existing = _processedTransactions.get(String(transactionId));
+  if (existing) {
+    return res.status(200).json(existing.response);
+  }
+
+  const responseBody = { success: true, received: req.body };
+
+  _processedTransactions.set(String(transactionId), {
+    eventType: String(eventType),
+    processedAt: Date.now(),
+    response: responseBody,
+  });
+
+  return res.status(200).json(responseBody);
+});
 
       if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) {
         return res.status(400).json({
