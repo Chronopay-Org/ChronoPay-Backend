@@ -144,6 +144,13 @@ This detects:
 
 See [docs/database/migrations.md](docs/database/migrations.md) for complete documentation.
 
+## API Documentation
+
+Detailed API contracts and endpoint documentation:
+
+- **[Booking Intent API](docs/booking-intent-api.md)** — POST /api/v1/booking-intents endpoint with request/response schemas, validation rules, and error codes
+- **[Slots API](docs/api/slots.md)** — Complete slots API documentation covering GET/POST/PATCH/DELETE endpoints, conflict detection, caching, and security considerations
+
 ## API (slot listing)
 
 - `GET /health` — Health check; returns `{ status: "ok", service: "chronopay-backend" }`
