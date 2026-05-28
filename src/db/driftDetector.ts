@@ -79,10 +79,12 @@ export function detectDrift(
 export function validateMigrationOrder(migrations: Migration[]): DriftResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const seenIds = new Map<string, number>();
 
   for (let i = 0; i < migrations.length; i++) {
     const m = migrations[i];
-    
+    seenIds.set(m.id, (seenIds.get(m.id) ?? 0) + 1);
+
     // Validate ID format (numeric, zero-padded)
     if (!/^\d{3,}$/.test(m.id)) {
       errors.push(
@@ -103,6 +105,12 @@ export function validateMigrationOrder(migrations: Migration[]): DriftResult {
       errors.push(
         `Migration at position ${i} has ID "${m.id}" but expected "${expectedId}". Migrations must be sequential.`
       );
+    }
+  }
+
+  for (const [id, count] of seenIds.entries()) {
+    if (count > 1) {
+      errors.push(`Duplicate migration ID "${id}" appears ${count} times`);
     }
   }
 
