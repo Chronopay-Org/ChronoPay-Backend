@@ -14,6 +14,7 @@ import { requireAuthenticatedActor, type AuthenticatedRequest } from "../middlew
 import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
+import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import {
     BookingIntentService,
     BookingIntentError,
@@ -37,6 +38,7 @@ export function createBookingIntentsRouter() {
         "/",
         requireFeatureFlag("CREATE_BOOKING_INTENT"),
         requireAuthenticatedActor(["customer", "admin"]),
+        idempotencyMiddleware,
         createAuthAwareRateLimiter(),
         auditMiddleware("CREATE_BOOKING_INTENT"),
         (req: AuthenticatedRequest, res: Response): void => {

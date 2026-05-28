@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { getRedisClient } from "../cache/redisClient.js";
 import { generateRequestHash } from "../utils/hash.js";
 import { getIdempotencyPayloadCodec } from "../utils/idempotencyPayloadCodec.js";
+import { validateIdempotencyKey } from "./headerValidation.js";
 import { IdempotencyError } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
@@ -99,8 +100,6 @@ export const idempotencyMiddleware = async (
 
     const processingState: IdempotencyProcessingState = {
       status: "processing",
-      requestMethod: req.method,
-      requestPath: req.originalUrl,
       requestHash: incomingHash,
     };
 
@@ -129,8 +128,6 @@ export const idempotencyMiddleware = async (
     res.json = ((body: unknown) => {
       const completedState: IdempotencyCompletedState = {
         status: "completed",
-        requestMethod: req.method,
-        requestPath: req.originalUrl,
         requestHash: incomingHash,
         statusCode: res.statusCode,
         responseBody: body,
