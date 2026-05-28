@@ -65,6 +65,10 @@ class InMemoryRedisMock implements RedisClient {
     return Array.from(this.store.keys()).filter((k) => k.startsWith(prefix));
   }
 
+  async ping(): Promise<string> {
+    return "PONG";
+  }
+
   async quit(): Promise<unknown> {
     this.store.clear();
     return "OK";
