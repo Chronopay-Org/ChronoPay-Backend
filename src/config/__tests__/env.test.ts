@@ -264,3 +264,51 @@ describe("EnvValidationError", () => {
     }
   });
 });
+
+// ─── HORIZON_URL ──────────────────────────────────────────────────────────────
+
+describe("HORIZON_URL", () => {
+  it("returns undefined when omitted", () => {
+    expect(load().horizonUrl).toBeUndefined();
+  });
+
+  it("accepts https:// URL", () => {
+    expect(load({ HORIZON_URL: "https://horizon-testnet.stellar.org" }).horizonUrl).toBe(
+      "https://horizon-testnet.stellar.org",
+    );
+  });
+
+  it("accepts http:// URL", () => {
+    expect(load({ HORIZON_URL: "http://localhost:8000" }).horizonUrl).toBe("http://localhost:8000");
+  });
+
+  it("returns undefined for whitespace-only value", () => {
+    expect(load({ HORIZON_URL: "   " }).horizonUrl).toBeUndefined();
+  });
+
+  it("rejects non-http scheme", () => {
+    expectIssue({ ...VALID, HORIZON_URL: "ftp://horizon.example.com" }, "HORIZON_URL");
+  });
+
+  it("rejects invalid URL", () => {
+    expectIssue({ ...VALID, HORIZON_URL: "not-a-url" }, "HORIZON_URL");
+  });
+});
+
+// ─── STELLAR_NETWORK_PASSPHRASE ───────────────────────────────────────────────
+
+describe("STELLAR_NETWORK_PASSPHRASE", () => {
+  it("returns undefined when omitted", () => {
+    expect(load().networkPassphrase).toBeUndefined();
+  });
+
+  it("returns trimmed passphrase when provided", () => {
+    expect(
+      load({ STELLAR_NETWORK_PASSPHRASE: "  Test SDF Network ; September 2015  " }).networkPassphrase,
+    ).toBe("Test SDF Network ; September 2015");
+  });
+
+  it("returns undefined for whitespace-only value", () => {
+    expect(load({ STELLAR_NETWORK_PASSPHRASE: "   " }).networkPassphrase).toBeUndefined();
+  });
+});
