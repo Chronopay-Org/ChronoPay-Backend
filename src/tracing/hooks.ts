@@ -1,5 +1,4 @@
 import { createChildContext, runWithTraceContext, getTraceContext } from "./context.js";
-import { emitSpan } from "./spanExporter.js";
 
 /**
  * Interface representing a tracing span.

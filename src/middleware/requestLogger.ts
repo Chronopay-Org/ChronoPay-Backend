@@ -1,6 +1,6 @@
 import { pinoHttp, Options as PinoHttpOptions } from "pino-http";
 import { Request, Response, NextFunction } from "express";
-import { logger, LogLevel } from "../utils/logger.js";
+import { logger } from "../utils/logger.js";
 import { IncomingMessage, ServerResponse } from "http";
 import type { LevelWithSilent } from "pino";
 import {
@@ -10,6 +10,7 @@ import {
   extractIdentity,
   RequestLogContext,
 } from "../utils/logContext.js";
+import { validateRequestId } from "./headerValidation.js";
 
 /**
  * Extended Express request interface to include timing and custom properties
@@ -18,6 +19,7 @@ declare module "express" {
   interface Request {
     startTime?: number;
     logContext?: RequestLogContext;
+    requestId?: string;
   }
 }
 
@@ -53,11 +55,7 @@ const shouldLogRequest = (req: Request): boolean => {
   }
 
   // Skip health check endpoints in production (high volume, low value)
-  if (
-    url.includes("/health") ||
-    url.includes("/ready") ||
-    url.includes("/live")
-  ) {
+  if (url.includes("/health") || url.includes("/ready") || url.includes("/live")) {
     return false;
   }
 
@@ -75,13 +73,6 @@ const shouldLogRequest = (req: Request): boolean => {
 const calculateDuration = (startTime: number | undefined): number => {
   if (!startTime) return 0;
   return Date.now() - startTime;
-};
-
-/**
- * Extracts user agent information safely
- */
-const getUserAgent = (req: Request): string => {
-  return req.get("user-agent") || "unknown";
 };
 
 const sanitizeRequestHeaders = (
@@ -112,7 +103,7 @@ const sanitizeRequestHeaders = (
 /**
  * Creates the HTTP request logging middleware for Express
  * Logs all incoming requests with timing, status, and metadata
- * 
+ *
  * Features:
  * - Request/response logging with timing
  * - Automatic log level based on status code
@@ -123,7 +114,7 @@ const sanitizeRequestHeaders = (
  */
 export const createRequestLogger = () => {
   // In test mode, return a minimal middleware that doesn't log
-  if (process.env.NODE_ENV === 'test') {
+  if (process.env.NODE_ENV === "test") {
     return (req: Request, res: Response, next: NextFunction) => {
       // Minimal request processing for tests
       (req as any).startTime = Date.now();
@@ -131,7 +122,7 @@ export const createRequestLogger = () => {
       next();
     };
   }
-  
+
   const options: PinoHttpOptions = {
     logger,
 
@@ -145,8 +136,7 @@ export const createRequestLogger = () => {
     /**
      * Custom log level derivation
      */
-    customLogLevel: (_req: IncomingMessage, res: ServerResponse) =>
-      getCustomLogLevel(res),
+    customLogLevel: (_req: IncomingMessage, res: ServerResponse) => getCustomLogLevel(res),
 
     /**
      * Custom success message format
@@ -161,11 +151,7 @@ export const createRequestLogger = () => {
     /**
      * Custom error message format
      */
-    customErrorMessage: (
-      req: IncomingMessage,
-      res: ServerResponse,
-      err: Error
-    ) => {
+    customErrorMessage: (req: IncomingMessage, res: ServerResponse, err: Error) => {
       const duration = calculateDuration((req as Request).startTime);
       const method = req.method || "UNKNOWN";
       const url = req.url || "/";
@@ -190,8 +176,7 @@ export const createRequestLogger = () => {
         return req.requestId;
       }
       // Use existing request ID if present (from proxy/gateway)
-      const existingId =
-        req.headers["x-request-id"] || req.headers["x-correlation-id"];
+      const existingId = req.headers["x-request-id"] || req.headers["x-correlation-id"];
       if (existingId && typeof existingId === "string") {
         const validation = validateRequestId(existingId);
         if (validation.valid) {
@@ -234,11 +219,11 @@ export const createRequestLogger = () => {
     /**
      * Add standardized log fields to every request
      */
-    customProps: (req: Request, res: Response) => {
+    customProps: (req: Request, _res: Response) => {
       const baseContext = buildRequestLogContext(req);
       const identity = extractIdentity(req);
       const contextWithIdentity = addIdentityToContext(baseContext, identity);
-      
+
       return {
         requestId: contextWithIdentity.requestId,
         route: contextWithIdentity.route,
@@ -258,12 +243,7 @@ export const createRequestLogger = () => {
  * Error logging middleware - captures unhandled errors with full context
  * Should be placed after all route handlers
  */
-export const errorLoggerMiddleware = (
-  err: any,
-  req: Request,
-  res: Response,
-  next: any
-) => {
+export const errorLoggerMiddleware = (err: any, req: Request, res: Response, next: any) => {
   const requestId = req.requestId || req.id || "unknown";
   const duration = calculateDuration(req.startTime);
   const baseContext = buildRequestLogContext(req);
@@ -292,10 +272,11 @@ export const errorLoggerMiddleware = (
       response: {
         statusCode: res.statusCode,
       },
+      context: finalContext,
       duration_ms: duration,
       timestamp: new Date().toISOString(),
     },
-    "Unhandled error occurred"
+    "Unhandled error occurred",
   );
 
   // Pass to next error handler

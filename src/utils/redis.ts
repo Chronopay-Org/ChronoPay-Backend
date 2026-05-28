@@ -39,7 +39,6 @@ export const getRedisClient = (): any => {
     }
 
     // Dynamically import ioredis only in non-test environments
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Redis } = require("ioredis");
     const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 
