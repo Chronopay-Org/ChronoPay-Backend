@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import fs from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import cors from "cors";
 import express, { type Request, type Response } from "express";
@@ -43,12 +45,30 @@ export interface AppFactoryOptions {
   redisClient?: RedisClient | null;
 }
 
+let cachedSwaggerSpec: unknown | null = null;
+
 function registerSwaggerDocs(app: express.Express) {
   const require = createRequire(import.meta.url);
 
   try {
     const swaggerUi = require("swagger-ui-express");
     const swaggerJsdoc = require("swagger-jsdoc");
+
+    const chooseApis = () => {
+      try {
+        const distRoutesDir = path.join(process.cwd(), "dist", "routes");
+        if (fs.existsSync(distRoutesDir)) {
+          const files = fs.readdirSync(distRoutesDir).filter((f) => f.endsWith(".js"));
+          if (files.length > 0) {
+            return ["./dist/routes/*.js", "./dist/index.js"];
+          }
+        }
+      } catch (_) {
+        // ignore and fall back to src globs
+      }
+
+      return ["./src/routes/*.ts", "./src/index.ts"];
+    };
 
     const options = {
       swaggerDefinition: {
@@ -171,11 +191,14 @@ function registerSwaggerDocs(app: express.Express) {
           { chronoPayAuth: [] },
         ],
       },
-      apis: ["./src/routes/*.ts", "./src/index.ts"],
+      apis: chooseApis(),
     };
 
-    const specs = swaggerJsdoc(options);
-    app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs));
+    if (!cachedSwaggerSpec) {
+      cachedSwaggerSpec = swaggerJsdoc(options);
+    }
+
+    app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(cachedSwaggerSpec));
   } catch {
     // Keep the service bootable in environments where API docs deps are not installed.
   }
