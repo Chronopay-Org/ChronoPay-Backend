@@ -1,4 +1,4 @@
-export type BookingIntentStatus = "pending" | "cancelled" | "expired";
+export type BookingIntentStatus = "pending" | "confirmed" | "cancelled" | "expired";
 
 export interface BookingIntentRecord {
   id: string;
@@ -16,13 +16,13 @@ export interface BookingIntentRecord {
 
 
 export interface BookingIntentRepository {
-  create(intent: Omit<BookingIntentRecord, "id">): BookingIntentRecord;
+  create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord>;
   findById(id: string): BookingIntentRecord | undefined;
   findBySlotId(slotId: string): BookingIntentRecord | undefined;
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
-  findById(id: string): BookingIntentRecord | undefined;
   listByCustomer(customerId: string): BookingIntentRecord[];
   listAll(): BookingIntentRecord[];
+  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord;
 }
 
 export class InMemoryBookingIntentRepository implements BookingIntentRepository {
@@ -46,6 +46,13 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
     return intent ? { ...intent } : undefined;
   }
 
+  findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined {
+    const intent = this.intents.find(
+      (entry) => entry.slotId === slotId && entry.customerId === customerId && entry.status === "pending",
+    );
+    return intent ? { ...intent } : undefined;
+  }
+
   findById(id: string): BookingIntentRecord | undefined {
     const intent = this.intents.find((entry) => entry.id === id);
     return intent ? { ...intent } : undefined;
@@ -57,5 +64,14 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
 
   listAll(): BookingIntentRecord[] {
     return this.intents.map((i) => ({ ...i }));
+  }
+
+  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord {
+    const index = this.intents.findIndex((entry) => entry.id === id);
+    if (index === -1) {
+      throw new Error(`BookingIntent with id "${id}" not found`);
+    }
+    this.intents[index] = { ...this.intents[index], status };
+    return { ...this.intents[index] };
   }
 }

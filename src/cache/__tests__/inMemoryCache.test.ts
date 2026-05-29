@@ -1,7 +1,5 @@
-<<<<<<< HEAD
 import { jest } from "@jest/globals";
-import { jest } from '@jest/globals';
-import { InMemoryCache } from '../inMemoryCache';
+import { InMemoryCache } from '../inMemoryCache.js';
 
 const TTL = 1000;
 
@@ -404,6 +402,5 @@ describe('InMemoryCache', () => {
 
     // after both resolve the cache contains a value
     expect(cache.get('con')).toBe('C');
->>>>>>> ac113ec (test: cover in-memory cache ttl)
   });
 });

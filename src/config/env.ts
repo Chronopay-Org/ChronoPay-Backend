@@ -31,6 +31,10 @@ export interface EnvConfig {
   jwtIssuer?: string;
   jwtAudience?: string;
   corsAllowedOrigins?: string[];
+  /** Stellar Horizon base URL (e.g. https://horizon-testnet.stellar.org) */
+  horizonUrl?: string;
+  /** Stellar network passphrase used to identify the target network */
+  networkPassphrase?: string;
 }
 
 export class EnvValidationError extends Error {
@@ -64,6 +68,8 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   const jwtIssuer = parseOptionalString(env.JWT_ISSUER);
   const jwtAudience = parseOptionalString(env.JWT_AUDIENCE);
   const corsAllowedOrigins = parseStringList(env.CORS_ALLOWED_ORIGINS);
+  const horizonUrl = parseOptionalUrl(env.HORIZON_URL, "HORIZON_URL", issues);
+  const networkPassphrase = parseOptionalString(env.STELLAR_NETWORK_PASSPHRASE);
 
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
@@ -81,6 +87,8 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     jwtIssuer,
     jwtAudience,
     corsAllowedOrigins,
+    horizonUrl,
+    networkPassphrase,
   };
 }
 
@@ -195,7 +203,7 @@ function parseBoolean(rawValue: string | undefined, key: string, defaultValue: b
   const val = rawValue.trim().toLowerCase();
   if (val === "true" || val === "1") return true;
   if (val === "false" || val === "0") return false;
-  issues.push(`${key} must be a boolean value (true/false).`);
+  issues.push(`${key} must be one of: true, false, 1, 0.`);
   return defaultValue;
 }
 
@@ -209,4 +217,21 @@ function parseOptionalString(rawValue: string | undefined): string | undefined {
 function parseStringList(rawValue: string | undefined): string[] {
   if (rawValue === undefined) return [];
   return rawValue.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+function parseOptionalUrl(rawValue: string | undefined, key: string, issues: string[]): string | undefined {
+  if (rawValue === undefined) return undefined;
+  const value = rawValue.trim();
+  if (value.length === 0) return undefined;
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) {
+      issues.push(`${key} must use http or https scheme.`);
+      return undefined;
+    }
+    return value;
+  } catch {
+    issues.push(`${key} must be a valid URL.`);
+    return undefined;
+  }
 }

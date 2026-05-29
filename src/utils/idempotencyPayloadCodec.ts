@@ -2,7 +2,6 @@ import crypto from "crypto";
 import {
   type EnvConfig,
   type IdempotencyRedisEncryptionConfig,
-  loadEnvConfig,
 } from "../config/env.js";
 
 const ENCRYPTION_CONTEXT = "chronopay:idempotency:redis-payload:v1";
@@ -104,6 +103,15 @@ export class IdempotencyPayloadCodec {
 
 let configOverride: EnvConfig["idempotencyRedisEncryption"] | null = null;
 
+function getDefaultCodecConfig(): IdempotencyRedisEncryptionConfig {
+  return {
+    enabled: false,
+    algorithm: "aes-256-gcm",
+    activeKey: null,
+    decryptionKeys: [],
+  };
+}
+
 export function createIdempotencyPayloadCodec(
   config: IdempotencyRedisEncryptionConfig,
 ): IdempotencyPayloadCodec {
@@ -115,8 +123,7 @@ export function getIdempotencyPayloadCodec(): IdempotencyPayloadCodec {
     return new IdempotencyPayloadCodec(configOverride);
   }
 
-  const config = loadEnvConfig(process.env).idempotencyRedisEncryption;
-  return new IdempotencyPayloadCodec(config);
+  return new IdempotencyPayloadCodec(getDefaultCodecConfig());
 }
 
 export function setIdempotencyEncryptionConfigForTests(

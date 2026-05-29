@@ -22,7 +22,7 @@ npm install
 ### Usage in Tests
 
 ```typescript
-import { ContractMockServer } from '../mocks/contract-server';
+import { ContractMockServer } from '../../test/mocks/contract-server';
 
 describe('MyService', () => {
   let mockServer: ContractMockServer;

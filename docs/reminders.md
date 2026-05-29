@@ -7,6 +7,10 @@ a timezone identifier it is validated and resolved for contextual use, but the
 internal schedule is always UTC-based, which eliminates DST-related off-by-one
 errors at trigger time.
 
+Reminders are now persisted in PostgreSQL so the worker can resume pending
+deliveries after a restart and track delivery attempts for retry/dead-letter
+handling.
+
 ## Default timezone
 
 When no timezone is provided, the system defaults to `UTC`.
@@ -55,6 +59,18 @@ service layer. It enforces the following:
 |-----------|-------|--------|
 | Minimum lead time | 60 seconds | Prevents reminders that would fire almost immediately |
 | Maximum look-ahead | 365 days | Guards against unit-mismatch bugs (seconds vs milliseconds) |
+
+## Persistence model
+
+The `reminders` table stores each scheduled reminder with its delivery status
+and attempt count:
+
+- `pending` reminders are eligible for worker pickup when `trigger_at <= now`
+- `sent` reminders are final and will not be reprocessed
+- `failed` reminders have reached the retry limit and are dead-lettered
+
+The worker uses `reminderDedup` as an external at-least-once guard so the same
+reminder is not sent twice if multiple workers race to deliver it.
 
 ## DST handling
 
@@ -108,7 +124,7 @@ if (!check.valid) {
 }
 
 // check.resolvedTimezone is "UTC" if none was provided
-scheduleReminders(check.normalizedStartTime!, check.normalizedStartTime!, check.resolvedTimezone);
+await scheduleReminders(slotId, check.normalizedStartTime!, check.resolvedTimezone);
 ```
 
 ## Security notes

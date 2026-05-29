@@ -1,4 +1,4 @@
-import pino, { LoggerOptions } from "pino";
+import pino from "pino";
 
 /**
  * Log levels following pino conventions:
@@ -39,9 +39,7 @@ const getLogLevel = (): string => {
  * Sanitizes sensitive data from log objects to prevent security leaks
  * Removes or masks fields like passwords, tokens, and secrets
  */
-const sanitizeForLogging = (
-  obj: Record<string, unknown>
-): Record<string, unknown> => {
+const sanitizeForLogging = (obj: Record<string, unknown>): Record<string, unknown> => {
   const sensitiveFields = new Set([
     "password",
     "secret",
@@ -58,9 +56,7 @@ const sanitizeForLogging = (
   ]);
 
   const maskValue = (value: string): string =>
-    value.length > 4
-      ? `${value.substring(0, 2)}***${value.substring(value.length - 2)}`
-      : "***";
+    value.length > 4 ? `${value.substring(0, 2)}***${value.substring(value.length - 2)}` : "***";
 
   const sanitize = (input: unknown): unknown => {
     if (Array.isArray(input)) {
@@ -100,7 +96,7 @@ const createLoggerConfig = (): any => {
       /**
        * Custom level formatter for better readability
        */
-      level(label: string, number: number) {
+      level(label: string) {
         return { level: label.toUpperCase() };
       },
       /**
@@ -201,11 +197,7 @@ export const createChildLogger = (context: LogContext) => {
  * @param message - Log message
  * @param context - Optional context object
  */
-export const log = (
-  level: LogLevel,
-  message: string,
-  context?: LogContext
-): void => {
+export const log = (level: LogLevel, message: string, context?: LogContext): void => {
   if (context) {
     logger[level](context, message);
   } else {
@@ -216,11 +208,7 @@ export const log = (
 /**
  * Convenience methods for common logging scenarios
  */
-export const logInfo = (message: string, context?: LogContext) =>
-  log("info", message, context);
-export const logError = (message: string, context?: LogContext) =>
-  log("error", message, context);
-export const logWarn = (message: string, context?: LogContext) =>
-  log("warn", message, context);
-export const logDebug = (message: string, context?: LogContext) =>
-  log("debug", message, context);
+export const logInfo = (message: string, context?: LogContext) => log("info", message, context);
+export const logError = (message: string, context?: LogContext) => log("error", message, context);
+export const logWarn = (message: string, context?: LogContext) => log("warn", message, context);
+export const logDebug = (message: string, context?: LogContext) => log("debug", message, context);

@@ -1,5 +1,5 @@
 import "express";
-import type { FeatureFlagAccessor } from "../flags/types.js";
+import { AuthenticatedUser } from "../middleware/auth.middleware.js";
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -21,5 +21,14 @@ declare module "express-serve-static-core" {
      * Raw request body buffer captured for signature verification.
      */
     rawBody?: Buffer;
+    user?: AuthenticatedUser & Record<string, any>;
+    /**
+     * Feature flag accessor attached by the featureFlags middleware.
+     */
+    flags?: any;
+    /**
+     * Legacy auth property
+     */
+    auth?: any;
   }
 }

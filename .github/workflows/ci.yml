@@ -7,6 +7,24 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
   build-test:
     runs-on: ubuntu-latest
     steps:
@@ -21,6 +39,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
 
       - name: Build
         if: github.event_name != 'pull_request'

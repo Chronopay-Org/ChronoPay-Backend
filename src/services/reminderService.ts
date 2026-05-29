@@ -1,4 +1,5 @@
-import { ReminderStore } from "../models/reminder.js";
+import { type Reminder, type ReminderRepository } from "../models/reminder.js";
+import { getReminderRepository } from "../repositories/reminderRepository.js";
 import { isValidIANATimezone } from "../validation/reminderValidation.js";
 import { ReminderValidationError } from "../types/reminder.js";
 
@@ -17,7 +18,12 @@ const DEFAULT_REMINDER_OFFSETS = [60 * 60 * 1000];
  *                    alter the UTC-based trigger calculation.
  * @throws {ReminderValidationError} When any input fails type-level checks.
  */
-export function scheduleReminders(slotId: number, startTime: number, timezone?: string) {
+export async function scheduleReminders(
+    slotId: number,
+    startTime: number,
+    timezone?: string,
+    repository: ReminderRepository = getReminderRepository(),
+): Promise<Reminder[]> {
     const errors: string[] = [];
 
     if (typeof slotId !== "number" || !Number.isInteger(slotId) || slotId <= 0) {
@@ -36,14 +42,16 @@ export function scheduleReminders(slotId: number, startTime: number, timezone?: 
         throw new ReminderValidationError(errors);
     }
 
-    return DEFAULT_REMINDER_OFFSETS.map((offset) => {
+    const reminders = await Promise.all(DEFAULT_REMINDER_OFFSETS.map(async (offset) => {
         const triggerAt = startTime - offset;
 
         if (triggerAt <= Date.now()) return null;
 
-        return ReminderStore.create({
+        return repository.create({
             slotId,
             triggerAt,
         });
-    }).filter(Boolean);
+    }));
+
+    return reminders.filter((reminder): reminder is Reminder => reminder !== null);
 }
