@@ -6,13 +6,13 @@
  * HIT/MISS behavior, TTL from env, and graceful error degradation.
  *
  * Coverage targets:
- *  - getCachedSlotsPage  — HIT, MISS, error fallback
- *  - setCachedSlotsPage  — write-through, error fallback
- *  - getOrFetchSlots     — single-flight, cache HIT, cache MISS
- *  - getCachedSlots      — legacy path
- *  - setCachedSlots      — legacy path
- *  - invalidateSlotsCache — clears page keys and legacy key
- *  - Redis unavailable    — all functions return safe defaults
+ *  - getCachedSlotsPage  ï¿½ HIT, MISS, error fallback
+ *  - setCachedSlotsPage  ï¿½ write-through, error fallback
+ *  - getOrFetchSlots     ï¿½ single-flight, cache HIT, cache MISS
+ *  - getCachedSlots      ï¿½ legacy path
+ *  - setCachedSlots      ï¿½ legacy path
+ *  - invalidateSlotsCache ï¿½ clears page keys and legacy key
+ *  - Redis unavailable    ï¿½ all functions return safe defaults
  */
 
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
@@ -58,6 +58,9 @@ function createMockRedisClient(): RedisClient & { _store: Map<string, string> } 
       // Simple glob: "slots:page:*" matches anything starting with "slots:page:"
       const prefix = pattern.replace(/\*$/, "");
       return Array.from(store.keys()).filter((k) => k.startsWith(prefix));
+    },
+    async ping(): Promise<string> {
+      return "PONG";
     },
     async quit(): Promise<"OK"> {
       return "OK";
@@ -243,7 +246,7 @@ describe("invalidateSlotsCache", () => {
     });
     setRedisClient(redis);
 
-    // Should not throw — error is caught internally
+    // Should not throw ï¿½ error is caught internally
     await expect(invalidateSlotsCache()).resolves.toBeUndefined();
 
     // slots:page:2 should still have been deleted (Promise.all continues)
@@ -374,7 +377,7 @@ describe("SLOT_CACHE_TTL_SECONDS", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Redis unavailable — all paths return safe defaults
+// Redis unavailable ï¿½ all paths return safe defaults
 // ---------------------------------------------------------------------------
 
 describe("Redis unavailable", () => {
@@ -409,7 +412,7 @@ describe("Redis unavailable", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cache invalidation after write — integration scenario
+// Cache invalidation after write ï¿½ integration scenario
 // ---------------------------------------------------------------------------
 
 describe("Cache lifecycle: set ? get (HIT) ? invalidate ? get (MISS)", () => {
@@ -422,7 +425,7 @@ describe("Cache lifecycle: set ? get (HIT) ? invalidate ? get (MISS)", () => {
     // Set cache
     await setCachedSlotsPage(1, paginated);
 
-    // Get — should be HIT
+    // Get ï¿½ should be HIT
     const hit = await getCachedSlotsPage(1);
     expect(hit).not.toBeNull();
     expect(hit!.slots).toHaveLength(2);
@@ -430,7 +433,7 @@ describe("Cache lifecycle: set ? get (HIT) ? invalidate ? get (MISS)", () => {
     // Invalidate
     await invalidateSlotsCache();
 
-    // Get — should be MISS
+    // Get ï¿½ should be MISS
     const miss = await getCachedSlotsPage(1);
     expect(miss).toBeNull();
   });
