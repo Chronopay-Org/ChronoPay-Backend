@@ -1,8 +1,7 @@
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
+import cors from "cors";
 import express, { type Request, type Response } from "express";
-import { getCORSConfig } from "./config/cors.js";
-import { createCORSMiddleware } from "./middleware/cors.js";
 import { configService } from "./config/config.service.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
