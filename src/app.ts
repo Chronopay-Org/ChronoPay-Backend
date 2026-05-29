@@ -20,6 +20,9 @@ import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/f
 import { register, metricsMiddleware } from "./metrics.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
+import type { Pool } from "pg";
+import type { RedisClient } from "./cache/redisClient.js";
+import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
 
 // Import routers
 import checkoutRouter from "./routes/checkout.js";
@@ -38,6 +41,8 @@ export interface AppFactoryOptions {
   contentNegotiationExcludePaths?: string[];
   slotRepository?: any;
   bookingIntentService?: any;
+  dbPool?: Pick<Pool, "query"> | null;
+  redisClient?: RedisClient | null;
 }
 
 let cachedSwaggerSpec: unknown | null = null;
@@ -237,7 +242,7 @@ export function createApp(options: AppFactoryOptions = {}) {
     registerSwaggerDocs(app);
   }
 
-  // Health check
+  // Health check (liveness — cheap, no deps)
   app.get("/health", (_req, res) => {
     const health = { status: "ok", service: "chronopay-backend" };
     // Only include timestamp/version if not in a strict test environment that expects exactly two fields
@@ -253,6 +258,24 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   app.get("/live", (_req, res) => {
     res.json({ status: "alive", service: "chronopay-backend", timestamp: new Date().toISOString() });
+  });
+
+  // Readiness probe — checks DB and Redis connectivity
+  app.get("/health/ready", async (_req, res) => {
+    const result = await checkReadiness({
+      pingDb: async () => {
+        if (options.dbPool !== undefined) return checkDb(options.dbPool ?? null);
+        const pool = await tryGetPool();
+        return pool ? checkDb(pool) : false;
+      },
+      pingRedis: async () => {
+        if (options.redisClient !== undefined) return options.redisClient ? checkRedis(options.redisClient) : false;
+        const client = await tryGetRedisClient();
+        return client ? checkRedis(client) : false;
+      },
+    });
+    const httpStatus = result.db === "ok" && result.redis === "ok" ? 200 : 503;
+    res.status(httpStatus).json(result);
   });
 
   // Metrics
@@ -406,6 +429,24 @@ export function createApp(options: AppFactoryOptions = {}) {
     app.get("/__test__/explode", () => {
       throw new Error("Intentional test fault");
     });
+  }
+
+  async function tryGetPool(): Promise<Pick<Pool, "query"> | null> {
+    try {
+      const mod = await import("./db/pool.js");
+      return (mod.default || mod) as Pick<Pool, "query">;
+    } catch {
+      return null;
+    }
+  }
+
+  async function tryGetRedisClient(): Promise<RedisClient | null> {
+    try {
+      const { getRedisClient } = await import("./cache/redisClient.js");
+      return getRedisClient();
+    } catch {
+      return null;
+    }
   }
 
   // Error Handlers
