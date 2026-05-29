@@ -1,4 +1,4 @@
-export type BookingIntentStatus = "pending" | "cancelled" | "expired";
+export type BookingIntentStatus = "pending" | "confirmed" | "cancelled" | "expired";
 
 export interface BookingIntentRecord {
   id: string;
@@ -22,6 +22,7 @@ export interface BookingIntentRepository {
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
   listByCustomer(customerId: string): BookingIntentRecord[];
   listAll(): BookingIntentRecord[];
+  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord;
 }
 
 export class InMemoryBookingIntentRepository implements BookingIntentRepository {
@@ -63,5 +64,14 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
 
   listAll(): BookingIntentRecord[] {
     return this.intents.map((i) => ({ ...i }));
+  }
+
+  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord {
+    const index = this.intents.findIndex((entry) => entry.id === id);
+    if (index === -1) {
+      throw new Error(`BookingIntent with id "${id}" not found`);
+    }
+    this.intents[index] = { ...this.intents[index], status };
+    return { ...this.intents[index] };
   }
 }
