@@ -16,8 +16,6 @@ interface ProcessedEvent {
   response: { success: boolean; received: unknown };
 }
 
-// In-process dedup store: transactionId → ProcessedEvent.
-// Injectable via _setProcessedTransactions() for test isolation.
 let _processedTransactions: Map<string, ProcessedEvent> = new Map();
 
 export function _setProcessedTransactions(store: Map<string, ProcessedEvent>): void {
@@ -28,8 +26,9 @@ export function _resetProcessedTransactions(): void {
   _processedTransactions = new Map();
 }
 
-router.post("/settlements", (req: Request, res: Response) => {
-  const { eventType, transactionId, amount, timestamp } = req.body ?? {};
+export interface WebhookRouteOptions {
+  signingSecret?: string;
+}
 
 export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions = {}) {
   app.post(
@@ -46,22 +45,10 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
         });
       }
 
-  // Idempotency check: short-circuit duplicate transactionIds.
-  const existing = _processedTransactions.get(String(transactionId));
-  if (existing) {
-    return res.status(200).json(existing.response);
-  }
-
-  const responseBody = { success: true, received: req.body };
-
-  _processedTransactions.set(String(transactionId), {
-    eventType: String(eventType),
-    processedAt: Date.now(),
-    response: responseBody,
-  });
-
-  return res.status(200).json(responseBody);
-});
+      const existing = _processedTransactions.get(String(req.body.transactionId));
+      if (existing) {
+        return res.status(200).json(existing.response);
+      }
 
       if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) {
         return res.status(400).json({
@@ -78,10 +65,14 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
         });
       }
 
-      return res.status(200).json({
-        success: true,
-        received: req.body,
+      const responseBody = { success: true, received: req.body };
+      _processedTransactions.set(String(req.body.transactionId), {
+        eventType: String(eventType),
+        processedAt: Date.now(),
+        response: responseBody,
       });
+
+      return res.status(200).json(responseBody);
     },
   );
 }
