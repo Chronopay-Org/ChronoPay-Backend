@@ -8,6 +8,8 @@ import {
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
+import { configService } from "../config/config.service.js";
 
 export type ChronoPayRole = "customer" | "admin" | "professional";
 
@@ -73,34 +75,24 @@ export function requireAuth(expectedIssuer?: string) {
   };
 }
 
-function emitAuthAudit(
-  req: Request,
-  code: string,
-  status: number,
-  extra?: Record<string, unknown>,
-): void {
-  defaultAuditLogger.log({
-    action: code,
-    actorIp: req.ip || req.socket?.remoteAddress,
-    resource: req.originalUrl,
-    status,
-    metadata: { method: req.method, ...extra },
-  }).catch(() => {});
-}
+// Named export for the header-based auth used by booking-intents
+export { requireAuthenticatedActor as authenticateToken };
 
-function parseRole(rawRole: string | undefined): ChronoPayRole {
-  if (!rawRole || rawRole.trim().length === 0) {
-    return "customer";
-  }
+export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.headers["x-chronopay-user-id"] as string | undefined;
+      const roleHeader = req.headers["x-chronopay-role"] as string | undefined;
 
-        const payload = await verifyJwt(token, { issuer: configService.jwtIssuer ?? undefined });
-        req.user = payload;
-        req.auth = {
-          userId: getUserId(payload),
-          role: parseRole(payload.role),
-          claims: payload,
-        };
+      if (!userId) {
+        return res.status(401).json({ success: false, error: "Authentication required." });
       }
+
+      req.auth = {
+        userId,
+        role: parseRole(roleHeader),
+        claims: {} as VerifiedJwtPayload,
+      };
 
       if (!req.auth.userId) {
         return res.status(401).json({ success: false, error: "Authentication required." });

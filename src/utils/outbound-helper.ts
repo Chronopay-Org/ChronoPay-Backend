@@ -5,7 +5,7 @@ import { logInfo, logWarn, logError } from "./logger.js";
 
 /**
  * Wraps an asynchronous function with a timeout using AbortController.
- * 
+ *
  * @param fn - The function to execute, which receives an AbortSignal.
  * @param timeoutMs - The timeout in milliseconds.
  * @param serviceName - The logical name of the service being called (for logging).
@@ -15,7 +15,7 @@ import { logInfo, logWarn, logError } from "./logger.js";
 export async function withTimeout<T>(
   fn: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
-  serviceName: string
+  serviceName: string,
 ): Promise<T> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -24,14 +24,17 @@ export async function withTimeout<T>(
 
   try {
     const result = await fn(controller.signal);
-    const duration = Date.now() - startTime;
-    
+
     // Logging is handled by the caller or specialized here if needed
     return result;
   } catch (err: any) {
     const duration = Date.now() - startTime;
-    if (err.name === 'AbortError' || err.message?.includes('AbortError') || err.message?.includes('timeout')) {
-      logWarn('outbound_timeout', {
+    if (
+      err.name === "AbortError" ||
+      err.message?.includes("AbortError") ||
+      err.message?.includes("timeout")
+    ) {
+      logWarn("outbound_timeout", {
         requestId,
         service: serviceName,
         timeoutMs,
@@ -58,7 +61,7 @@ export interface RetryOptions {
 
 /**
  * Executes an asynchronous function with budgeted retries and exponential backoff.
- * 
+ *
  * @param fn - The function to execute (usually wrapped in withTimeout).
  * @param options - Retry configuration and service identification.
  * @returns The result of the function execution.
@@ -66,7 +69,7 @@ export interface RetryOptions {
  */
 export async function withRetry<T>(
   fn: (attempt: number) => Promise<T>,
-  options: RetryOptions
+  options: RetryOptions,
 ): Promise<T> {
   const {
     serviceName,
@@ -81,61 +84,64 @@ export async function withRetry<T>(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const totalElapsed = Date.now() - startTime;
-    
+
     if (totalElapsed >= maxTotalBudgetMs) {
-      logError('outbound_budget_exceeded', {
+      logError("outbound_budget_exceeded", {
         requestId,
         service: serviceName,
         attempt,
         totalElapsed,
-        maxTotalBudgetMs
+        maxTotalBudgetMs,
       });
       throw new OutboundUnavailableError(serviceName);
     }
 
     try {
       const result = await fn(attempt);
-      
+
       if (attempt > 1) {
-        logInfo('outbound_retry_success', {
+        logInfo("outbound_retry_success", {
           requestId,
           service: serviceName,
           attempt,
-          duration: Date.now() - startTime
+          duration: Date.now() - startTime,
         });
       }
-      
+
       return result;
     } catch (error) {
       const duration = Date.now() - startTime;
-      
+
       if (attempt === maxAttempts || !shouldRetry(error)) {
-        logError('outbound_failure', {
+        logError("outbound_failure", {
           requestId,
           service: serviceName,
           attempt,
           duration,
-          error: error instanceof Error ? error.message : String(error)
+          error: error instanceof Error ? error.message : String(error),
         });
-        
+
         if (attempt === maxAttempts && shouldRetry(error)) {
           throw new OutboundUnavailableError(serviceName);
         }
         throw error;
       }
 
-      const delay = Math.min(baseDelayMs * Math.pow(2, attempt - 1), maxTotalBudgetMs - (Date.now() - startTime));
-      
-      logWarn('outbound_retry_attempt', {
+      const delay = Math.min(
+        baseDelayMs * Math.pow(2, attempt - 1),
+        maxTotalBudgetMs - (Date.now() - startTime),
+      );
+
+      logWarn("outbound_retry_attempt", {
         requestId,
         service: serviceName,
         attempt,
         delay,
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
       });
 
       if (delay > 0) {
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
@@ -152,10 +158,10 @@ export async function withRetry<T>(
  */
 function isTransientError(error: any): boolean {
   if (error instanceof OutboundTimeoutError) return true;
-  
+
   const status = error.statusCode || error.response?.status;
   if (status && status >= 500) return true;
-  
+
   const message = error.message?.toLowerCase() || "";
   return (
     message.includes("network") ||

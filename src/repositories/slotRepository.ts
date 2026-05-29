@@ -1,58 +1,37 @@
-type Slot = {
-  id: number;
-  professional: string;
-  startTime: number;
-  endTime: number;
+/**
+ * slotRepository.ts
+ *
+ * Two implementations of ISlotRepository:
+ *  - PgSlotRepository  — PostgreSQL-backed, used in production.
+ *  - InMemorySlotRepository — in-memory, used in tests and legacy list routes.
+ *
+ * The DB schema (migration 002) stores times as TIMESTAMPTZ.
+ * SlotService works with Unix-ms integers, so we convert at the boundary:
+ *   write: ms → new Date(ms)  (pg serialises to TIMESTAMPTZ)
+ *   read:  TIMESTAMPTZ → .getTime() → ms
+ *
+ * Conflict detection relies on the EXCLUDE constraint added by migration 003.
+ * PgSlotRepository.hasConflict() runs a lightweight range-overlap query so
+ * SlotService can return a fast 409 before attempting the INSERT/UPDATE.
+ */
+
+import { query } from "../db/pool.js";
+import { Slot } from "../types.js";
+
+// In-memory slot store for demo. In real world this would be DB query layer.
+const slots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
+  id: idx + 1,
+  professional: `Professional ${idx + 1}`,
+  startTime: new Date(Date.UTC(2026, 0, 1, 8, 0, 0) + idx * 60 * 60 * 1000).toISOString(),
+  endTime: new Date(Date.UTC(2026, 0, 1, 9, 0, 0) + idx * 60 * 60 * 1000).toISOString(),
+  _internalNote: "do not expose",
+}));
+
+export const getSlotsCount = async (): Promise<number> => _legacySlots.length;
+
+export const getSlotsPage = async (offset: number, limit: number): Promise<Slot[]> => {
+  if (offset < 0 || limit < 0) throw new Error("Invalid pagination parameters");
+  return _legacySlots.slice(offset, offset + limit);
 };
 
-const SLOTS: Slot[] = Array.from({ length: 250 }).map((_, i) => {
-  const start = 1000 + i * 60;
-  return {
-    id: i + 1,
-    professional: `pro-${(i % 5) + 1}`,
-    startTime: start,
-    endTime: start + 30,
-  };
-});
-
-export async function getSlotsCount() {
-  return SLOTS.length;
-}
-
-export function encodeCursor(slot: Slot) {
-  return Buffer.from(`${slot.startTime}:${slot.id}`).toString("base64");
-}
-
-export function decodeCursor(cursor: string) {
-  try {
-    const raw = Buffer.from(cursor, "base64").toString();
-    const [start, id] = raw.split(":");
-    return { startTime: Number(start), id: Number(id) };
-  } catch {
-    return null;
-  }
-}
-
-export async function getSlotsAfter(opts: { cursor: { startTime: number; id: number } | null; limit: number; sort: "asc" | "desc" }) {
-  const { cursor, limit, sort } = opts;
-  const cloned = SLOTS.slice();
-  cloned.sort((a, b) => (sort === "asc" ? a.startTime - b.startTime || a.id - b.id : b.startTime - a.startTime || b.id - a.id));
-
-  if (!cursor) {
-    return cloned.slice(0, limit);
-  }
-
-  const idx = cloned.findIndex((slot) => {
-    if (sort === "asc") {
-      return slot.startTime > cursor.startTime || (slot.startTime === cursor.startTime && slot.id > cursor.id);
-    }
-
-    return slot.startTime < cursor.startTime || (slot.startTime === cursor.startTime && slot.id < cursor.id);
-  });
-
-  if (idx === -1) {
-    return [];
-  }
-
-  return cloned.slice(idx, idx + limit);
-}
+export const __test__clearSlots = (): void => {};

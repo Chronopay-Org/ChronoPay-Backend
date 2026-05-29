@@ -10,8 +10,8 @@
  *   Rate-limited per authenticated principal.
  */
 
-import { Router, Response } from "express";
-import { requireAuthenticatedActor, type AuthenticatedRequest } from "../middleware/auth.js";
+import { Router, type Request, Response } from "express";
+import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import { SmsNotificationService, InMemorySmsProvider, type SmsProvider } from "../services/smsNotification.js";
@@ -29,7 +29,7 @@ export function createNotificationsRouter(
     requireFeatureFlag("SMS_NOTIFICATIONS"),
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
-    (req: AuthenticatedRequest, res: Response): void => {
+    (req: Request, res: Response): void => {
       const { to, message } = req.body ?? {};
 
       if (typeof to !== "string" || !to.trim()) {

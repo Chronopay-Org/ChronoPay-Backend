@@ -26,8 +26,15 @@ Create a new booking intent for a specific slot.
 ```
 x-chronopay-user-id: customer-123
 x-chronopay-role: customer
+Idempotency-Key: booking-intent-123
 Content-Type: application/json
 ```
+
+`Idempotency-Key` is optional but strongly recommended for retries. When provided:
+
+- Same key + same body: returns the original response deterministically.
+- Same key + different body: returns `422` (`IDEMPOTENCY_KEY_MISMATCH`).
+- Concurrent requests with the same key: one request proceeds; others receive `409` while processing.
 
 ### Body
 
@@ -141,6 +148,19 @@ Common conflict errors:
 - `Selected slot is not bookable.`
 - `A booking intent already exists for this slot.` (duplicate for same customer)
 - `Selected slot already has an active booking intent.` (slot already booked)
+- `Conflict: This transaction is actively running.` (same idempotency key in progress)
+
+#### 422 Unprocessable Entity
+
+Idempotency key reused with a different payload.
+
+```json
+{
+  "success": false,
+  "code": "IDEMPOTENCY_KEY_MISMATCH",
+  "error": "Unprocessable Entity: Idempotency-Key used with different payload."
+}
+```
 
 #### 429 Too Many Requests
 

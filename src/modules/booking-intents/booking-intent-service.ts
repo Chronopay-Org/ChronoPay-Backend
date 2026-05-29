@@ -8,6 +8,7 @@ import { SchedulingService } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
+import { sanitizeNote } from "../../utils/redact.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -47,7 +48,7 @@ export class BookingIntentService {
     return new SchedulingService(this.slotRepository, this.bookingIntentRepository);
   }
 
-  createIntent(input: CreateBookingIntentInput, actor: AuthContext): BookingIntentRecord {
+  async createIntent(input: CreateBookingIntentInput, actor: AuthContext): Promise<BookingIntentRecord> {
     const slot = this.slotRepository.findById(input.slotId);
     if (!slot) {
       throw new BookingIntentError(404, "Selected slot was not found.");
@@ -88,6 +89,23 @@ export class BookingIntentService {
     this.schedulingService.reserveSlot(input.slotId);
 
     return intent;
+  }
+
+  confirmIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+      throw new BookingIntentError(403, "Only the intent owner or admin can confirm a booking intent.");
+    }
+
+    if (intent.status !== "pending") {
+      throw new BookingIntentError(409, `Cannot confirm intent with status "${intent.status}".`);
+    }
+
+    return this.bookingIntentRepository.updateStatus(intentId, "confirmed");
   }
 
   cancelIntent(intentId: string, actor: AuthContext): BookingIntentRecord {

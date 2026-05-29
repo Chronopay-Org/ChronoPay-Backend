@@ -167,3 +167,54 @@ export const wouldBeRedacted = (fieldName: string): boolean => {
 export const getSensitiveFields = (): string[] => {
   return Array.from(SENSITIVE_FIELDS);
 };
+
+/**
+ * Sanitizes a note string by removing control characters, normalizing unicode,
+ * and trimming whitespace.
+ *
+ * - Removes null bytes and control characters (0x00-0x1F) except tab, newline, CR
+ * - Removes C1 control characters (0x80-0x9F)
+ * - Normalizes unicode to NFC form
+ * - Trims leading/trailing whitespace
+ * - Returns null if the result is empty
+ *
+ * Allowed control characters: \t (0x09), \n (0x0A), \r (0x0D)
+ */
+export const sanitizeNote = (note: string): string | null => {
+  let cleaned = "";
+  for (const ch of note) {
+    const code = ch.charCodeAt(0);
+    const isAllowedC0 = code === 0x09 || code === 0x0a || code === 0x0d;
+    const isControl = code < 0x20 && !isAllowedC0;
+    const isC1Control = code >= 0x80 && code <= 0x9f;
+    if (!isControl && !isC1Control) {
+      cleaned += ch;
+    }
+  }
+  cleaned = cleaned.normalize("NFC").trim();
+  return cleaned.length === 0 ? null : cleaned;
+};
+
+/**
+ * Redacts a phone number for secure logging
+ * Shows country code and last 4 digits, masks the rest
+ *
+ * @param phone - The phone number to redact (E.164 format expected)
+ * @returns Redacted phone number (e.g., "+1***50123")
+ */
+export const redactPhone = (phone: string): string => {
+  if (!phone || typeof phone !== "string") {
+    return "***";
+  }
+
+  const trimmed = phone.trim();
+
+  if (trimmed.length < 8) {
+    return "***";
+  }
+
+  // Show country code (e.g., +1) and last 4 digits
+  const countryCode = trimmed.substring(0, 2);
+  const lastDigits = trimmed.substring(trimmed.length - 4);
+  return `${countryCode}***${lastDigits}`;
+};
