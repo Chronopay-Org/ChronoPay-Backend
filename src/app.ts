@@ -1,11 +1,7 @@
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import cors from "cors";
-<<<<<<< HEAD
 import express, { type Request, type Response } from "express";
-=======
-import express, { type Request, type Response } from "express";
->>>>>>> upstream/main
 import { configService } from "./config/config.service.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
@@ -196,7 +192,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(tracingMiddleware);
   app.use(metricsMiddleware);
   app.use(featureFlagContextMiddleware);
-  app.use(cors());
+  app.use(createCORSMiddleware(getCORSConfig()));
 
   // Content negotiation BEFORE express.json() to reject invalid Content-Type early
   if (options.enableContentNegotiation !== false) {

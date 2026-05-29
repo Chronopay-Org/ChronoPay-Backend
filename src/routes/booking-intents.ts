@@ -9,8 +9,8 @@
  *   Requires JWT authentication via the Authorization Bearer token.
  */
 
-import { Router, Response } from "express";
-import { requireAuthenticatedActor, type AuthenticatedRequest } from "../middleware/auth.js";
+import { Router, type Request, Response } from "express";
+import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
@@ -32,6 +32,23 @@ export function createBookingIntentsRouter() {
   const slotRepository = new InMemorySlotRepository();
   const bookingIntentService = new BookingIntentService(bookingIntentRepository, slotRepository);
 
+  function handleServiceError(error: unknown, res: Response): void {
+    if (error instanceof BookingIntentError) {
+      res.status(error.status).json({
+        success: false,
+        error: error.message,
+        code: error.code,
+      });
+      return;
+    }
+
+    logger.error({ err: error }, "Unexpected error in booking intent operation");
+    res.status(500).json({
+      success: false,
+      error: "Internal server error",
+    });
+  }
+
   router.post(
     "/",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
@@ -39,7 +56,7 @@ export function createBookingIntentsRouter() {
     idempotencyMiddleware,
     createAuthAwareRateLimiter(),
     auditMiddleware("CREATE_BOOKING_INTENT"),
-    (req: AuthenticatedRequest, res: Response): void => {
+    (req: Request, res: Response): void => {
       try {
         const input = parseCreateBookingIntentBody(req.body);
         const intent = bookingIntentService.createIntent(input, req.auth!);
@@ -49,19 +66,45 @@ export function createBookingIntentsRouter() {
           intent,
         });
       } catch (error) {
-        if (error instanceof BookingIntentError) {
-          res.status(error.status).json({
-            success: false,
-            error: error.message,
-          });
-          return;
-        }
+        handleServiceError(error, res);
+      }
+    },
+  );
 
-        console.error("Unexpected error in booking intent creation:", error);
-        res.status(500).json({
-          success: false,
-          error: "Internal server error",
+  router.post(
+    "/:id/confirm",
+    requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    requireAuthenticatedActor(["customer", "admin"]),
+    createAuthAwareRateLimiter(),
+    auditMiddleware("CONFIRM_BOOKING_INTENT"),
+    (req: Request, res: Response): void => {
+      try {
+        const intent = bookingIntentService.confirmIntent(req.params.id, req.auth!);
+        res.status(200).json({
+          success: true,
+          intent,
         });
+      } catch (error) {
+        handleServiceError(error, res);
+      }
+    },
+  );
+
+  router.post(
+    "/:id/cancel",
+    requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    requireAuthenticatedActor(["customer", "admin"]),
+    createAuthAwareRateLimiter(),
+    auditMiddleware("CANCEL_BOOKING_INTENT"),
+    (req: Request, res: Response): void => {
+      try {
+        const intent = bookingIntentService.cancelIntent(req.params.id, req.auth!);
+        res.status(200).json({
+          success: true,
+          intent,
+        });
+      } catch (error) {
+        handleServiceError(error, res);
       }
     },
   );
