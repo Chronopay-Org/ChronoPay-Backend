@@ -1,4 +1,5 @@
 import { createChildContext, runWithTraceContext, getTraceContext } from "./context.js";
+import { emitSpan } from "./spanExporter.js";
 
 /**
  * Interface representing a tracing span.
@@ -52,7 +53,6 @@ export async function withSpan<T>(
     span.attributes.outcome = "ok";
     span.attributes.latency = span.duration;
 
-    // @ts-expect-error - Auto-fixed by script
     emitSpan(span);
     return result;
   } catch (error) {
@@ -64,7 +64,6 @@ export async function withSpan<T>(
     span.attributes["error.message"] =
       error instanceof Error ? error.message : String(error);
 
-    // @ts-expect-error - Auto-fixed by script
     emitSpan(span);
     throw error;
   }

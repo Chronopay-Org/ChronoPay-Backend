@@ -16,8 +16,8 @@ function makeSlot(overrides: Partial<SlotRecord> = {}): SlotRecord {
   };
 }
 
-const actor = { userId: "customer-1", role: "customer" as const };
-const admin = { userId: "admin-1", role: "admin" as const };
+const actor = { userId: "customer-1", role: "customer" as const, claims: {} as any };
+const admin = { userId: "admin-1", role: "admin" as const, claims: {} as any };
 
 // ─── SchedulingService ───────────────────────────────────────────────────────
 
@@ -33,37 +33,37 @@ describe("SchedulingService", () => {
   });
 
   describe("reserveSlot", () => {
-    it("marks a bookable slot as not bookable", () => {
+    it("marks a bookable slot as not bookable", async () => {
       scheduler.reserveSlot("slot-1");
       const slot = slotRepo.findById("slot-1")!;
       expect(slot.bookable).toBe(false);
     });
 
-    it("throws SlotNotFoundError for a non-existent slot", () => {
+    it("throws SlotNotFoundError for a non-existent slot", async () => {
       expect(() => scheduler.reserveSlot("slot-unknown")).toThrow(SlotNotFoundError);
     });
 
-    it("throws SlotNotBookableError when slot is already reserved", () => {
+    it("throws SlotNotBookableError when slot is already reserved", async () => {
       scheduler.reserveSlot("slot-1");
       expect(() => scheduler.reserveSlot("slot-1")).toThrow(SlotNotBookableError);
     });
   });
 
   describe("releaseSlot", () => {
-    it("marks a reserved slot back to bookable", () => {
+    it("marks a reserved slot back to bookable", async () => {
       scheduler.reserveSlot("slot-1");
       scheduler.releaseSlot("slot-1");
       const slot = slotRepo.findById("slot-1")!;
       expect(slot.bookable).toBe(true);
     });
 
-    it("is idempotent on an already-bookable slot", () => {
+    it("is idempotent on an already-bookable slot", async () => {
       scheduler.releaseSlot("slot-1");
       const slot = slotRepo.findById("slot-1")!;
       expect(slot.bookable).toBe(true);
     });
 
-    it("throws when slot does not exist", () => {
+    it("throws when slot does not exist", async () => {
       expect(() => scheduler.releaseSlot("slot-unknown")).toThrow("not found");
     });
   });
@@ -83,123 +83,94 @@ describe("BookingIntentService scheduling integration", () => {
   });
 
   describe("createIntent", () => {
-    it("reserves the slot on intent creation", () => {
-      // @ts-expect-error - Auto-fixed by script
-      service.createIntent({ slotId: "slot-1" }, actor);
+    it("reserves the slot on intent creation", async () => {
+      await service.createIntent({ slotId: "slot-1" }, actor);
       const slot = slotRepo.findById("slot-1")!;
       expect(slot.bookable).toBe(false);
     });
 
-    it("rejects creation when slot is already reserved", () => {
-      // @ts-expect-error - Auto-fixed by script
-      service.createIntent({ slotId: "slot-1" }, actor);
-      const other = { userId: "customer-2", role: "customer" as const };
-      // @ts-expect-error - Auto-fixed by script
-      expect(() => service.createIntent({ slotId: "slot-1" }, other)).toThrow(
+    it("rejects creation when slot is already reserved", async () => {
+      await service.createIntent({ slotId: "slot-1" }, actor);
+      const other = { userId: "customer-2", role: "customer" as const, claims: {} as any };
+      await expect(service.createIntent({ slotId: "slot-1" }, other)).rejects.toThrow(
         /not bookable/,
       );
     });
 
-    it("rejects creation on a non-bookable slot", () => {
+    it("rejects creation on a non-bookable slot", async () => {
       slotRepo.updateBookable("slot-1", false);
-      // @ts-expect-error - Auto-fixed by script
-      expect(() => service.createIntent({ slotId: "slot-1" }, actor)).toThrow(
+      await expect(service.createIntent({ slotId: "slot-1" }, actor)).rejects.toThrow(
         /not bookable/,
       );
     });
 
-    it("rejects creation when slot does not exist", () => {
-      expect(() =>
-        // @ts-expect-error - Auto-fixed by script
-        service.createIntent({ slotId: "slot-missing" }, actor),
-      ).toThrow(/not found/);
+    it("rejects creation when slot does not exist", async () => {
+      await expect(service.createIntent({ slotId: "slot-missing" }, actor)).rejects.toThrow(/not found/);
     });
 
-    it("rejects duplicate intent by same customer on same slot", () => {
-      // @ts-expect-error - Auto-fixed by script
-      service.createIntent({ slotId: "slot-1" }, actor);
-      // @ts-expect-error - Auto-fixed by script
-      expect(() => service.createIntent({ slotId: "slot-1" }, actor)).toThrow(
+    it("rejects duplicate intent by same customer on same slot", async () => {
+      await service.createIntent({ slotId: "slot-1" }, actor);
+      await expect(service.createIntent({ slotId: "slot-1" }, actor)).rejects.toThrow(
         /not bookable/,
       );
     });
 
-    it("allows another customer after cancel + release", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, actor);
-      // @ts-expect-error - Auto-fixed by script
+    it("allows another customer after cancel + release", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, actor);
       service.cancelIntent(intent.id, actor);
-      const other = { userId: "customer-2", role: "customer" as const };
-      // @ts-expect-error - Auto-fixed by script
-      const second = service.createIntent({ slotId: "slot-1" }, other);
-      // @ts-expect-error - Auto-fixed by script
+      const other = { userId: "customer-2", role: "customer" as const, claims: {} as any };
+      const second = await service.createIntent({ slotId: "slot-1" }, other);
       expect(second.slotId).toBe("slot-1");
       const slot = slotRepo.findById("slot-1")!;
       expect(slot.bookable).toBe(false);
     });
 
-    it("allows another customer after expire + release", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, actor);
-      // @ts-expect-error - Auto-fixed by script
+    it("allows another customer after expire + release", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, actor);
       service.expireIntent(intent.id);
-      const other = { userId: "customer-2", role: "customer" as const };
-      // @ts-expect-error - Auto-fixed by script
-      const second = service.createIntent({ slotId: "slot-1" }, other);
-      // @ts-expect-error - Auto-fixed by script
+      const other = { userId: "customer-2", role: "customer" as const, claims: {} as any };
+      const second = await service.createIntent({ slotId: "slot-1" }, other);
       expect(second.slotId).toBe("slot-1");
     });
   });
 
   describe("cancelIntent", () => {
-    it("releases the slot back to bookable", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, actor);
-      // @ts-expect-error - Auto-fixed by script
+    it("releases the slot back to bookable", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, actor);
       service.cancelIntent(intent.id, actor);
       const slot = slotRepo.findById("slot-1")!;
       expect(slot.bookable).toBe(true);
     });
 
-    it("updates intent status to cancelled", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, actor);
-      // @ts-expect-error - Auto-fixed by script
+    it("updates intent status to cancelled", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, actor);
       const cancelled = service.cancelIntent(intent.id, actor);
       expect(cancelled.status).toBe("cancelled");
     });
 
-    it("rejects cancellation by non-owner non-admin", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, actor);
-      const other = { userId: "customer-2", role: "customer" as const };
-      // @ts-expect-error - Auto-fixed by script
+    it("rejects cancellation by non-owner non-admin", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, actor);
+      const other = { userId: "customer-2", role: "customer" as const, claims: {} as any };
       expect(() => service.cancelIntent(intent.id, other)).toThrow(
         /not authorized/,
       );
     });
 
-    it("allows admin to cancel any intent", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, actor);
-      // @ts-expect-error - Auto-fixed by script
+    it("allows admin to cancel any intent", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, actor);
       const cancelled = service.cancelIntent(intent.id, admin);
       expect(cancelled.status).toBe("cancelled");
     });
 
-    it("rejects cancellation of non-pending intent", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, actor);
-      // @ts-expect-error - Auto-fixed by script
+    it("rejects cancellation of non-pending intent", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, actor);
       service.cancelIntent(intent.id, actor);
-      // @ts-expect-error - Auto-fixed by script
       expect(() => service.cancelIntent(intent.id, actor)).toThrow(
         /Cannot cancel/,
       );
     });
 
-    it("rejects cancellation of a non-existent intent", () => {
-      // @ts-expect-error - Auto-fixed by script
+    it("rejects cancellation of a non-existent intent", async () => {
       expect(() => service.cancelIntent("intent-unknown", actor)).toThrow(
         /not found/,
       );
@@ -207,33 +178,26 @@ describe("BookingIntentService scheduling integration", () => {
   });
 
   describe("expireIntent", () => {
-    it("releases the slot back to bookable", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, actor);
-      // @ts-expect-error - Auto-fixed by script
+    it("releases the slot back to bookable", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, actor);
       service.expireIntent(intent.id);
       const slot = slotRepo.findById("slot-1")!;
       expect(slot.bookable).toBe(true);
     });
 
-    it("updates intent status to expired", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, actor);
-      // @ts-expect-error - Auto-fixed by script
+    it("updates intent status to expired", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, actor);
       const expired = service.expireIntent(intent.id);
       expect(expired.status).toBe("expired");
     });
 
-    it("rejects expiry of non-pending intent", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, actor);
-      // @ts-expect-error - Auto-fixed by script
+    it("rejects expiry of non-pending intent", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, actor);
       service.cancelIntent(intent.id, actor);
-      // @ts-expect-error - Auto-fixed by script
       expect(() => service.expireIntent(intent.id)).toThrow(/Cannot expire/);
     });
 
-    it("rejects expiry of non-existent intent", () => {
+    it("rejects expiry of non-existent intent", async () => {
       expect(() => service.expireIntent("intent-unknown")).toThrow(
         /not found/,
       );
@@ -241,24 +205,18 @@ describe("BookingIntentService scheduling integration", () => {
   });
 
   describe("double-booking prevention (concurrent intents)", () => {
-    it("prevents two customers from booking the same slot", () => {
-      // @ts-expect-error - Auto-fixed by script
-      service.createIntent({ slotId: "slot-1" }, actor);
-      const second = { userId: "customer-2", role: "customer" as const };
-      // @ts-expect-error - Auto-fixed by script
-      expect(() => service.createIntent({ slotId: "slot-1" }, second)).toThrow(
+    it("prevents two customers from booking the same slot", async () => {
+      await service.createIntent({ slotId: "slot-1" }, actor);
+      const second = { userId: "customer-2", role: "customer" as const, claims: {} as any };
+      await expect(service.createIntent({ slotId: "slot-1" }, second)).rejects.toThrow(
         /not bookable/,
       );
     });
 
-    it("prevents a second intent after the first is cancelled", () => {
-      // @ts-expect-error - Auto-fixed by script
-      const intent = service.createIntent({ slotId: "slot-1" }, { userId: "customer-1", role: "customer" as const });
-      // @ts-expect-error - Auto-fixed by script
-      service.cancelIntent(intent.id, { userId: "customer-1", role: "customer" as const });
-      // @ts-expect-error - Auto-fixed by script
-      const second = service.createIntent({ slotId: "slot-1" }, { userId: "customer-2", role: "customer" as const });
-      // @ts-expect-error - Auto-fixed by script
+    it("prevents a second intent after the first is cancelled", async () => {
+      const intent = await service.createIntent({ slotId: "slot-1" }, { userId: "customer-1", role: "customer" as const, claims: {} as any });
+      service.cancelIntent(intent.id, { userId: "customer-1", role: "customer" as const, claims: {} as any });
+      const second = await service.createIntent({ slotId: "slot-1" }, { userId: "customer-2", role: "customer" as const, claims: {} as any });
       expect(second.slotId).toBe("slot-1");
     });
   });
@@ -267,16 +225,16 @@ describe("BookingIntentService scheduling integration", () => {
 // ─── Repository-level edge cases ────────────────────────────────────────────
 
 describe("InMemoryBookingIntentRepository edge cases", () => {
-  it("updateStatus throws on non-existent intent", () => {
+  it("updateStatus throws on non-existent intent", async () => {
     const repo = new InMemoryBookingIntentRepository();
     expect(() => repo.updateStatus("non-existent", "cancelled")).toThrow(
       /not found/,
     );
   });
 
-  it("findBySlotId only returns pending intents", () => {
+  it("findBySlotId only returns pending intents", async () => {
     const repo = new InMemoryBookingIntentRepository();
-    const created = repo.create({
+    const created = await repo.create({
       slotId: "slot-1",
       professional: "alice",
       customerId: "c1",
@@ -286,19 +244,18 @@ describe("InMemoryBookingIntentRepository edge cases", () => {
       createdAt: new Date().toISOString(),
     });
     expect(repo.findBySlotId("slot-1")).toBeDefined();
-    // @ts-expect-error - Auto-fixed by script
     repo.updateStatus(created.id, "cancelled");
     expect(repo.findBySlotId("slot-1")).toBeUndefined();
   });
 });
 
 describe("InMemorySlotRepository edge cases", () => {
-  it("updateBookable throws on non-existent slot", () => {
+  it("updateBookable throws on non-existent slot", async () => {
     const repo = new InMemorySlotRepository([]);
     expect(() => repo.updateBookable("no-slot", true)).toThrow(/not found/);
   });
 
-  it("list returns copies of all slots", () => {
+  it("list returns copies of all slots", async () => {
     const repo = new InMemorySlotRepository([makeSlot()]);
     const all = repo.list();
     expect(all).toHaveLength(1);
@@ -306,7 +263,7 @@ describe("InMemorySlotRepository edge cases", () => {
     expect(repo.findById("slot-1")!.bookable).toBe(true);
   });
 
-  it("findById returns undefined for missing id", () => {
+  it("findById returns undefined for missing id", async () => {
     const repo = new InMemorySlotRepository([]);
     expect(repo.findById("nope")).toBeUndefined();
   });
@@ -315,7 +272,7 @@ describe("InMemorySlotRepository edge cases", () => {
 // ─── Race-condition simulation ──────────────────────────────────────────────
 
 describe("race-condition guard", () => {
-  it("simulates concurrent reserve calls — second one fails", () => {
+  it("simulates concurrent reserve calls — second one fails", async () => {
     const slotRepo = new InMemorySlotRepository([makeSlot()]);
     const intentRepo = new InMemoryBookingIntentRepository();
     const scheduler = new SchedulingService(slotRepo, intentRepo);
@@ -326,23 +283,19 @@ describe("race-condition guard", () => {
     expect(slot.bookable).toBe(false);
   });
 
-  it("create->cancel->create cycle works correctly", () => {
+  it("create->cancel->create cycle works correctly", async () => {
     const slotRepo = new InMemorySlotRepository([makeSlot()]);
     const intentRepo = new InMemoryBookingIntentRepository();
     const service = new BookingIntentService(intentRepo, slotRepo);
 
-    // @ts-expect-error - Auto-fixed by script
-    const a1 = service.createIntent({ slotId: "slot-1" }, { userId: "a", role: "customer" as const });
+    const a1 = await service.createIntent({ slotId: "slot-1" }, { userId: "a", role: "customer" as const, claims: {} as any });
     expect(slotRepo.findById("slot-1")!.bookable).toBe(false);
 
-    // @ts-expect-error - Auto-fixed by script
-    service.cancelIntent(a1.id, { userId: "a", role: "customer" as const });
+    service.cancelIntent(a1.id, { userId: "a", role: "customer" as const, claims: {} as any });
     expect(slotRepo.findById("slot-1")!.bookable).toBe(true);
 
-    // @ts-expect-error - Auto-fixed by script
-    const a2 = service.createIntent({ slotId: "slot-1" }, { userId: "b", role: "customer" as const });
+    const a2 = await service.createIntent({ slotId: "slot-1" }, { userId: "b", role: "customer" as const, claims: {} as any });
     expect(slotRepo.findById("slot-1")!.bookable).toBe(false);
-    // @ts-expect-error - Auto-fixed by script
     expect(a2.customerId).toBe("b");
   });
 });
