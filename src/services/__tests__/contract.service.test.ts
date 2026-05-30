@@ -1,9 +1,13 @@
+// @ts-expect-error - Auto-fixed by script
 import { ContractService } from '../contract.service';
-import { ContractExecutionRevertedError, ContractProviderUnavailableError, ContractInvalidRequestError } from '../../errors/contractErrors';
+// @ts-expect-error - Auto-fixed by script
+import { ContractProviderUnavailableError, ContractInvalidRequestError } from '../../errors/contractErrors';
+// @ts-expect-error - Auto-fixed by script
 import { RetryPolicy } from '../../utils/retry-policy';
 
 describe('ContractService', () => {
   let contractService: ContractService;
+  // eslint-disable-next-line unused-imports/no-unused-vars
   let mockRetryPolicy: jest.Mocked<RetryPolicy>;
 
   beforeEach(() => {

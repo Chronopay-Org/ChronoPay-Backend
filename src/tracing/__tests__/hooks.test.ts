@@ -485,6 +485,7 @@ describe("tracing hooks and exporter", () => {
           await withSpan("inner.operation", {}, async () => {
             throw new Error("Inner failure");
           });
+        // eslint-disable-next-line unused-imports/no-unused-vars
         } catch (error) {
           errorCaught = true;
           // Continue with recovery

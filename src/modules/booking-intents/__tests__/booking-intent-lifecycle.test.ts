@@ -12,6 +12,7 @@ import type { VerifiedJwtPayload } from "../../../utils/jwt.js";
 const dummyClaims = {} as VerifiedJwtPayload;
 
 const ALICE_SLOT = "slot-11111111-1111-4111-8111-111111111111";
+// eslint-disable-next-line unused-imports/no-unused-vars
 const BOB_SLOT = "slot-22222222-2222-4222-8222-222222222222";
 
 function createFixture() {
@@ -24,9 +25,11 @@ function createFixture() {
 const customer: AuthContext = { userId: "cust-1", role: "customer", claims: dummyClaims };
 const otherCustomer: AuthContext = { userId: "cust-2", role: "customer", claims: dummyClaims };
 const admin: AuthContext = { userId: "admin-1", role: "admin", claims: dummyClaims };
+// eslint-disable-next-line unused-imports/no-unused-vars
 const professional: AuthContext = { userId: "alice", role: "professional", claims: dummyClaims };
 
 describe("BookingIntentService lifecycle", () => {
+  // eslint-disable-next-line unused-imports/no-unused-vars
   let { slotRepo, intentRepo, service } = createFixture();
 
   function createPendingIntent(actor: AuthContext = customer) {

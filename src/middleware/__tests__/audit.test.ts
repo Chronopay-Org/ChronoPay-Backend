@@ -11,7 +11,7 @@ import {
   decodeAuditEvent, 
   migrateLegacyEntry 
 } from '../../utils/auditEventValidator.js';
-import { AuditEventV1, AuditEventValidationError } from '../../types/auditEvent.js';
+import { AuditEventV1 } from '../../types/auditEvent.js';
 
 describe('auditMiddleware', () => {
   let app: express.Express;

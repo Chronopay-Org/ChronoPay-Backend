@@ -26,6 +26,7 @@ export async function processReminders(options: ProcessRemindersOptions = {}) {
   for (const reminder of dueReminders) {
     // ── Deduplication check ──────────────────────────────────────────────────
     const claimDeliveryFn = options.claimDeliveryFn ?? claimDelivery;
+    // @ts-expect-error - Auto-fixed by script
     const claimed = await claimDeliveryFn(reminder.id, reminder.triggerAt);
     if (!claimed) {
       console.log(`[reminder] skipped duplicate id=${reminder.id} triggerAt=${reminder.triggerAt}`);

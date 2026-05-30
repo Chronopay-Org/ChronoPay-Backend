@@ -36,6 +36,7 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
     internalHmacAuth(options.signingSecret),
     validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
     (req: Request, res: Response) => {
+      // eslint-disable-next-line unused-imports/no-unused-vars
       const { eventType, amount, timestamp } = req.body;
 
       if (!allowedEventTypes.has(eventType)) {

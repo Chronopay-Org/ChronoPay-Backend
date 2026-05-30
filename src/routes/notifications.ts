@@ -14,7 +14,7 @@ import { Router, type Request, Response } from "express";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
-import { SmsNotificationService, InMemorySmsProvider, type SmsProvider } from "../services/smsNotification.js";
+import { SmsNotificationService, InMemorySmsProvider } from "../services/smsNotification.js";
 
 const E164_PATTERN = /^\+[1-9][0-9]{7,14}$/;
 
