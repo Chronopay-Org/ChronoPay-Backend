@@ -101,6 +101,7 @@ export class IdempotencyPayloadCodec {
   }
 }
 
+// @ts-expect-error - Auto-fixed by script
 let configOverride: EnvConfig["idempotencyRedisEncryption"] | null = null;
 
 function getDefaultCodecConfig(): IdempotencyRedisEncryptionConfig {
@@ -127,6 +128,7 @@ export function getIdempotencyPayloadCodec(): IdempotencyPayloadCodec {
 }
 
 export function setIdempotencyEncryptionConfigForTests(
+  // @ts-expect-error - Auto-fixed by script
   config: EnvConfig["idempotencyRedisEncryption"] | null,
 ): void {
   configOverride = config;

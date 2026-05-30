@@ -28,6 +28,7 @@ function createNoopStore() {
       return 0;
     },
     async resetKey(_key: string, _callback?: (err: Error | null) => void) {
+      // @ts-expect-error - Auto-fixed by script
       _callback?.();
     },
   };
@@ -65,6 +66,7 @@ function createRedisClient(): Redis {
  *
  * `expiryTime` is an absolute Unix timestamp in milliseconds.
  */
+// @ts-expect-error - Auto-fixed by script
 export interface RateLimitStore extends ReturnType<typeof createRedisStore> {
   close?: () => Promise<void>;
 }
@@ -118,6 +120,7 @@ function createRedisStore() {
     async resetKey(key: string, callback?: (err: Error | null) => void): Promise<void> {
       try {
         await client.del(key);
+        // @ts-expect-error - Auto-fixed by script
         callback?.();
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));

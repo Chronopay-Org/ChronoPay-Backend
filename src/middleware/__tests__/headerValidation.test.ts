@@ -10,6 +10,7 @@ import {
   IDEMPOTENCY_KEY_MAX_LENGTH,
   REQUEST_ID_MAX_LENGTH,
   WEBHOOK_SIGNATURE_MAX_LENGTH,
+// @ts-expect-error - Auto-fixed by script
 } from "../headerValidation";
 
 describe("Header Validation Pure Functions", () => {

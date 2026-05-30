@@ -485,7 +485,7 @@ describe("tracing hooks and exporter", () => {
           await withSpan("inner.operation", {}, async () => {
             throw new Error("Inner failure");
           });
-        } catch (error) {
+        } catch (_error) {
           errorCaught = true;
           // Continue with recovery
           await withSpan("recovery.operation", {}, () => {

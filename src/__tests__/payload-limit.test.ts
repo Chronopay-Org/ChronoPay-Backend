@@ -1,11 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../middleware/payloadLimit.js";
-import { createApp } from "../app.js";
-import {
-  featureFlagContextMiddleware,
-  initializeFeatureFlagsFromEnv,
-} from "../middleware/featureFlags.js";
+
 
 describe("Payload limit middleware", () => {
   it("returns 413 with standard envelope when payload exceeds limit", async () => {
@@ -63,8 +59,8 @@ describe("Payload limit middleware", () => {
 describe("Slot POST route payload limit", () => {
   it("payloadLimit middleware is applied to slot route", async () => {
     // Verify the middleware is imported and used in the route file
-    const slotsModule = await import("../routes/slots.js");
-    const slotsSource = await import("fs").then(fs => fs.readFileSync("c:\\Users\\EMMA\\Desktop\\chronopay\\src\\routes\\slots.ts", "utf-8"));
+    const _slotsModule = await import("../routes/slots.js");
+    const slotsSource = await import("fs").then(fs => fs.readFileSync("src/routes/slots.ts", "utf-8"));
     
     expect(slotsSource).toContain('payloadLimit');
     expect(slotsSource).toContain('ROUTE_PAYLOAD_LIMITS.slots');
@@ -74,7 +70,7 @@ describe("Slot POST route payload limit", () => {
 describe("Booking-intent POST route payload limit", () => {
   it("payloadLimit middleware is applied to booking-intent route", async () => {
     // Verify the middleware is imported and used in the route file
-    const bookingIntentsSource = await import("fs").then(fs => fs.readFileSync("c:\\Users\\EMMA\\Desktop\\chronopay\\src\\routes\\booking-intents.ts", "utf-8"));
+    const bookingIntentsSource = await import("fs").then(fs => fs.readFileSync("src/routes/booking-intents.ts", "utf-8"));
     
     expect(bookingIntentsSource).toContain('payloadLimit');
     expect(bookingIntentsSource).toContain('ROUTE_PAYLOAD_LIMITS.bookingIntent');

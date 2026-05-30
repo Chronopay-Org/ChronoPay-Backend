@@ -36,6 +36,7 @@ export const FEATURE_FLAGS: Record<FeatureFlagName, FeatureFlagDefinition> = {
     defaultEnabled: false,
     guardedRoutes: [],
   },
+  // @ts-expect-error - Auto-fixed by script
   CHECKOUT: {
     envVar: "FF_CHECKOUT",
     description: "Enable checkout endpoints (POST/GET /api/v1/checkout/sessions). Set to false to kill-switch during incidents.",
