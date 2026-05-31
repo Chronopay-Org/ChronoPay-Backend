@@ -72,7 +72,7 @@ describe("Slot POST route payload limit", () => {
 describe("Booking-intent POST route payload limit", () => {
   it("payloadLimit middleware is applied to booking-intent route", async () => {
     // Verify the middleware is imported and used in the route file
-    const bookingIntentsSource = await import("fs").then(fs => fs.readFileSync("c:\\Users\\EMMA\\Desktop\\chronopay\\src\\routes\\booking-intents.ts", "utf-8"));
+    const bookingIntentsSource = await import("fs").then(fs => fs.readFileSync("src/routes/booking-intents.ts", "utf-8"));
     
     expect(bookingIntentsSource).toContain('payloadLimit');
     expect(bookingIntentsSource).toContain('ROUTE_PAYLOAD_LIMITS.bookingIntent');

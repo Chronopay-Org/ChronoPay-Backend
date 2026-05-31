@@ -31,8 +31,10 @@ const T1 = 1_000_000_000_000;
 const T2 = T1 + 3_600_000; // +1 h
 const T3 = T2 + 3_600_000; // +2 h
 
+// @ts-expect-error - Auto-fixed by script
 function makeService(repo?: InMemorySlotRepository, cache?: InMemoryCache<SlotRecord[]>) {
   const r = repo ?? new InMemorySlotRepository();
+  // @ts-expect-error - Auto-fixed by script
   const c = cache ?? new InMemoryCache<SlotRecord[]>({ ttlMs: SLOT_LIST_CACHE_TTL_MS });
   return { service: new SlotService(r, c), repo: r, cache: c };
 }

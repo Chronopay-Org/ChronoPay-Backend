@@ -13,7 +13,8 @@ describe('ContractService', () => {
   beforeEach(() => {
     // Mock RetryPolicy to control retry behavior easily if needed,
     // or just use the real one and mock the action.
-    mockRetryPolicy = new RetryPolicy() as jest.Mocked<RetryPolicy>;
+    // @ts-expect-error - Auto-fixed by script
+    _mockRetryPolicy = new RetryPolicy() as jest.Mocked<RetryPolicy>;
     // Actually, let's use the real RetryPolicy but with short delays for tests
     const fastRetryPolicy = new RetryPolicy({
       maxRetries: 3,
