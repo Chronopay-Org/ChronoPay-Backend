@@ -16,12 +16,10 @@ import {
   SlotService,
   SlotValidationError,
   SlotNotFoundError,
-  // @ts-expect-error - Auto-fixed by script
   SlotConflictError,
   SLOT_LIST_CACHE_TTL_MS,
 } from "../services/slotService.js";
-// @ts-expect-error - Auto-fixed by script
-import { InMemorySlotRepository, type SlotRecord } from "../repositories/slotRepository.js";
+import { InMemorySlotRepository, type SlotRecord } from "../modules/slots/slot-repository.js";
 import { InMemoryCache } from "../cache/inMemoryCache.js";
 
 
@@ -31,10 +29,8 @@ const T1 = 1_000_000_000_000;
 const T2 = T1 + 3_600_000; // +1 h
 const T3 = T2 + 3_600_000; // +2 h
 
-// @ts-expect-error - Auto-fixed by script
 function makeService(repo?: InMemorySlotRepository, cache?: InMemoryCache<SlotRecord[]>) {
   const r = repo ?? new InMemorySlotRepository();
-  // @ts-expect-error - Auto-fixed by script
   const c = cache ?? new InMemoryCache<SlotRecord[]>({ ttlMs: SLOT_LIST_CACHE_TTL_MS });
   return { service: new SlotService(r, c), repo: r, cache: c };
 }
@@ -115,6 +111,7 @@ describe("SlotService.createSlot", () => {
       if (callCount++ === 0) return false;
       return original(...args);
     };
+    // @ts-expect-error - dynamic mock property
     repo.create = async () => {
       const err = Object.assign(new Error("exclusion violation"), { code: "23P01" });
       throw err;
