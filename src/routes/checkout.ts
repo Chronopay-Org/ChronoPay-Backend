@@ -408,27 +408,6 @@ checkoutRouter.post(
  *             schema:
  *               $ref: '#/components/schemas/ErrorEnvelope'
  */
-checkoutRouter.post(
-  "/sessions/:sessionId/pay",
-  validateSessionIdParam(),
-  (req: Request, res: Response) => {
-    try {
-      const { sessionId } = req.params;
-      const session = CheckoutSessionService.paySession(sessionId);
-
-      const response: GetCheckoutSessionResponse = {
-        success: true,
-        session,
-      };
-
-      res.status(200).json(response);
-    } catch (error) {
-      // @ts-expect-error - Auto-fixed by script
-      handleCheckoutError(error, res);
-    }
-  },
-);
-
 /**
  * @openapi
  * /api/v1/checkout/sessions/{sessionId}/pay:
@@ -502,7 +481,7 @@ checkoutRouter.post(
 checkoutRouter.post(
   "/sessions/:sessionId/pay",
   validateSessionIdParam(),
-  (req: Request, res: Response) => {
+  (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
       const session = CheckoutSessionService.paySession(sessionId);
@@ -514,8 +493,7 @@ checkoutRouter.post(
 
       res.status(200).json(response);
     } catch (error) {
-      // @ts-expect-error - Auto-fixed by script
-      handleCheckoutError(error, res);
+      next(error);
     }
   },
 );
