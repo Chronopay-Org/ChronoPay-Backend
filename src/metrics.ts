@@ -1,4 +1,4 @@
-import { Registry, collectDefaultMetrics, Histogram, Counter } from "prom-client";
+import { Registry, collectDefaultMetrics, Histogram, Counter, Gauge } from "prom-client";
 import { Request, Response, NextFunction } from "express";
 
 /**
@@ -8,6 +8,12 @@ export const register = new Registry();
 
 // Add default metrics (CPU, Memory, etc.)
 collectDefaultMetrics({ register });
+
+export const settlementsPendingFinality = new Gauge({
+  name: "settlements_pending_finality",
+  help: "Total number of settlements pending chain finality",
+  registers: [register],
+});
 
 /**
  * Histogram to track HTTP request duration in seconds.

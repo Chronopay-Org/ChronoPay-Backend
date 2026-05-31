@@ -1,9 +1,7 @@
 import { Router, Express, Request, Response } from "express";
 import { validateRequiredFields } from "../middleware/validation.js";
 import { internalHmacAuth } from "../middleware/internalHmacAuth.js";
-import { KycProvider } from "../services/kycProvider.js";
-import { MockKycProvider } from "../services/mockKycProvider.js";
-import { KycService } from "../services/kycService.js";
+import { _settlements } from "../services/settlementReconciler.js";
 
 const allowedEventTypes = new Set([
   "settlement_completed",
@@ -82,6 +80,20 @@ const handleSettlementWebhook = (req: Request, res: Response) => {
     response: responseBody,
   });
 
+  if (eventType === "settlement_completed") {
+    if (!_settlements.has(String(req.body.transactionId))) {
+      _settlements.set(String(req.body.transactionId), {
+        transactionId: String(req.body.transactionId),
+        eventType: String(eventType),
+        amount: Number(amount),
+        timestamp: Number(timestamp),
+        status: "pending_finality",
+        confirmations: 0,
+        attempts: 0,
+      });
+    }
+  }
+
   return res.status(200).json(responseBody);
 };
 
@@ -100,32 +112,5 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
     internalHmacAuth(options.signingSecret),
     validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
     handleSettlementWebhook,
-  );
-
-  app.post(
-    "/api/v1/webhooks/kyc",
-    internalHmacAuth(options.kycSigningSecret || options.signingSecret),
-    validateRequiredFields(["supplierId", "kycRef", "status"]),
-    async (req: Request, res: Response) => {
-      const provider = options.kycProvider || new MockKycProvider();
-
-      try {
-        const payload = provider.parseWebhook(req.body);
-        const kycService = new KycService();
-        await kycService.processWebhook(payload);
-
-        return res.status(200).json({
-          success: true,
-          supplierId: payload.supplierId,
-          kycStatus: payload.status,
-          kycRef: payload.kycRef,
-        });
-      } catch (err: any) {
-        if (err.message.includes("not found")) {
-          return res.status(404).json({ success: false, error: err.message });
-        }
-        return res.status(400).json({ success: false, error: err.message });
-      }
-    }
   );
 }
