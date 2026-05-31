@@ -1,15 +1,17 @@
-/**
- * Mock for pg library
- * Used in tests to avoid PostgreSQL dependency
- */
+import { EventEmitter } from "node:events";
 
-export class Pool {
-  constructor() {}
+export class Pool extends EventEmitter {
+  constructor() {
+    super();
+  }
   async connect() {
     return {
       query: async () => ({ rows: [] }),
       release: () => {},
     };
+  }
+  async query() {
+    return { rows: [] };
   }
   async end() {}
 }
