@@ -88,51 +88,41 @@ describe("SlotService", () => {
     });
 
     it("should not detect conflict if slot is for a different professional", () => {
-      // @ts-expect-error - Auto-fixed by script
       expect(slotService.hasConflict("Dr. Jones", 1500, 2500)).toBe(false);
     });
 
     it("should detect conflict when new slot is fully inside an existing slot", () => {
-      // @ts-expect-error - Auto-fixed by script
       expect(slotService.hasConflict("Dr. Smith", 1200, 1800)).toBe(true);
     });
 
     it("should detect conflict when new slot completely envelops an existing slot", () => {
-      // @ts-expect-error - Auto-fixed by script
       expect(slotService.hasConflict("Dr. Smith", 800, 2200)).toBe(true);
     });
 
     it("should detect conflict when new slot overlaps the start of the existing slot", () => {
-      // @ts-expect-error - Auto-fixed by script
       expect(slotService.hasConflict("Dr. Smith", 800, 1500)).toBe(true);
     });
 
     it("should detect conflict when new slot overlaps the end of the existing slot", () => {
-      // @ts-expect-error - Auto-fixed by script
       expect(slotService.hasConflict("Dr. Smith", 1500, 2500)).toBe(true);
     });
 
     it("should not detect conflict for adjacent slots (end == start)", () => {
       // New slot ends exactly when existing starts
-      // @ts-expect-error - Auto-fixed by script
       expect(slotService.hasConflict("Dr. Smith", 500, 1000)).toBe(false);
       // New slot starts exactly when existing ends
-      // @ts-expect-error - Auto-fixed by script
       expect(slotService.hasConflict("Dr. Smith", 2000, 3000)).toBe(false);
     });
 
     it("should detect conflict when overlapping by exactly 1ms", () => {
       // New slot overlaps start by 1ms
-      // @ts-expect-error - Auto-fixed by script
       expect(slotService.hasConflict("Dr. Smith", 500, 1001)).toBe(true);
       // New slot overlaps end by 1ms
-      // @ts-expect-error - Auto-fixed by script
       expect(slotService.hasConflict("Dr. Smith", 1999, 3000)).toBe(true);
     });
 
     it("should respect excludeId parameter to ignore a specific slot", () => {
       // Exclude the only existing slot (which has ID 1)
-      // @ts-expect-error - Auto-fixed by script
       expect(slotService.hasConflict("Dr. Smith", 1200, 1800, 1)).toBe(false);
     });
   });
@@ -315,7 +305,6 @@ describe("SlotService", () => {
   describe("Traced wrappers (createSlotTraced, updateSlotTraced, listSlotsTraced)", () => {
     it("should call createSlot inside withSpan", async () => {
       const input = { professional: "Dr. Smith", startTime: 1000, endTime: 2000 };
-      // @ts-expect-error - Auto-fixed by script
       const result = await slotService.createSlotTraced(input);
       expect(result.id).toBe(1);
       expect(result.professional).toBe("Dr. Smith");
@@ -323,14 +312,12 @@ describe("SlotService", () => {
 
     it("should call updateSlot inside withSpan", async () => {
       const slot = slotService.createSlot({ professional: "Dr. Smith", startTime: 1000, endTime: 2000 });
-      // @ts-expect-error - Auto-fixed by script
       const result = await slotService.updateSlotTraced(slot.id, { startTime: 1200 });
       expect(result.startTime).toBe(1200);
     });
 
     it("should call listSlots inside withSpan", async () => {
       slotService.createSlot({ professional: "Dr. Smith", startTime: 1000, endTime: 2000 });
-      // @ts-expect-error - Auto-fixed by script
       const result = await slotService.listSlotsTraced();
       expect(result.slots.length).toBe(1);
     });

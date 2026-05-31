@@ -75,6 +75,28 @@ export function recordStampedeBlocked(): void {
   slotCacheStampedeBlocked.inc();
 }
 
+export const dependencyFaults = new Counter({
+  name: "dependency_faults_total",
+  help: "Total number of dependency faults observed by graceful-degradation handlers",
+  labelNames: ["dependency", "fault"],
+  registers: [register],
+});
+
+export type DependencyFaultName =
+  | "disconnect"
+  | "timeout"
+  | "pool_exhausted"
+  | "cache_read"
+  | "cache_write"
+  | "cache_invalidate";
+
+export function recordDependencyFault(
+  dependency: "redis" | "db",
+  fault: DependencyFaultName,
+): void {
+  dependencyFaults.labels(dependency, fault).inc();
+}
+
 // ─── Slow-query metrics ───────────────────────────────────────────────────────
 
 /**

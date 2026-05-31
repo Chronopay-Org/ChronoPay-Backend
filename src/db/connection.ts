@@ -16,8 +16,9 @@ let pool: Pool | null = null;
  *
  * @internal
  */
-let _poolFactory: (connectionString: string) => Pool = (connectionString) =>
+const defaultPoolFactory: (connectionString: string) => Pool = (connectionString) =>
   new Pool({ connectionString });
+let _poolFactory: (connectionString: string) => Pool = defaultPoolFactory;
 
 /**
  * Replaces the pool factory used by getPool(). For testing only.
@@ -27,6 +28,11 @@ let _poolFactory: (connectionString: string) => Pool = (connectionString) =>
  */
 export function _setPoolFactory(factory: (connectionString: string) => Pool): void {
   _poolFactory = factory;
+}
+
+/** @internal — restores the default pg.Pool factory after tests. */
+export function _resetPoolFactory(): void {
+  _poolFactory = defaultPoolFactory;
 }
 
 /**

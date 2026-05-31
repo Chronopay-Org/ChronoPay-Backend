@@ -29,6 +29,8 @@ export function _resetProcessedTransactions(): void {
 
 export interface WebhookRouteOptions {
   signingSecret?: string;
+  kycSigningSecret?: string;
+  kycProvider?: KycProvider;
 }
 
 const handleSettlementWebhook = (req: Request, res: Response) => {
