@@ -2,6 +2,8 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
+import { getCORSConfig } from "./config/cors.js";
+import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import {
   genericErrorHandler,
@@ -233,7 +235,6 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(tracingMiddleware);
   app.use(metricsMiddleware);
   app.use(featureFlagContextMiddleware);
-  // @ts-expect-error - Auto-fixed by script
   app.use(createCORSMiddleware(getCORSConfig()));
 
   // Content negotiation BEFORE express.json() to reject invalid Content-Type early
