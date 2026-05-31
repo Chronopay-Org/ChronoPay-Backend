@@ -12,7 +12,9 @@
     "format": "prettier --write \"src/**/*.{ts,js,cjs,mjs}\" \".github/workflows/*.{yml,yaml}\" \"eslint.config.js\" \"package.json\" \"tsconfig.json\" \"README.md\" \".prettierrc\"",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --coverage",
-    "migrate": "tsx src/scripts/migrate.ts"
+    "migrate": "tsx src/scripts/migrate.ts",
+    "audit": "npm audit --audit-level=high",
+    "audit:ci": "npm ci && npm audit --audit-level=high"
   },
   "dependencies": {
     "cors": "^2.8.5",
