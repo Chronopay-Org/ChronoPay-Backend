@@ -59,8 +59,32 @@ export function createBookingIntentsRouter() {
     (req: Request, res: Response): void => {
       try {
         const input = parseCreateBookingIntentBody(req.body);
+        // Evaluate fraud risk
+        const { FraudScorer } = require('../services/fraudScorer.js');
+        const fraudScorer = new FraudScorer();
+        const fraudResult = fraudScorer.evaluate(input.id ?? 'temp-intent-id', req);
+        const threshold = fraudScorer.getThreshold();
+        if (fraudResult.score >= threshold) {
+          if (fraudScorer.getStepUpMode() === 'challenge') {
+            // Return challenge token response
+            const challengeToken = require('crypto').randomUUID();
+            return res.status(202).json({
+              success: false,
+              challengeRequired: true,
+              challengeToken,
+            });
+          } else {
+            // Quarantine path
+            const { QuarantineStore } = require('../services/quarantineStore.js');
+            const store = new QuarantineStore();
+            const quarantineId = store.add({ input, actorId: (req as any).auth?.userId, fraudResult });
+            return res.status(202).json({
+              success: true,
+              quarantineId,
+            });
+          }
+        }
         const intent = bookingIntentService.createIntent(input, req.auth!);
-
         res.status(201).json({
           success: true,
           intent,
