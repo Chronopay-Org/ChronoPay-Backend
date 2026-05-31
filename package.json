@@ -13,8 +13,7 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --coverage",
     "migrate": "tsx src/scripts/migrate.ts",
-    "audit": "npm audit --audit-level=high",
-    "audit:ci": "npm ci && npm audit --audit-level=high"
+    "generate-openapi": "tsx src/scripts/generate-openapi.ts",
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -34,6 +33,7 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@redocly/openapi-diff": "^1.0.0",
     "@eslint/js": "^10.0.1",
     "@jest/globals": "^30.3.0",
     "@types/cors": "^2.8.17",

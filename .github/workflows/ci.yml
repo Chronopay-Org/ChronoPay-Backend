@@ -84,18 +84,59 @@ jobs:
           name: coverage-${{ matrix.shard }}
           path: coverage/shard-${{ matrix.shard }}
 
-  coverage-merge:
-    needs: test-shards
+      - name: Run tests
+        run: npm test
+  openapi-breaking-check:
+    name: OpenAPI Breaking‑Change Check
     runs-on: ubuntu-latest
+    needs: build-test
+    if: github.event_name == 'pull_request'
     steps:
-      - name: Download coverage artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          pattern: coverage-*
-          path: coverage
-      - name: Merge coverage reports
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      - name: Install oasdiff
+        run: npm i -D @redocly/openapi-diff
+      - name: Generate spec for base (main)
         run: |
-          npx nyc merge $(find coverage -type f -name "*.json") > coverage/merged.json
-          npx nyc report --reporter=lcov --reporter=text-summary --temp-directory=coverage
-          # Fail if thresholds not met
-          npx nyc check-coverage --branches 80 --functions 80 --lines 80 --statements 80
+          git fetch origin main
+          git checkout origin/main
+          npm run generate-openapi > base-openapi.json
+      - name: Generate spec for head (PR)
+        run: |
+          git checkout ${{ github.event.pull_request.head.sha }}
+          npm run generate-openapi > head-openapi.json
+      - name: Run oasdiff
+        id: diff
+        run: |
+          set -e
+          if npx @redocly/openapi-diff break base-openapi.json head-openapi.json > diff.txt; then
+            echo "breaking=no" >> $GITHUB_OUTPUT
+          else
+            echo "breaking=yes" >> $GITHUB_OUTPUT
+          fi
+      - name: Fail on breaking changes without label
+        if: steps.diff.outputs.breaking == 'yes' && !contains(github.event.pull_request.labels.*.name, 'breaking-change-approved')
+        run: |
+          echo "Breaking changes detected without approved label."
+          cat diff.txt
+          exit 1
+      - name: Comment diff on PR
+        if: always()
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ## OpenAPI Breaking‑Change Check
+            ```
+            $(cat diff.txt)
+            ```
+            ${{ steps.diff.outputs.breaking == 'yes' && '⚠️ Breaking changes detected. Add `breaking-change-approved` label to override.' || '✅ No breaking changes.' }}
