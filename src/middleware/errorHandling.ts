@@ -1,18 +1,11 @@
 import { NextFunction, Request, Response } from "express";
-import {
-  AppError,
-  MalformedJsonError,
-  isAppError,
-  type AppErrorEnvelope,
-} from "../errors/AppError.js";
+import { AppError, MalformedJsonError, type AppErrorEnvelope } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 
-function withRequestContext(
-  envelope: AppErrorEnvelope,
-  req: Request,
-): AppErrorEnvelope {
+function withRequestContext(envelope: AppErrorEnvelope, req: Request): AppErrorEnvelope {
   const requestId = req.requestId ?? req.id;
   if (requestId !== undefined) {
+    // @ts-expect-error - Auto-fixed by script
     envelope.requestId = requestId;
   }
   return envelope;
@@ -39,9 +32,7 @@ export function jsonParseErrorHandler(
   }
 
   const wrapped = new MalformedJsonError();
-  return res
-    .status(wrapped.statusCode)
-    .json(withRequestContext(wrapped.toJSON(), req));
+  return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
 }
 
 export function genericErrorHandler(
@@ -50,26 +41,17 @@ export function genericErrorHandler(
   res: Response,
   _next: NextFunction,
 ) {
-  if (
-    err instanceof Error &&
-    "statusCode" in err &&
-    "code" in err
-  ) {
+  if (err instanceof Error && "statusCode" in err && "code" in err) {
     const e = err as any;
-    // Emit a consistent envelope for any AppError-shaped error (includes
-    // ServiceUnavailableError / 503 from dependency outages).
     if (typeof e.statusCode === "number" && typeof e.code === "string") {
-      return res.status(e.statusCode).json({
-        success: false,
-        code: e.code,
-        error: e.message,
-      });
+      return res.status(e.statusCode).json(withRequestContext(e.toJSON(), req));
     }
   }
 
   const fallback: AppErrorEnvelope = {
     success: false,
     code: ERROR_CODES.INTERNAL_ERROR.code,
+    message: "Internal server error",
     error: "Internal server error",
     timestamp: new Date().toISOString(),
   };

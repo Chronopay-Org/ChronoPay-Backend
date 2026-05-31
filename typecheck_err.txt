@@ -1,0 +1,416 @@
+
+> chronopay-backend@0.1.0 typecheck
+> tsc --noEmit
+
+src/__tests__/booking-intents.test.ts(28,67): error TS2554: Expected 0 arguments, but got 1.
+src/__tests__/docker-env.test.ts(13,7): error TS2322: Type 'Mock<UnknownFunction>' is not assignable to type '(code: number) => Response<any, Record<string, any>>'.
+  Type 'unknown' is not assignable to type 'Response<any, Record<string, any>>'.
+src/__tests__/docker-env.test.ts(14,7): error TS2322: Type 'Mock<UnknownFunction>' is not assignable to type 'Send<any, Response<any, Record<string, any>>>'.
+  Type 'unknown' is not assignable to type 'Response<any, Record<string, any>>'.
+src/__tests__/graceful-shutdown.test.ts(6,3): error TS2614: Module '"../index.js"' has no exported member 'gracefulShutdown'. Did you mean to use 'import gracefulShutdown from "../index.js"' instead?
+src/__tests__/graceful-shutdown.test.ts(7,3): error TS2614: Module '"../index.js"' has no exported member 'setServer'. Did you mean to use 'import setServer from "../index.js"' instead?
+src/__tests__/graceful-shutdown.test.ts(8,3): error TS2614: Module '"../index.js"' has no exported member 'resetShutdownFlag'. Did you mean to use 'import resetShutdownFlag from "../index.js"' instead?
+src/__tests__/graceful-shutdown.test.ts(9,3): error TS2614: Module '"../index.js"' has no exported member 'getActiveRequestCount'. Did you mean to use 'import getActiveRequestCount from "../index.js"' instead?
+src/__tests__/graceful-shutdown.test.ts(106,37): error TS2345: Argument of type 'Server<typeof IncomingMessage, typeof ServerResponse>' is not assignable to parameter of type 'Socket'.
+  Type 'Server<typeof IncomingMessage, typeof ServerResponse>' is missing the following properties from type 'Socket': destroySoon, write, connect, setEncoding, and 68 more.
+src/__tests__/graceful-shutdown.test.ts(123,37): error TS2345: Argument of type 'Server<typeof IncomingMessage, typeof ServerResponse>' is not assignable to parameter of type 'Socket'.
+  Type 'Server<typeof IncomingMessage, typeof ServerResponse>' is missing the following properties from type 'Socket': destroySoon, write, connect, setEncoding, and 68 more.
+src/__tests__/health-readiness.test.ts(50,29): error TS2345: Argument of type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to parameter of type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(51,35): error TS2345: Argument of type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to parameter of type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(58,29): error TS2345: Argument of type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to parameter of type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(59,35): error TS2345: Argument of type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to parameter of type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(66,29): error TS2345: Argument of type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to parameter of type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(67,35): error TS2345: Argument of type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to parameter of type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(74,29): error TS2345: Argument of type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to parameter of type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(75,35): error TS2345: Argument of type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to parameter of type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(81,41): error TS2345: Argument of type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to parameter of type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(82,47): error TS2345: Argument of type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to parameter of type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(95,7): error TS2322: Type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(96,7): error TS2322: Type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(107,7): error TS2322: Type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(108,7): error TS2322: Type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(119,7): error TS2322: Type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(120,7): error TS2322: Type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(131,7): error TS2322: Type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(132,7): error TS2322: Type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(144,7): error TS2322: Type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(155,7): error TS2322: Type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(166,34): error TS2345: Argument of type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to parameter of type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(171,34): error TS2345: Argument of type '{ query: Mock<() => Promise<unknown>>; }' is not assignable to parameter of type 'Pick<Pool, "query">'.
+  The types returned by 'query(...)' are incompatible between these types.
+    Type 'Promise<unknown>' is not assignable to type 'Promise<QueryArrayResult<any>>'.
+      Type 'unknown' is not assignable to type 'QueryArrayResult<any>'.
+src/__tests__/health-readiness.test.ts(178,37): error TS2345: Argument of type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to parameter of type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/health-readiness.test.ts(183,37): error TS2345: Argument of type '{ get: Mock<UnknownFunction>; set: Mock<UnknownFunction>; del: Mock<UnknownFunction>; keys: Mock<UnknownFunction>; ping: Mock<...>; quit: Mock<...>; }' is not assignable to parameter of type 'RedisClient'.
+  The types returned by 'get(...)' are incompatible between these types.
+    Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/__tests__/request-id.test.ts(13,33): error TS2339: Property 'requestId' does not exist on type 'Request<{}, any, any, ParsedQs, Record<string, any>>'.
+src/__tests__/request-id.test.ts(30,33): error TS2339: Property 'requestId' does not exist on type 'Request<{}, any, any, ParsedQs, Record<string, any>>'.
+src/__tests__/scheduling.test.ts(88,50): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(94,50): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(96,63): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(103,63): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(110,58): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(115,50): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(116,63): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(122,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(123,35): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(123,39): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(125,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(126,21): error TS2339: Property 'slotId' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(132,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(133,35): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(135,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(136,21): error TS2339: Property 'slotId' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(142,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(143,35): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(143,39): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(149,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(150,53): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(150,57): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(155,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(157,48): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(157,52): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(163,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(164,53): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(164,57): error TS2345: Argument of type '{ userId: string; role: "admin"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "admin"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(169,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(170,35): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(170,39): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(171,48): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(171,52): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(177,59): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(185,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(186,35): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(192,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(193,51): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(198,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(199,35): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(199,39): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(200,48): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(212,50): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(214,63): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(220,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(221,35): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(221,39): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(222,65): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(223,21): error TS2339: Property 'slotId' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(250,31): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(294,59): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(297,29): error TS2339: Property 'id' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/scheduling.test.ts(297,33): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(300,59): error TS2345: Argument of type '{ userId: string; role: "customer"; }' is not assignable to parameter of type 'AuthContext'.
+  Property 'claims' is missing in type '{ userId: string; role: "customer"; }' but required in type 'AuthContext'.
+src/__tests__/scheduling.test.ts(302,15): error TS2339: Property 'customerId' does not exist on type 'Promise<BookingIntentRecord>'.
+src/__tests__/slot-delete.test.ts(3,8): error TS1192: Module '"/home/abujulaybeeb/Documents/Drips/Drips 21/ChronoPay-Backend/src/routes/slots"' has no default export.
+src/__tests__/slot-id-format.test.ts(41,33): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+src/__tests__/slot-id-format.test.ts(42,20): error TS2339: Property 'startsWith' does not exist on type 'number'.
+src/__tests__/slotService.test.ts(19,3): error TS2305: Module '"../services/slotService.js"' has no exported member 'SlotConflictError'.
+src/__tests__/slotService.test.ts(22,10): error TS2305: Module '"../repositories/slotRepository.js"' has no exported member 'InMemorySlotRepository'.
+src/__tests__/slotService.test.ts(24,15): error TS2305: Module '"../repositories/slotRepository.js"' has no exported member 'SlotRecord'.
+src/__tests__/slotService.test.ts(48,17): error TS2339: Property 'createdAt' does not exist on type 'Slot'.
+src/__tests__/slotService.test.ts(49,17): error TS2339: Property 'updatedAt' does not exist on type 'Slot'.
+src/__tests__/slotService.test.ts(106,31): error TS7019: Rest parameter 'args' implicitly has an 'any[]' type.
+src/__tests__/slotService.test.ts(222,19): error TS2339: Property 'deleteSlot' does not exist on type 'SlotService'.
+src/__tests__/slotService.test.ts(235,19): error TS2339: Property 'deleteSlot' does not exist on type 'SlotService'.
+src/__tests__/slotService.test.ts(242,26): error TS2339: Property 'deleteSlot' does not exist on type 'SlotService'.
+src/__tests__/slots-cache.test.ts(2,8): error TS1192: Module '"/home/abujulaybeeb/Documents/Drips/Drips 21/ChronoPay-Backend/src/app"' has no default export.
+src/__tests__/slots.rbac.test.ts(3,8): error TS1192: Module '"/home/abujulaybeeb/Documents/Drips/Drips 21/ChronoPay-Backend/src/routes/slots"' has no default export.
+src/__tests__/slots.validation.test.ts(16,8): error TS1192: Module '"/home/abujulaybeeb/Documents/Drips/Drips 21/ChronoPay-Backend/src/routes/slots"' has no default export.
+src/__tests__/unified-error-envelope.test.ts(7,8): error TS1192: Module '"/home/abujulaybeeb/Documents/Drips/Drips 21/ChronoPay-Backend/src/routes/slots"' has no default export.
+src/__tests__/webhooks.test.ts(4,8): error TS1192: Module '"/home/abujulaybeeb/Documents/Drips/Drips 21/ChronoPay-Backend/src/routes/webhooks"' has no default export.
+src/app.ts(218,11): error TS2552: Cannot find name 'createCORSMiddleware'. Did you mean 'rbacMiddleware'?
+src/app.ts(218,32): error TS2304: Cannot find name 'getCORSConfig'.
+src/cache/__tests__/inMemoryCache.test.ts(63,48): error TS2345: Argument of type '"loaded"' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(64,47): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(72,47): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(78,48): error TS2345: Argument of type '"fresh"' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(79,32): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(81,47): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(87,48): error TS2345: Argument of type '"v"' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(88,32): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(91,44): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(101,30): error TS2345: Argument of type '"first"' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(102,30): error TS2345: Argument of type '"second"' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(105,28): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(106,28): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(130,48): error TS2345: Argument of type '"v"' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(131,32): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(133,47): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(192,24): error TS2345: Argument of type '"modern"' is not assignable to parameter of type 'FakeTimersConfig | LegacyFakeTimersConfig | undefined'.
+src/cache/__tests__/inMemoryCache.test.ts(202,48): error TS2345: Argument of type '42' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(204,48): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => number | Promise<number>'.
+  Type 'unknown' is not assignable to type 'number | Promise<number>'.
+src/cache/__tests__/inMemoryCache.test.ts(209,49): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => number | Promise<number>'.
+  Type 'unknown' is not assignable to type 'number | Promise<number>'.
+src/cache/__tests__/inMemoryCache.test.ts(217,48): error TS2345: Argument of type '"a"' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(219,43): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(226,43): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(233,48): error TS2345: Argument of type '7' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(235,42): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => number | Promise<number>'.
+  Type 'unknown' is not assignable to type 'number | Promise<number>'.
+src/cache/__tests__/inMemoryCache.test.ts(240,42): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => number | Promise<number>'.
+  Type 'unknown' is not assignable to type 'number | Promise<number>'.
+src/cache/__tests__/inMemoryCache.test.ts(291,24): error TS2345: Argument of type '"modern"' is not assignable to parameter of type 'FakeTimersConfig | LegacyFakeTimersConfig | undefined'.
+src/cache/__tests__/inMemoryCache.test.ts(301,48): error TS2345: Argument of type '42' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(303,48): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => number | Promise<number>'.
+  Type 'unknown' is not assignable to type 'number | Promise<number>'.
+src/cache/__tests__/inMemoryCache.test.ts(308,49): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => number | Promise<number>'.
+  Type 'unknown' is not assignable to type 'number | Promise<number>'.
+src/cache/__tests__/inMemoryCache.test.ts(316,48): error TS2345: Argument of type '"a"' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(318,43): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(325,43): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => string | Promise<string>'.
+  Type 'unknown' is not assignable to type 'string | Promise<string>'.
+src/cache/__tests__/inMemoryCache.test.ts(332,48): error TS2345: Argument of type '7' is not assignable to parameter of type 'never'.
+src/cache/__tests__/inMemoryCache.test.ts(334,42): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => number | Promise<number>'.
+  Type 'unknown' is not assignable to type 'number | Promise<number>'.
+src/cache/__tests__/inMemoryCache.test.ts(339,42): error TS2345: Argument of type 'Mock<UnknownFunction>' is not assignable to parameter of type '() => number | Promise<number>'.
+  Type 'unknown' is not assignable to type 'number | Promise<number>'.
+src/cache/__tests__/slotCache.test.ts(142,5): error TS2322: Type 'Mock<UnknownFunction>' is not assignable to type '(key: string) => Promise<string | null>'.
+  Type 'unknown' is not assignable to type 'Promise<string | null>'.
+src/cache/__tests__/slotCache.test.ts(142,45): error TS2345: Argument of type 'Error' is not assignable to parameter of type 'never'.
+src/cache/__tests__/slotCache.test.ts(201,5): error TS2322: Type 'Mock<UnknownFunction>' is not assignable to type '(key: string, value: string, exMode: "EX", ttl: number, condition?: "NX" | undefined) => Promise<unknown>'.
+  Type 'unknown' is not assignable to type 'Promise<unknown>'.
+src/cache/__tests__/slotCache.test.ts(201,45): error TS2345: Argument of type 'Error' is not assignable to parameter of type 'never'.
+src/cache/redisClient.ts(112,5): error TS2304: Cannot find name 'logInfo'.
+src/clients/__tests__/horizon-contract-client.test.ts(40,35): error TS2345: Argument of type 'Response' is not assignable to parameter of type 'never'.
+src/clients/__tests__/horizon-contract-client.test.ts(48,35): error TS2345: Argument of type 'Response' is not assignable to parameter of type 'never'.
+src/clients/__tests__/horizon-contract-client.test.ts(56,35): error TS2345: Argument of type 'Error' is not assignable to parameter of type 'never'.
+src/clients/__tests__/horizon-contract-client.test.ts(60,35): error TS2345: Argument of type 'Response' is not assignable to parameter of type 'never'.
+src/clients/ethers-contract-client.ts(77,17): error TS2304: Cannot find name 'ContractInvalidRequestError'.
+src/config/__tests__/env.test.ts(1,51): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../env.js'?
+src/config/__tests__/env.test.ts(19,25): error TS7006: Parameter 'i' implicitly has an 'any' type.
+src/config/__tests__/env.test.ts(176,27): error TS7006: Parameter 'i' implicitly has an 'any' type.
+src/config/__tests__/env.test.ts(177,27): error TS7006: Parameter 'i' implicitly has an 'any' type.
+src/config/__tests__/env.test.ts(178,27): error TS7006: Parameter 'i' implicitly has an 'any' type.
+src/config/config.service.ts(74,16): error TS2488: Type 'string[] | undefined' must have a '[Symbol.iterator]()' method that returns an iterator.
+src/db/__tests__/driftDetector.test.ts(20,34): error TS2345: Argument of type 'TestMigration[]' is not assignable to parameter of type 'Migration[]'.
+  Type 'TestMigration' is missing the following properties from type 'Migration': up, down
+src/db/__tests__/driftDetector.test.ts(33,34): error TS2345: Argument of type 'TestMigration[]' is not assignable to parameter of type 'Migration[]'.
+  Type 'TestMigration' is missing the following properties from type 'Migration': up, down
+src/db/__tests__/driftDetector.test.ts(53,34): error TS2345: Argument of type 'TestMigration[]' is not assignable to parameter of type 'Migration[]'.
+  Type 'TestMigration' is missing the following properties from type 'Migration': up, down
+src/errors/sendError.ts(20,7): error TS2322: Type 'ReqId' is not assignable to type 'string | undefined'.
+  Type 'number' is not assignable to type 'string'.
+src/flags/__tests__/featureFlags.test.ts(212,24): error TS2740: Type 'NextFunction' is missing the following properties from type 'Mock<UnknownFunction>': _isMockFunction, _protoImpl, getMockImplementation, getMockName, and 16 more.
+src/flags/registry.ts(39,3): error TS2353: Object literal may only specify known properties, and 'CHECKOUT' does not exist in type 'Record<"CREATE_SLOT" | "CREATE_BOOKING_INTENT" | "SMS_NOTIFICATIONS", FeatureFlagDefinition>'.
+src/middleware/__tests__/headerValidation.test.ts(13,8): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../headerValidation.js'?
+src/middleware/__tests__/rateLimitStore.test.ts(6,18): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimitStore.test.ts(7,17): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimitStore.test.ts(12,19): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimitStore.test.ts(13,17): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimitStore.test.ts(19,17): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimitStore.test.ts(24,16): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimitStore.test.ts(28,15): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimitStore.test.ts(29,17): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimitStore.test.ts(35,20): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimitStore.test.ts(36,22): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimiter.test.ts(8,18): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimiter.test.ts(9,17): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimiter.test.ts(14,19): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimiter.test.ts(15,17): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimiter.test.ts(21,17): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimiter.test.ts(26,16): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimiter.test.ts(30,15): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimiter.test.ts(31,17): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimiter.test.ts(36,20): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/__tests__/rateLimiter.test.ts(37,22): error TS2558: Expected 0-1 type arguments, but got 2.
+src/middleware/auth.middleware.ts(36,31): error TS2304: Cannot find name 'token'.
+src/middleware/auth.middleware.ts(37,5): error TS2741: Property 'id' is missing in type 'Promise<VerifiedJwtPayload>' but required in type '{ [key: string]: unknown; id: string; sub?: string | undefined; email?: string | undefined; role?: string | undefined; iat?: number | undefined; exp?: number | undefined; }'.
+src/middleware/auth.ts(58,7): error TS2322: Type 'VerifiedJwtPayload' is not assignable to type '{ [key: string]: unknown; id: string; sub?: string | undefined; email?: string | undefined; role?: string | undefined; iat?: number | undefined; exp?: number | undefined; }'.
+  Types of property 'id' are incompatible.
+    Type 'string | undefined' is not assignable to type 'string'.
+      Type 'undefined' is not assignable to type 'string'.
+src/middleware/errorHandler.ts(69,7): error TS2322: Type '{ success: false; code: "INTERNAL_ERROR"; error: string; timestamp: string; }' is not assignable to type 'AppErrorEnvelope & { stack?: string | undefined; }'.
+  Property 'message' is missing in type '{ success: false; code: "INTERNAL_ERROR"; error: string; timestamp: string; }' but required in type 'AppErrorEnvelope'.
+src/middleware/errorHandler.ts(78,7): error TS2322: Type 'ReqId' is not assignable to type 'string | undefined'.
+  Type 'number' is not assignable to type 'string'.
+src/middleware/errorHandling.ts(8,5): error TS2322: Type 'ReqId' is not assignable to type 'string | undefined'.
+  Type 'number' is not assignable to type 'string'.
+src/middleware/idempotency.ts(56,9): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+src/middleware/rateLimitStore.ts(31,7): error TS2554: Expected 1 arguments, but got 0.
+src/middleware/rateLimitStore.ts(68,18): error TS2430: Interface 'RateLimitStore' incorrectly extends interface '{ incr(key: string, expiryTime?: number | undefined, callback?: ((err: Error | null, count?: number | undefined) => void) | undefined): Promise<number>; decrease(key: string, callback?: ((err: Error | null, count?: number | undefined) => void) | undefined): Promise<...>; resetKey(key: string, callback?: ((err: Error...'.
+  Types of property 'close' are incompatible.
+    Type '(() => Promise<void>) | undefined' is not assignable to type '() => Promise<void>'.
+      Type 'undefined' is not assignable to type '() => Promise<void>'.
+src/middleware/rateLimitStore.ts(121,9): error TS2554: Expected 1 arguments, but got 0.
+src/middleware/rateLimiter.ts(115,5): error TS2322: Type 'RateLimitStore' is not assignable to type 'Store | LegacyStore | undefined'.
+  Property 'decrement' is missing in type 'RateLimitStore' but required in type 'LegacyStore'.
+src/middleware/requestLogger.ts(222,5): error TS2322: Type '(req: Request, _res: Response) => { requestId: string; route: string; method: string; userId: string | undefined; apiKeyId: string | undefined; ip: string | undefined; userAgent: string | undefined; }' is not assignable to type '(req: IncomingMessage, res: ServerResponse<IncomingMessage>) => object'.
+  Types of parameters 'req' and 'req' are incompatible.
+    Type 'IncomingMessage' is missing the following properties from type 'Request<ParamsDictionary, any, any, ParsedQs, Record<string, any>>': get, header, accepts, acceptsCharsets, and 26 more.
+src/modules/booking-intents/pg-booking-intent-repository.ts(48,9): error TS2416: Property 'findBySlotId' in type 'PgBookingIntentRepository' is not assignable to the same property in base type 'BookingIntentRepository'.
+  Type '(slotId: string) => Promise<BookingIntentRecord | undefined>' is not assignable to type '(slotId: string) => BookingIntentRecord | undefined'.
+    Type 'Promise<BookingIntentRecord | undefined>' is missing the following properties from type 'BookingIntentRecord': id, slotId, professional, customerId, and 4 more.
+src/modules/booking-intents/pg-booking-intent-repository.ts(54,9): error TS2416: Property 'findById' in type 'PgBookingIntentRepository' is not assignable to the same property in base type 'BookingIntentRepository'.
+  Type '(id: string) => Promise<BookingIntentRecord | undefined>' is not assignable to type '(id: string) => BookingIntentRecord | undefined'.
+    Type 'Promise<BookingIntentRecord | undefined>' is missing the following properties from type 'BookingIntentRecord': id, slotId, professional, customerId, and 4 more.
+src/modules/booking-intents/pg-booking-intent-repository.ts(60,9): error TS2416: Property 'findBySlotIdAndCustomer' in type 'PgBookingIntentRepository' is not assignable to the same property in base type 'BookingIntentRepository'.
+  Type '(slotId: string, customerId: string) => Promise<BookingIntentRecord | undefined>' is not assignable to type '(slotId: string, customerId: string) => BookingIntentRecord | undefined'.
+    Type 'Promise<BookingIntentRecord | undefined>' is missing the following properties from type 'BookingIntentRecord': id, slotId, professional, customerId, and 4 more.
+src/repositories/slotRepository.ts(29,59): error TS2304: Cannot find name '_legacySlots'.
+src/repositories/slotRepository.ts(33,10): error TS2304: Cannot find name '_legacySlots'.
+src/routes/checkout.ts(28,39): error TS2345: Argument of type '"CHECKOUT"' is not assignable to parameter of type '"CREATE_SLOT" | "CREATE_BOOKING_INTENT" | "SMS_NOTIFICATIONS"'.
+src/routes/checkout.ts(425,7): error TS2304: Cannot find name 'handleCheckoutError'.
+src/routes/checkout.ts(515,7): error TS2304: Cannot find name 'handleCheckoutError'.
+src/scheduler/reminderWorker.ts(29,43): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+src/services/__tests__/contract.service.test.ts(1,33): error TS2307: Cannot find module '../contract.service' or its corresponding type declarations.
+src/services/__tests__/contract.service.test.ts(2,79): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../../errors/contractErrors.js'?
+src/services/__tests__/contract.service.test.ts(3,29): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../../utils/retry-policy.js'?
+src/services/__tests__/slotService.test.ts(6,3): error TS2305: Module '"../slotService.js"' has no exported member 'SlotConflictError'.
+src/services/__tests__/slotService.test.ts(91,26): error TS2339: Property 'hasConflict' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(95,26): error TS2339: Property 'hasConflict' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(99,26): error TS2339: Property 'hasConflict' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(103,26): error TS2339: Property 'hasConflict' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(107,26): error TS2339: Property 'hasConflict' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(112,26): error TS2339: Property 'hasConflict' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(114,26): error TS2339: Property 'hasConflict' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(119,26): error TS2339: Property 'hasConflict' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(121,26): error TS2339: Property 'hasConflict' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(126,26): error TS2339: Property 'hasConflict' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(308,40): error TS2339: Property 'createSlotTraced' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(315,40): error TS2339: Property 'updateSlotTraced' does not exist on type 'SlotService'.
+src/services/__tests__/slotService.test.ts(321,40): error TS2339: Property 'listSlotsTraced' does not exist on type 'SlotService'.
+src/services/__tests__/tokenService.test.ts(38,41): error TS2345: Argument of type '{ id: string; slotId: string; professional: string; customerId: string; startTime: number; endTime: number; status: "pending"; createdAt: string; }' is not assignable to parameter of type 'never'.
+src/services/__tests__/tokenService.test.ts(42,14): error TS2339: Property 'updateTokenInfo' does not exist on type 'MockedObject<BookingIntentRepository>'.
+src/services/__tests__/tokenService.test.ts(48,21): error TS2339: Property 'updateTokenInfo' does not exist on type 'MockedObject<BookingIntentRepository>'.
+src/services/__tests__/tokenService.test.ts(61,41): error TS2345: Argument of type '{ tokenAsset: string; mintTxHash: string; id: string; slotId: string; professional: string; customerId: string; startTime: number; endTime: number; status: "pending"; createdAt: string; }' is not assignable to parameter of type 'never'.
+src/services/__tests__/tokenService.test.ts(70,21): error TS2339: Property 'updateTokenInfo' does not exist on type 'MockedObject<BookingIntentRepository>'.
+src/services/__tests__/tokenService.test.ts(74,41): error TS2345: Argument of type 'undefined' is not assignable to parameter of type 'never'.
+src/services/slotService.ts(1,26): error TS2440: Import declaration conflicts with local declaration of 'Slot'.
+src/services/slotService.ts(2,15): error TS2300: Duplicate identifier 'Slot'.
+src/services/slotService.ts(2,15): error TS2484: Export declaration conflicts with exported declaration of 'Slot'.
+src/services/slotService.ts(5,15): error TS2305: Module '"../repositories/slotRepository.js"' has no exported member 'SlotRecord'.
+src/services/slotService.ts(6,15): error TS2305: Module '"../repositories/slotRepository.js"' has no exported member 'SlotRecord'.
+src/services/slotService.ts(6,29): error TS2300: Duplicate identifier 'Slot'.
+src/services/slotService.ts(9,15): error TS2305: Module '"../repositories/slotRepository.js"' has no exported member 'SlotInput'.
+src/services/slotService.ts(48,60): error TS2304: Cannot find name 'PaginatedSlot'.
+src/services/tokenService.ts(68,40): error TS2339: Property 'updateTokenInfo' does not exist on type 'BookingIntentRepository'.
+src/tracing/hooks.ts(55,5): error TS2304: Cannot find name 'emitSpan'.
+src/tracing/hooks.ts(66,5): error TS2304: Cannot find name 'emitSpan'.
+src/utils/__tests__/redact.test.ts(12,61): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../redact.js'?
+src/utils/__tests__/redact.test.ts(701,25): error TS7006: Parameter 'field' implicitly has an 'any' type.
+src/utils/idempotencyPayloadCodec.ts(104,31): error TS2339: Property 'idempotencyRedisEncryption' does not exist on type 'EnvConfig'.
+src/utils/idempotencyPayloadCodec.ts(130,21): error TS2339: Property 'idempotencyRedisEncryption' does not exist on type 'EnvConfig'.
+src/utils/redis.ts(28,37): error TS2304: Cannot find name 'ttlSeconds'.
+src/utils/redis.ts(49,21): error TS2304: Cannot find name 'MAX_RETRY_ATTEMPTS'.
+src/utils/redis.ts(50,11): error TS2304: Cannot find name 'logError'.
+src/utils/redis.ts(52,18): error TS2304: Cannot find name 'safeUrl'.
+src/utils/redis.ts(56,45): error TS2304: Cannot find name 'MAX_RETRY_DELAY_MS'.
+src/utils/redis.ts(57,9): error TS2304: Cannot find name 'logWarn'.
+src/utils/redis.ts(57,80): error TS2304: Cannot find name 'safeUrl'.
+src/utils/redis.ts(63,7): error TS2304: Cannot find name 'logInfo'.
+src/utils/redis.ts(63,60): error TS2304: Cannot find name 'safeUrl'.
+src/utils/redis.ts(68,7): error TS2304: Cannot find name 'logInfo'.
+src/utils/redis.ts(68,60): error TS2304: Cannot find name 'safeUrl'.
+src/utils/redis.ts(72,7): error TS2304: Cannot find name 'logError'.
+src/utils/redis.ts(72,73): error TS2304: Cannot find name 'safeUrl'.
+src/utils/redis.ts(77,7): error TS2304: Cannot find name 'logWarn'.
+src/utils/redis.ts(77,51): error TS2304: Cannot find name 'safeUrl'.
+src/utils/redis.ts(82,7): error TS2304: Cannot find name 'logWarn'.
+src/utils/redis.ts(82,74): error TS2304: Cannot find name 'safeUrl'.
+src/utils/redis.ts(99,5): error TS2304: Cannot find name 'logInfo'.

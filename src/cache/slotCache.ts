@@ -44,7 +44,6 @@ export const SLOT_CACHE_KEYS = {
   pattern: "slots:page:*",
 } as const;
 
-
 export interface Slot {
   id: number;
   professional: string;
@@ -59,7 +58,6 @@ export interface PaginatedSlotsResult {
   total: number;
   totalPages: number;
 }
-
 
 /**
  * Retrieve cached slots for a specific page.
@@ -89,18 +87,16 @@ export async function getCachedSlotsPage(page: number): Promise<PaginatedSlotsRe
  * @param page - Page number (1-indexed)
  * @param result - Paginated result to serialise and store.
  */
-export async function setCachedSlotsPage(page: number, result: PaginatedSlotsResult): Promise<void> {
+export async function setCachedSlotsPage(
+  page: number,
+  result: PaginatedSlotsResult,
+): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
   try {
     const key = SLOT_CACHE_KEYS.page(page);
-    await redis.set(
-      key,
-      JSON.stringify(result),
-      "EX",
-      SLOT_CACHE_TTL_SECONDS,
-    );
+    await redis.set(key, JSON.stringify(result), "EX", SLOT_CACHE_TTL_SECONDS);
   } catch (err) {
     recordDependencyFault("redis", "cache_write");
     console.warn("[slotCache] setCachedSlotsPage error:", (err as Error).message);
@@ -124,9 +120,9 @@ export async function invalidateSlotsCache(): Promise<void> {
     // Delete all paginated slot cache keys
     const keys = await redis.keys(SLOT_CACHE_KEYS.pattern);
     if (keys.length > 0) {
-      await Promise.all(keys.map(key => redis.del(key)));
+      await Promise.all(keys.map((key) => redis.del(key)));
     }
-    
+
     // Also delete legacy key for backward compatibility
     await redis.del(SLOT_CACHE_KEYS.all);
   } catch (err) {
@@ -167,19 +163,16 @@ export async function setCachedSlots(slots: Slot[]): Promise<void> {
   if (!redis) return;
 
   try {
-    await redis.set(
-      SLOT_CACHE_KEYS.all,
-      JSON.stringify(slots),
-      "EX",
-      SLOT_CACHE_TTL_SECONDS,
-    );
+    await redis.set(SLOT_CACHE_KEYS.all, JSON.stringify(slots), "EX", SLOT_CACHE_TTL_SECONDS);
   } catch (err) {
     recordDependencyFault("redis", "cache_write");
     console.warn("[slotCache] setCachedSlots error:", (err as Error).message);
   }
 }
 
-export async function getOrFetchSlots(fetcher: () => Promise<Slot[]>): Promise<{ slots: Slot[], cacheStatus: "HIT" | "MISS" }> {
+export async function getOrFetchSlots(
+  fetcher: () => Promise<Slot[]>,
+): Promise<{ slots: Slot[]; cacheStatus: "HIT" | "MISS" }> {
   const slots = await fetcher();
   return { slots, cacheStatus: "MISS" };
 }

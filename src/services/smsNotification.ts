@@ -63,13 +63,13 @@ export class SmsNotificationService {
       throw new TypeError("SmsNotificationService requires a valid SmsProvider");
     }
 
-    this.providers = options?.providers?.length
-      ? options.providers
-      : [primaryProvider];
+    this.providers = options?.providers?.length ? options.providers : [primaryProvider];
 
     this.maxLength = options?.maxLength ?? 1600;
     this.allowedToPattern = options?.allowedToPattern ?? /^\+[1-9][0-9]{7,14}$/;
-    this.retry = options?.retryPolicy ?? new RetryPolicy({ maxRetries: 2, initialDelay: 200, useJitter: false });
+    this.retry =
+      options?.retryPolicy ??
+      new RetryPolicy({ maxRetries: 2, initialDelay: 200, useJitter: false });
   }
 
   async send(to: string, message: string): Promise<SmsSendResult> {
@@ -105,23 +105,29 @@ export class SmsNotificationService {
     for (const provider of this.providers) {
       try {
         const result = await withRetry(
-          async (attempt) => {
+          async () => {
             return await withTimeout(
               async (signal) => {
                 const res = await provider.sendSms(normalizedTo, normalizedMessage, signal);
 
                 // Treat 4xx (except 429) as permanent failures for this provider
-                if (!res.success && res.statusCode && res.statusCode >= 400 && res.statusCode < 500 && res.statusCode !== 429) {
+                if (
+                  !res.success &&
+                  res.statusCode &&
+                  res.statusCode >= 400 &&
+                  res.statusCode < 500 &&
+                  res.statusCode !== 429
+                ) {
                   throw new OutboundBadResponseError(provider.name, res.error);
                 }
 
                 return res;
               },
               timeoutConfig.http.smsMs,
-              `sms-provider:${provider.name}`
+              `sms-provider:${provider.name}`,
             );
           },
-          { serviceName: `sms-provider:${provider.name}` }
+          { serviceName: `sms-provider:${provider.name}` },
         );
 
         // If provider returned success, we're done
@@ -237,7 +243,7 @@ export class InMemorySmsProvider implements SmsProvider {
       return {
         success: false,
         error: "Simulated failure for recipient",
-        statusCode: 400
+        statusCode: 400,
       };
     }
     if (message.includes("__throw__")) {
@@ -278,10 +284,12 @@ export function buildProviders(config: SmsProviderConfig): SmsProvider[] {
   return config.providers.map((name) => {
     switch (name) {
       case "twilio":
-        if (!config.twilio) throw new Error("Twilio config is required when 'twilio' is listed as a provider");
+        if (!config.twilio)
+          throw new Error("Twilio config is required when 'twilio' is listed as a provider");
         return new TwilioSmsProvider(config.twilio);
       case "vonage":
-        if (!config.vonage) throw new Error("Vonage config is required when 'vonage' is listed as a provider");
+        if (!config.vonage)
+          throw new Error("Vonage config is required when 'vonage' is listed as a provider");
         return new VonageSmsProvider(config.vonage);
       case "in-memory":
         return new InMemorySmsProvider();
