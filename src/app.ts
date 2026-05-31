@@ -2,6 +2,8 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
+import { getCORSConfig } from "./config/cors.js";
+import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import {
   genericErrorHandler,
