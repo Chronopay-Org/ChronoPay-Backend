@@ -21,9 +21,27 @@ import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
 
+// Simple cookie parser middleware
+function parseCookies(req: Request, _res: Response, next: any): void {
+  const cookieHeader = req.headers.cookie;
+  req.cookies = {};
+
+  if (cookieHeader) {
+    cookieHeader.split(";").forEach((cookie) => {
+      const [key, val] = cookie.split("=");
+      if (key && val) {
+        req.cookies[key.trim()] = decodeURIComponent(val.trim());
+      }
+    });
+  }
+
+  next();
+}
+
 // Import routers
 import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
+import oauth2Router from "./routes/oauth2.js";
 
 // Import modules
 import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
@@ -228,14 +246,9 @@ export function createApp(options: AppFactoryOptions = {}) {
     );
   }
 
-  app.use(
-    express.json({
-      limit: "100kb",
-      verify: (req: any, _res, buf) => {
-        req.rawBody = buf;
-      },
-    })
-  );
+  app.use(express.json({ limit: "100kb" }));
+  app.use(express.urlencoded({ extended: true, limit: "100kb" }));
+  app.use(parseCookies);
   app.use(metricsMiddleware);
   app.use(createRequestLogger());
 
@@ -372,6 +385,9 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3. Buyer Profile Routes
   app.use("/api/v1/buyer-profiles", buyerProfileRouter);
+
+  // 3a. OAuth2 Routes
+  app.use("/api/v1/auth/oauth", oauth2Router);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
