@@ -37,10 +37,24 @@ export class SlotNotFoundError extends Error {
   }
 }
 
+export class SlotConflictError extends Error {
+  constructor(message = "Slot conflicts with an existing slot") {
+    super(message);
+    this.name = "SlotConflictError";
+  }
+}
+
 export class SlotValidationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SlotValidationError";
+  }
+}
+
+export class SlotConflictError extends Error {
+  constructor(message: string = "Slot conflict detected") {
+    super(message);
+    this.name = "SlotConflictError";
   }
 }
 

@@ -13,7 +13,12 @@
  */
 
 import type { NextFunction, Request, Response } from "express";
-import { isDependencyAvailable, type Dependency } from "./dependencyStatus.js";
+import {
+  getLastDependencyFault,
+  isDependencyAvailable,
+  type Dependency,
+} from "./dependencyStatus.js";
+import { recordDependencyFault } from "../metrics.js";
 
 const DEPENDENCY_LABELS: Record<Dependency, string> = {
   redis: "Redis",
@@ -24,6 +29,10 @@ export function requireDependency(dep: Dependency) {
   return async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     const available = await isDependencyAvailable(dep);
     if (!available) {
+      recordDependencyFault(
+        dep,
+        getLastDependencyFault(dep) ?? (dep === "redis" ? "disconnect" : "timeout"),
+      );
       res.status(503).json({
         success: false,
         code: "DEPENDENCY_UNAVAILABLE",
