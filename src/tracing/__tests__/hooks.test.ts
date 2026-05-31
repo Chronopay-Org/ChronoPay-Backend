@@ -123,7 +123,7 @@ describe("tracing hooks and exporter", () => {
         withSpan("test.non-error", {}, () => {
           throw "string error";
         }),
-      ).rejects.toThrow("string error");
+      ).rejects.toEqual("string error");
 
       expect(collectedSpans).toHaveLength(1);
       const span = collectedSpans[0];
@@ -222,14 +222,14 @@ describe("tracing hooks and exporter", () => {
     it("should generate unique span IDs for each span", async () => {
       const spanIds = new Set<string>();
 
-      await withSpan("span1", {}, () => {
-        spanIds.add(collectedSpans[0].spanId);
+      await withSpan("span1", {}, (span) => {
+        spanIds.add(span.spanId);
       });
-      await withSpan("span2", {}, () => {
-        spanIds.add(collectedSpans[1].spanId);
+      await withSpan("span2", {}, (span) => {
+        spanIds.add(span.spanId);
       });
-      await withSpan("span3", {}, () => {
-        spanIds.add(collectedSpans[2].spanId);
+      await withSpan("span3", {}, (span) => {
+        spanIds.add(span.spanId);
       });
 
       expect(spanIds.size).toBe(3);
@@ -322,8 +322,9 @@ describe("tracing hooks and exporter", () => {
       const failingExporter = () => {
         throw new Error("Exporter failed");
       };
+      const calls: Span[] = [];
       const workingExporter = (span: Span) => {
-        collectedSpans.push(span);
+        calls.push(span);
       };
 
       addSpanExporter(failingExporter);
@@ -333,8 +334,8 @@ describe("tracing hooks and exporter", () => {
       removeSpanExporter(workingExporter);
 
       // The working exporter should still be called despite the failing one
-      expect(collectedSpans).toHaveLength(1);
-      expect(collectedSpans[0].name).toBe("test.error-handling");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].name).toBe("test.error-handling");
     });
 
     it("should allow removing specific exporter from multiple", async () => {
@@ -485,6 +486,7 @@ describe("tracing hooks and exporter", () => {
           await withSpan("inner.operation", {}, async () => {
             throw new Error("Inner failure");
           });
+        // eslint-disable-next-line unused-imports/no-unused-vars
         } catch (error) {
           errorCaught = true;
           // Continue with recovery

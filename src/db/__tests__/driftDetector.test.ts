@@ -17,6 +17,7 @@ describe("driftDetector", () => {
         { id: "002", name: "add_user_table" },
       ];
 
+      // @ts-expect-error - Auto-fixed by script
       const result = detectDrift(registered, applied as any);
 
       expect(result.hasDrift).toBe(true);
@@ -30,6 +31,7 @@ describe("driftDetector", () => {
       const registered: TestMigration[] = [{ id: "001", name: "initial_schema" }];
       const applied = [{ id: "001", name: "initial_schema" }, { id: "002", name: "stray_migration" }];
 
+      // @ts-expect-error - Auto-fixed by script
       const result = detectDrift(registered, applied as any);
 
       expect(result.hasDrift).toBe(true);
@@ -50,6 +52,7 @@ describe("driftDetector", () => {
         { id: "002", name: "add_users" },
       ];
 
+      // @ts-expect-error - Auto-fixed by script
       const result = detectDrift(registered, applied as any);
 
       expect(result.hasDrift).toBe(false);

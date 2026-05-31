@@ -13,7 +13,7 @@ export class Redis {
   async incr() { return 1; }
   async expire() { return 1; }
   async flushall() { return 'OK'; }
-  on(event: string, callback: (...args: any[]) => void) {
+  on(_event: string, _callback: (...args: any[]) => void) {
     // Mock event emitter interface
     return this;
   }

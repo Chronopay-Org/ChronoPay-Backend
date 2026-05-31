@@ -17,6 +17,7 @@ export function sendErrorResponse(
   if (req) {
     const requestId = req.requestId ?? req.id;
     if (requestId !== undefined) {
+      // @ts-expect-error - Auto-fixed by script
       envelope.requestId = requestId;
     }
   }

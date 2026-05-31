@@ -35,7 +35,7 @@ describe("registerSwaggerDocs behavior", () => {
           return { serve: () => {}, setup: () => {} };
         }
         // fallback to real require for other modules
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
+         
         return require(id);
       },
     }));
@@ -69,7 +69,7 @@ describe("registerSwaggerDocs behavior", () => {
         if (id === "swagger-ui-express") {
           return { serve: () => {}, setup: () => {} };
         }
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
+         
         return require(id);
       },
     }));
@@ -98,14 +98,14 @@ describe("registerSwaggerDocs behavior", () => {
         if (id === "swagger-ui-express") {
           return { serve: () => {}, setup: () => {} };
         }
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
+         
         return require(id);
       },
     }));
 
     const { createApp } = await import("../app.js");
 
-    const app1 = createApp({ enableDocs: true });
+    const __app1 = createApp({ enableDocs: true });
     const app2 = createApp({ enableDocs: true });
 
     expect(callCount).toBe(1);

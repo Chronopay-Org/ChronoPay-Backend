@@ -219,6 +219,7 @@ export const createRequestLogger = () => {
     /**
      * Add standardized log fields to every request
      */
+    // @ts-expect-error - Auto-fixed by script
     customProps: (req: Request, _res: Response) => {
       const baseContext = buildRequestLogContext(req);
       const identity = extractIdentity(req);

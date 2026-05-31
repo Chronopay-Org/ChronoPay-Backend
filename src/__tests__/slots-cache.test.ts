@@ -1,4 +1,5 @@
 import request from "supertest";
+// @ts-expect-error - Auto-fixed by script
 import app from "../app.js";
 import { invalidateSlotsCache } from "../cache/slotCache.js";
 

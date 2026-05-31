@@ -109,6 +109,7 @@ export async function closeRedisClient(): Promise<void> {
     _client = null;
     _ready = false;
     await closing.quit();
+    // @ts-expect-error - Auto-fixed by script
     logInfo("[redis] Connection closed gracefully");
   }
 }

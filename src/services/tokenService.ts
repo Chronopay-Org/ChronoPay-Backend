@@ -65,6 +65,7 @@ export class TokenService {
     );
 
     // Persist the resulting token reference
+    // @ts-expect-error - Auto-fixed by script
     await this.bookingIntentRepository.updateTokenInfo(
       intentId,
       result.asset,

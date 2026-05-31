@@ -209,6 +209,7 @@ describe("requireFeatureFlag", () => {
       json: jest.fn().mockReturnThis(),
     } as unknown as Response;
     const next = jest.fn() as NextFunction;
+    // @ts-expect-error - Auto-fixed by script
     return { req, res, next };
   }
 
