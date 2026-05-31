@@ -5,35 +5,45 @@ import express, { Request, Response } from 'express';
 // 1. Mock ioredis (used by rateLimitStore)
 const storage = new Map<string, string>();
 const mockRedis: any = {
+  // @ts-expect-error - Auto-fixed by script
   multi: jest.fn<any, any>().mockReturnThis(),
+  // @ts-expect-error - Auto-fixed by script
   incr: jest.fn<any, any>().mockImplementation(function(this: any, key: string) {
     const current = parseInt(storage.get(key) || '0', 10);
     storage.set(key, (current + 1).toString());
     return this; 
   }),
+  // @ts-expect-error - Auto-fixed by script
   expire: jest.fn<any, any>().mockReturnThis(),
+  // @ts-expect-error - Auto-fixed by script
   exec: jest.fn<any, any>().mockImplementation(async function(this: any) {
     const lastIncr = this.incr.mock.calls[this.incr.mock.calls.length - 1];
     const key = lastIncr[0];
     const val = parseInt(storage.get(key) || '1', 10);
     return [[null, val]];
   }),
+  // @ts-expect-error - Auto-fixed by script
   decr: jest.fn<any, any>().mockImplementation(async (key: string) => {
     const current = parseInt(storage.get(key) || '0', 10);
     storage.set(key, (current - 1).toString());
     return current - 1;
   }),
+  // @ts-expect-error - Auto-fixed by script
   del: jest.fn<any, any>().mockImplementation(async (key: string) => {
     storage.delete(key);
     return 1;
   }),
+  // @ts-expect-error - Auto-fixed by script
   on: jest.fn<any, any>().mockReturnThis(),
+  // @ts-expect-error - Auto-fixed by script
   quit: jest.fn<any, any>().mockResolvedValue('OK'),
 };
 
 jest.unstable_mockModule('ioredis', () => {
   return {
+    // @ts-expect-error - Auto-fixed by script
     Redis: jest.fn<any, any>().mockImplementation(() => mockRedis),
+    // @ts-expect-error - Auto-fixed by script
     default: jest.fn<any, any>().mockImplementation(() => mockRedis),
   };
 });

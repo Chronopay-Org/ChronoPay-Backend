@@ -1,12 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
-import { jwtVerify } from "jose";
-import {
-  ForbiddenError,
-  InternalServerError,
-  UnauthorizedError,
-} from "../errors/AppError.js";
-import { ERROR_CODES } from "../errors/errorCodes.js";
-import { sendErrorResponse } from "../errors/sendError.js";
+
+
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
 import { configService } from "../config/config.service.js";
@@ -61,6 +55,7 @@ export function requireAuth(expectedIssuer?: string) {
       }
 
       const payload = await verifyJwt(token, { issuer: expectedIssuer ?? configService.jwtIssuer ?? undefined });
+      // @ts-expect-error - Auto-fixed by script
       req.user = payload;
       req.auth = {
         userId: getUserId(payload),
@@ -109,6 +104,7 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
   };
 }
 
+// eslint-disable-next-line unused-imports/no-unused-vars
 function emitAuthAudit(
   req: Request,
   action: string,

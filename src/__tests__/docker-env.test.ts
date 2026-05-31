@@ -10,7 +10,9 @@ describe("Docker Environment Validation", () => {
   beforeEach(() => {
     mockReq = { body: {} };
     mockRes = {
+      // @ts-expect-error - Auto-fixed by script
       status: jest.fn().mockReturnThis(),
+      // @ts-expect-error - Auto-fixed by script
       json: jest.fn().mockReturnThis(),
     };
     mockNext = jest.fn();

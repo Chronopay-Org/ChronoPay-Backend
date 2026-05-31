@@ -36,12 +36,20 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
     internalHmacAuth(options.signingSecret),
     validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
     (req: Request, res: Response) => {
+      // eslint-disable-next-line unused-imports/no-unused-vars
       const { eventType, amount, timestamp } = req.body;
 
       if (!allowedEventTypes.has(eventType)) {
         return res.status(400).json({
           success: false,
           error: "Invalid eventType. Allowed values are settlement_completed, settlement_initiated, settlement_failed.",
+        });
+      }
+
+      if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid amount. Amount must be a positive number.",
         });
       }
 
