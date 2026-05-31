@@ -1,6 +1,9 @@
 import { Express, Request, Response } from "express";
 import { validateRequiredFields } from "../middleware/validation.js";
 import { internalHmacAuth } from "../middleware/internalHmacAuth.js";
+import { KycProvider } from "../services/kycProvider.js";
+import { MockKycProvider } from "../services/mockKycProvider.js";
+import { KycService } from "../services/kycService.js";
 
 const allowedEventTypes = new Set([
   "settlement_completed",
@@ -28,6 +31,8 @@ export function _resetProcessedTransactions(): void {
 
 export interface WebhookRouteOptions {
   signingSecret?: string;
+  kycSigningSecret?: string;
+  kycProvider?: KycProvider;
 }
 
 export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions = {}) {
@@ -82,5 +87,32 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
 
       return res.status(200).json(responseBody);
     },
+  );
+
+  app.post(
+    "/api/v1/webhooks/kyc",
+    internalHmacAuth(options.kycSigningSecret || options.signingSecret),
+    validateRequiredFields(["supplierId", "kycRef", "status"]),
+    async (req: Request, res: Response) => {
+      const provider = options.kycProvider || new MockKycProvider();
+
+      try {
+        const payload = provider.parseWebhook(req.body);
+        const kycService = new KycService();
+        await kycService.processWebhook(payload);
+
+        return res.status(200).json({
+          success: true,
+          supplierId: payload.supplierId,
+          kycStatus: payload.status,
+          kycRef: payload.kycRef,
+        });
+      } catch (err: any) {
+        if (err.message.includes("not found")) {
+          return res.status(404).json({ success: false, error: err.message });
+        }
+        return res.status(400).json({ success: false, error: err.message });
+      }
+    }
   );
 }
