@@ -13,7 +13,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
 import request from "supertest";
 import express from "express";
-// @ts-expect-error - Auto-fixed by script
 import slotsRouter from "../routes/slots.js";
 import { slotService } from "../services/slotService.js";
 

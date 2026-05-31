@@ -102,6 +102,8 @@ export class HorizonContractClient implements IContractClient {
         return `${this.horizonUrl}/accounts/${encodeURIComponent(id)}/transactions`;
       case "getTransaction":
         return `${this.horizonUrl}/transactions/${encodeURIComponent(id)}`;
+      case "getLatestLedger":
+        return `${this.horizonUrl}/ledgers?limit=1&order=desc`;
       default:
         throw new ContractInvalidRequestError(`Unknown Horizon method: ${method}`);
     }
