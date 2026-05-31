@@ -56,7 +56,7 @@ export function createBookingIntentsRouter() {
     idempotencyMiddleware,
     createAuthAwareRateLimiter(),
     auditMiddleware("CREATE_BOOKING_INTENT"),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
         const input = parseCreateBookingIntentBody(req.body);
         // Evaluate fraud risk
@@ -84,11 +84,19 @@ export function createBookingIntentsRouter() {
             });
           }
         }
-        const intent = bookingIntentService.createIntent(input, req.auth!);
-        res.status(201).json({
-          success: true,
-          intent,
-        });
+        if ((input as any).rrule) {
+          const report = await bookingIntentService.createRecurringIntents(input as any, req.auth!);
+          res.status(201).json({
+            success: true,
+            report,
+          });
+        } else {
+          const intent = await bookingIntentService.createIntent(input as any, req.auth!);
+          res.status(201).json({
+            success: true,
+            intent,
+          });
+        }
       } catch (error) {
         handleServiceError(error, res);
       }
