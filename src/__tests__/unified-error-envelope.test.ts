@@ -4,7 +4,6 @@ import { BadRequestError } from "../errors/AppError.js";
 import { genericErrorHandler } from "../middleware/errorHandling.js";
 import { createBookingIntentsRouter } from "../routes/booking-intents.js";
 import checkoutRouter from "../routes/checkout.js";
-// @ts-expect-error - Auto-fixed by script
 import slotsRouter from "../routes/slots.js";
 import {
   featureFlagContextMiddleware,
