@@ -1,4 +1,4 @@
-import { Registry, collectDefaultMetrics, Histogram, Counter } from "prom-client";
+import { Registry, collectDefaultMetrics, Histogram, Counter, Gauge } from "prom-client";
 import { Request, Response, NextFunction } from "express";
 
 /**
