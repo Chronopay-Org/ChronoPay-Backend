@@ -51,6 +51,13 @@ export class SlotValidationError extends Error {
   }
 }
 
+export class SlotConflictError extends Error {
+  constructor(message: string = "Slot conflict detected") {
+    super(message);
+    this.name = "SlotConflictError";
+  }
+}
+
 export interface PaginationOptions {
   page?: number;
   limit?: number;

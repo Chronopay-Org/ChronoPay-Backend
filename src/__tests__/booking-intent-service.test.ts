@@ -199,7 +199,7 @@ describe("parseCreateBookingIntentBody", () => {
     expect(result.note?.length).toBe(1);
   });
 
-  it("validates slotId format with alphanumeric and hyphens", () => {
+  it("validates slotId format with canonical format", () => {
     const result = parseCreateBookingIntentBody({
       slotId: VALID_SLOT_ID,
       note: "Test",

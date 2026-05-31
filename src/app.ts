@@ -228,7 +228,14 @@ export function createApp(options: AppFactoryOptions = {}) {
     );
   }
 
-  app.use(express.json({ limit: "100kb" }));
+  app.use(
+    express.json({
+      limit: "100kb",
+      verify: (req: any, _res, buf) => {
+        req.rawBody = buf;
+      },
+    })
+  );
   app.use(metricsMiddleware);
   app.use(createRequestLogger());
 
