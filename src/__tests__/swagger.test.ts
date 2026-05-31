@@ -105,7 +105,8 @@ describe("registerSwaggerDocs behavior", () => {
 
     const { createApp } = await import("../app.js");
 
-    const __app1 = createApp({ enableDocs: true });
+    // eslint-disable-next-line unused-imports/no-unused-vars
+    const app1 = createApp({ enableDocs: true });
     const app2 = createApp({ enableDocs: true });
 
     expect(callCount).toBe(1);

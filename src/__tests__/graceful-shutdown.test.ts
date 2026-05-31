@@ -104,7 +104,8 @@ describe("stopScheduler", () => {
 describe("in-flight request handling", () => {
   it("tracks active requests and waits for them during shutdown", async () => {
     const server = createServer();
-    let _requestFinished = false;
+    // eslint-disable-next-line unused-imports/no-unused-vars
+    let requestFinished = false;
     let shutdownComplete = false;
 
     // @ts-expect-error - Auto-fixed by script

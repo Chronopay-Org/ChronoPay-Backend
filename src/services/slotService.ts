@@ -23,7 +23,8 @@ export interface Slot {
   _internalNote?: string;
 }
 
-const _MAX_LIMIT = 100;
+// eslint-disable-next-line unused-imports/no-unused-vars
+const MAX_LIMIT = 100;
 const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 10;
 

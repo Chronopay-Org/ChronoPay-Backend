@@ -104,7 +104,8 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
   };
 }
 
-function __emitAuthAudit(
+// eslint-disable-next-line unused-imports/no-unused-vars
+function emitAuthAudit(
   req: Request,
   action: string,
   status: number,

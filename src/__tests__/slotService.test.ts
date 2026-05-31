@@ -21,8 +21,9 @@ import {
   SLOT_LIST_CACHE_TTL_MS,
 } from "../services/slotService.js";
 // @ts-expect-error - Auto-fixed by script
-import { InMemorySlotRepository } from "../repositories/slotRepository.js";
+import { InMemorySlotRepository, type SlotRecord } from "../repositories/slotRepository.js";
 import { InMemoryCache } from "../cache/inMemoryCache.js";
+
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

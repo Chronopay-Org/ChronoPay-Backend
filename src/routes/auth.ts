@@ -20,12 +20,8 @@ router.post("/verify", async (req: Request, res: Response) => {
 
     return res.status(200).json({
       success: true,
-      actor: {
-        sub: payload.sub ?? payload.id ?? null,
-        role: payload.role ?? null,
-        iss: payload.iss ?? null,
-        exp: payload.exp,
-      },
+      subject: payload.sub ?? payload.id ?? null,
+      expiresAt: payload.exp,
     });
   } catch {
     return res.status(401).json({ success: false, error: "Invalid token" });

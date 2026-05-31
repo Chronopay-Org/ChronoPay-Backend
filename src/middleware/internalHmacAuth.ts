@@ -3,7 +3,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 const SIGNATURE_HEADER = "x-webhook-signature";
 const HMAC_ALGORITHM = "sha256";
-// const STALE_PAYLOAD_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+// eslint-disable-next-line unused-imports/no-unused-vars
+const STALE_PAYLOAD_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 // eslint-disable-next-line unused-imports/no-unused-vars
 const CLOCK_SKEW_MS = 60 * 1000; // 1 minute
 

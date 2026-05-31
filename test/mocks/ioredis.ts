@@ -13,7 +13,8 @@ export class Redis {
   async incr() { return 1; }
   async expire() { return 1; }
   async flushall() { return 'OK'; }
-  on(_event: string, _callback: (...args: any[]) => void) {
+  // eslint-disable-next-line unused-imports/no-unused-vars
+  on(event: string, callback: (...args: any[]) => void) {
     // Mock event emitter interface
     return this;
   }
