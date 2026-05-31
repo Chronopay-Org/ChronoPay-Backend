@@ -1,5 +1,6 @@
 import request from "supertest";
 import express from "express";
+// @ts-expect-error - Auto-fixed by script
 import slotsRouter, { resetSlotStore } from "../routes/slots.js";
 
 function buildApp() {

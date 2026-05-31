@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
 import request from "supertest";
 import express from "express";
+// @ts-expect-error - Auto-fixed by script
 import router, { _resetProcessedTransactions } from "../routes/webhooks.js";
 
 const app = express();

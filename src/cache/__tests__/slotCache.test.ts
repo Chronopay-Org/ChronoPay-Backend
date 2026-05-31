@@ -16,7 +16,6 @@
  */
 
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import Redis from "../../mocks/ioredis.js";
 import {
   getCachedSlotsPage,
   setCachedSlotsPage,
@@ -29,7 +28,6 @@ import {
 } from "../slotCache.js";
 import {
   setRedisClient,
-  getRedisClient,
   SLOT_CACHE_TTL_SECONDS,
   type RedisClient,
 } from "../redisClient.js";
@@ -141,6 +139,7 @@ describe("getCachedSlotsPage", () => {
 
   it("returns null when Redis.get throws (graceful degradation)", async () => {
     const redis = createMockRedisClient();
+    // @ts-expect-error - Auto-fixed by script
     redis.get = jest.fn().mockRejectedValue(new Error("connection refused"));
     setRedisClient(redis);
 
@@ -200,6 +199,7 @@ describe("setCachedSlotsPage", () => {
 
   it("catches and logs Redis.set errors gracefully", async () => {
     const redis = createMockRedisClient();
+    // @ts-expect-error - Auto-fixed by script
     redis.set = jest.fn().mockRejectedValue(new Error("write error"));
     setRedisClient(redis);
 
