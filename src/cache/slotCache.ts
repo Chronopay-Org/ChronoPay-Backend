@@ -30,7 +30,12 @@ import {
   getRedisClient,
   SLOT_CACHE_TTL_SECONDS,
 } from "./redisClient.js";
-import { recordCacheHit, recordCacheMiss, recordStampedeBlocked } from "../metrics.js";
+import {
+  recordCacheHit,
+  recordCacheMiss,
+  recordDependencyFault,
+  recordStampedeBlocked,
+} from "../metrics.js";
 
 
 export const SLOT_CACHE_KEYS = {
@@ -72,6 +77,7 @@ export async function getCachedSlotsPage(page: number): Promise<PaginatedSlotsRe
     if (raw === null) return null;
     return JSON.parse(raw) as PaginatedSlotsResult;
   } catch (err) {
+    recordDependencyFault("redis", "cache_read");
     console.warn("[slotCache] getCachedSlotsPage error:", (err as Error).message);
     return null;
   }
@@ -96,6 +102,7 @@ export async function setCachedSlotsPage(page: number, result: PaginatedSlotsRes
       SLOT_CACHE_TTL_SECONDS,
     );
   } catch (err) {
+    recordDependencyFault("redis", "cache_write");
     console.warn("[slotCache] setCachedSlotsPage error:", (err as Error).message);
   }
 }
@@ -123,6 +130,7 @@ export async function invalidateSlotsCache(): Promise<void> {
     // Also delete legacy key for backward compatibility
     await redis.del(SLOT_CACHE_KEYS.all);
   } catch (err) {
+    recordDependencyFault("redis", "cache_invalidate");
     console.warn("[slotCache] invalidateSlotsCache error:", (err as Error).message);
   }
 }
@@ -142,6 +150,7 @@ export async function getCachedSlots(): Promise<Slot[] | null> {
     if (raw === null) return null;
     return JSON.parse(raw) as Slot[];
   } catch (err) {
+    recordDependencyFault("redis", "cache_read");
     console.warn("[slotCache] getCachedSlots error:", (err as Error).message);
     return null;
   }
@@ -165,6 +174,7 @@ export async function setCachedSlots(slots: Slot[]): Promise<void> {
       SLOT_CACHE_TTL_SECONDS,
     );
   } catch (err) {
+    recordDependencyFault("redis", "cache_write");
     console.warn("[slotCache] setCachedSlots error:", (err as Error).message);
   }
 }
