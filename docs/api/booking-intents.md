@@ -26,8 +26,15 @@ Create a new booking intent for a specific slot.
 ```
 x-chronopay-user-id: customer-123
 x-chronopay-role: customer
+Idempotency-Key: booking-intent-123
 Content-Type: application/json
 ```
+
+`Idempotency-Key` is optional but strongly recommended for retries. When provided:
+
+- Same key + same body: returns the original response deterministically.
+- Same key + different body: returns `422` (`IDEMPOTENCY_KEY_MISMATCH`).
+- Concurrent requests with the same key: one request proceeds; others receive `409` while processing.
 
 ### Body
 
@@ -141,6 +148,19 @@ Common conflict errors:
 - `Selected slot is not bookable.`
 - `A booking intent already exists for this slot.` (duplicate for same customer)
 - `Selected slot already has an active booking intent.` (slot already booked)
+- `Conflict: This transaction is actively running.` (same idempotency key in progress)
+
+#### 422 Unprocessable Entity
+
+Idempotency key reused with a different payload.
+
+```json
+{
+  "success": false,
+  "code": "IDEMPOTENCY_KEY_MISMATCH",
+  "error": "Unprocessable Entity: Idempotency-Key used with different payload."
+}
+```
 
 #### 429 Too Many Requests
 
@@ -242,10 +262,29 @@ curl -X POST http://localhost:3001/api/v1/booking-intents \
 
 ### Repositories
 
-The endpoint uses in-memory repositories for development. Replace with database layer in production:
+The endpoint uses persistent storage for booking intents:
 
-- `BookingIntentRepository`: Manages booking intent records
-- `SlotRepository`: Manages slot records
+- `BookingIntentRepository`: Manages booking intent records in PostgreSQL via `PgBookingIntentRepository`.
+- `SlotRepository`: Manages slot records (currently in-memory, to be migrated).
+
+### Database Schema
+
+Booking intents are stored in the `booking_intents` table with the following structure:
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `id` | UUID | Primary key |
+| `slot_id` | UUID | Unique reference to the slot |
+| `professional_id` | UUID | Reference to the professional (user) |
+| `customer_id` | UUID | Reference to the customer (user) |
+| `start_time` | TIMESTAMPTZ | Start of the booking window |
+| `end_time` | TIMESTAMPTZ | End of the booking window |
+| `status` | ENUM | Intent status: `pending`, `completed`, `expired`, `cancelled` |
+| `note` | TEXT | Optional customer note |
+| `created_at` | TIMESTAMPTZ | Record creation timestamp |
+| `updated_at` | TIMESTAMPTZ | Record update timestamp |
+
+A unique constraint on `slot_id` ensures only one active booking intent exists per slot.
 
 ### Service Layer
 

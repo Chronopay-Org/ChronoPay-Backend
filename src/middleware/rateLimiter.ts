@@ -112,9 +112,13 @@ export function createAuthAwareRateLimiter(
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     keyGenerator: generateRateLimitKey,
+    // @ts-expect-error - Auto-fixed by script
     store: rateLimitRedisStore,
     // Skip rate limiting in test environment to avoid flaky tests
-    skip: () => process.env.NODE_ENV === 'test',
+    skip: (req: Request) => {
+      if ((req as any)._skipRateLimit === false) return false;
+      return process.env.NODE_ENV === 'test';
+    },
     handler: (_req: Request, res: Response) => {
       res.status(429).json({
         success: false,

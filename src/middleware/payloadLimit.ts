@@ -98,6 +98,8 @@ export const ROUTE_PAYLOAD_LIMITS = {
   checkout: "16kb",
   /** Slot creation — moderate limit. */
   slots: "32kb",
+  /** Booking intent creation — tight limit for tiny payloads. */
+  bookingIntent: "16kb",
   /** Default for all other routes (matches the global express.json limit). */
   default: "100kb",
 } as const;

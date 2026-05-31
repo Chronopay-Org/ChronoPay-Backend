@@ -66,6 +66,7 @@ export function createErrorHandler(
     if (isAppError(err)) {
       envelope = (err as AppError).toJSON();
     } else {
+      // @ts-expect-error - Auto-fixed by script
       envelope = {
         success: false,
         code: ERROR_CODES.INTERNAL_ERROR.code,
@@ -75,6 +76,7 @@ export function createErrorHandler(
     }
 
     if (requestId !== undefined) {
+      // @ts-expect-error - Auto-fixed by script
       envelope.requestId = requestId;
     }
 

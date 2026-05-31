@@ -12,8 +12,18 @@ import { Migration } from "../migrationRunner.js";
 import { migration as migration001 } from "./001_create_users_table.js";
 import { migration as migration002 } from "./002_create_slots_table.js";
 import { migration as migration003 } from "./003_add_slot_conflict_exclusion.js";
+import { migration as migration004 } from "./004_create_booking_intents_table.js";
+import { migration as migration005 } from "./005_add_token_references_to_booking_intents.js";
+import { migration as migration006 } from "./006_create_reminders_table.js";
 
-export const migrations: Migration[] = [migration001, migration002, migration003];
+export const migrations: Migration[] = [
+  migration001,
+  migration002,
+  migration003,
+  migration004,
+  migration005,
+  migration006,
+];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────
 // This runs once when the module is first imported. Fail-fast here is safer
