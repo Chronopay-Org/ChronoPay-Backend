@@ -46,6 +46,13 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
         });
       }
 
+      if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid amount. Amount must be a positive number.",
+        });
+      }
+
       const existing = _processedTransactions.get(String(req.body.transactionId));
       if (existing) {
         return res.status(200).json(existing.response);
