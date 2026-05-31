@@ -4,23 +4,25 @@ import {
   BookingIntentError,
 } from "../modules/booking-intents/booking-intent-service.js";
 
+const VALID_SLOT_ID = "slot-11111111-1111-4111-8111-111111111111";
+
 describe("parseCreateBookingIntentBody", () => {
   it("accepts valid booking intent without note", () => {
-    const result = parseCreateBookingIntentBody({ slotId: "abc-123" });
-    expect(result).toEqual({ slotId: "abc-123" });
+    const result = parseCreateBookingIntentBody({ slotId: VALID_SLOT_ID });
+    expect(result).toEqual({ slotId: VALID_SLOT_ID });
   });
 
   it("accepts valid booking intent with note", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "This is a note",
     });
-    expect(result).toEqual({ slotId: "abc-123", note: "This is a note" });
+    expect(result).toEqual({ slotId: VALID_SLOT_ID, note: "This is a note" });
   });
 
   it("trims slotId", () => {
-    const result = parseCreateBookingIntentBody({ slotId: "  abc-123  " });
-    expect(result.slotId).toBe("abc-123");
+    const result = parseCreateBookingIntentBody({ slotId: `  ${VALID_SLOT_ID}  ` });
+    expect(result.slotId).toBe(VALID_SLOT_ID);
   });
 
   it("rejects empty slotId", () => {
@@ -61,22 +63,22 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("rejects non-string note", () => {
     expect(() =>
-      parseCreateBookingIntentBody({ slotId: "abc-123", note: 123 }),
+      parseCreateBookingIntentBody({ slotId: VALID_SLOT_ID, note: 123 }),
     ).toThrow(BookingIntentError);
     expect(() =>
-      parseCreateBookingIntentBody({ slotId: "abc-123", note: null }),
+      parseCreateBookingIntentBody({ slotId: VALID_SLOT_ID, note: null }),
     ).toThrow(BookingIntentError);
     expect(() =>
-      parseCreateBookingIntentBody({ slotId: "abc-123", note: {} }),
+      parseCreateBookingIntentBody({ slotId: VALID_SLOT_ID, note: {} }),
     ).toThrow(BookingIntentError);
     expect(() =>
-      parseCreateBookingIntentBody({ slotId: "abc-123", note: [] }),
+      parseCreateBookingIntentBody({ slotId: VALID_SLOT_ID, note: [] }),
     ).toThrow(BookingIntentError);
   });
 
   it("sanitizes note by removing control characters", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "Hello\x00World",
     });
     expect(result.note).toBe("HelloWorld");
@@ -84,7 +86,7 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("sanitizes note by removing C1 control characters", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "Hello\x80World",
     });
     expect(result.note).toBe("HelloWorld");
@@ -92,7 +94,7 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("preserves tab, newline, and carriage return in note", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "Line1\nLine2\tTabbed\rReturn",
     });
     expect(result.note).toBe("Line1\nLine2\tTabbed\rReturn");
@@ -100,7 +102,7 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("normalizes unicode in note to NFC", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "Cafe\u0301",
     });
     expect(result.note).toBe("Café");
@@ -108,7 +110,7 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("trims whitespace from note", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "  Hello World  ",
     });
     expect(result.note).toBe("Hello World");
@@ -116,27 +118,27 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("rejects empty note after sanitization", () => {
     expect(() =>
-      parseCreateBookingIntentBody({ slotId: "abc-123", note: "   " }),
+      parseCreateBookingIntentBody({ slotId: VALID_SLOT_ID, note: "   " }),
     ).toThrow(BookingIntentError);
     expect(() =>
-      parseCreateBookingIntentBody({ slotId: "abc-123", note: "\x00\x01\x02" }),
+      parseCreateBookingIntentBody({ slotId: VALID_SLOT_ID, note: "\x00\x01\x02" }),
     ).toThrow(BookingIntentError);
     expect(() =>
-      parseCreateBookingIntentBody({ slotId: "abc-123", note: "\t\n\r" }),
+      parseCreateBookingIntentBody({ slotId: VALID_SLOT_ID, note: "\t\n\r" }),
     ).toThrow(BookingIntentError);
   });
 
   it("rejects note exceeding 500 characters after sanitization", () => {
     const longNote = "A".repeat(501);
     expect(() =>
-      parseCreateBookingIntentBody({ slotId: "abc-123", note: longNote }),
+      parseCreateBookingIntentBody({ slotId: VALID_SLOT_ID, note: longNote }),
     ).toThrow(BookingIntentError);
   });
 
   it("accepts note exactly 500 characters after sanitization", () => {
     const longNote = "A".repeat(500);
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: longNote,
     });
     expect(result.note).toBe(longNote);
@@ -144,7 +146,7 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("handles note with embedded newlines", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "Line1\nLine2\nLine3",
     });
     expect(result.note).toBe("Line1\nLine2\nLine3");
@@ -152,7 +154,7 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("handles note with null bytes", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "Hello\x00World",
     });
     expect(result.note).toBe("HelloWorld");
@@ -160,7 +162,7 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("handles note with mixed control characters", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "Hello\x00World\x01Test\x02End",
     });
     expect(result.note).toBe("HelloWorldTestEnd");
@@ -168,7 +170,7 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("handles note with unicode characters", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "Hello 世界 Café",
     });
     expect(result.note).toBe("Hello 世界 Café");
@@ -176,7 +178,7 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("handles note with zero-width characters", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "Hello\u200BWorld",
     });
     expect(result.note).toBe("Hello\u200BWorld");
@@ -184,13 +186,13 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("rejects note that becomes empty after stripping control characters", () => {
     expect(() =>
-      parseCreateBookingIntentBody({ slotId: "abc-123", note: "\x00\x01\x02" }),
+      parseCreateBookingIntentBody({ slotId: VALID_SLOT_ID, note: "\x00\x01\x02" }),
     ).toThrow(BookingIntentError);
   });
 
   it("handles note with combining marks and checks length after normalization", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123",
+      slotId: VALID_SLOT_ID,
       note: "e\u0301",
     });
     expect(result.note).toBe("é");
@@ -199,10 +201,10 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("validates slotId format with alphanumeric and hyphens", () => {
     const result = parseCreateBookingIntentBody({
-      slotId: "abc-123-XYZ",
+      slotId: VALID_SLOT_ID,
       note: "Test",
     });
-    expect(result.slotId).toBe("abc-123-XYZ");
+    expect(result.slotId).toBe(VALID_SLOT_ID);
   });
 
   it("rejects slotId with special characters", () => {

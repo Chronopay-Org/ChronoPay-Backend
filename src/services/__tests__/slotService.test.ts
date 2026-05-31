@@ -3,7 +3,6 @@ import {
   SlotService,
   SlotValidationError,
   SlotNotFoundError,
-  // @ts-expect-error - Auto-fixed by script
   SlotConflictError,
   SlotInput,
 } from "../slotService.js";
