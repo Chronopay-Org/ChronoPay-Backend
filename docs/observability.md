@@ -18,6 +18,11 @@ ChronoPay uses `X-Request-Id` for end-to-end request correlation.
 - Standard error envelopes include `error.requestId` for troubleshooting.
 - This allows API consumers to provide a single identifier when reporting incidents.
 
+## Service Level Objectives (SLOs)
+
+### Booking Intents
+- **Availability & Latency:** 99.9% of booking-intent creates (`POST /api/v1/booking-intents`) complete in under 500ms over a rolling 30-day window.
+
 ### Security notes
 
 - Correlation IDs are not derived from secrets or sensitive payload fields.
