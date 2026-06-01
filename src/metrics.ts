@@ -6,8 +6,17 @@ import { Request, Response, NextFunction } from "express";
  */
 export const register = new Registry();
 
-// Add default metrics (CPU, Memory, etc.)
-collectDefaultMetrics({ register });
+// Add default metrics (CPU, Memory, etc.) only outside tests.
+// Jest can execute through node and may not set NODE_ENV=test in this repository,
+// so also detect the Jest runner via process argv.
+const isTestEnvironment =
+  process.env.NODE_ENV === "test" ||
+  typeof process.env.JEST_WORKER_ID !== "undefined" ||
+  process.argv.some((arg) => typeof arg === "string" && arg.includes("jest"));
+
+if (!isTestEnvironment) {
+  collectDefaultMetrics({ register });
+}
 
 const OVERFLOW_LABEL_VALUE = "__overflow__";
 
