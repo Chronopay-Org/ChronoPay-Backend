@@ -91,7 +91,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Install oasdiff
-        run: npm i -D @redocly/openapi-diff
+        run: npm i -D openapi-diff@0.24.1
       - name: Generate spec for base (main)
         run: |
           git fetch origin main
@@ -105,7 +105,7 @@ jobs:
         id: diff
         run: |
           set -e
-          if npx @redocly/openapi-diff break base-openapi.json head-openapi.json > diff.txt; then
+          if npx openapi-diff break base-openapi.json head-openapi.json > diff.txt; then
             echo "breaking=no" >> $GITHUB_OUTPUT
           else
             echo "breaking=yes" >> $GITHUB_OUTPUT
