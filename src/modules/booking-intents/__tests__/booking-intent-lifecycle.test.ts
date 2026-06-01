@@ -16,12 +16,10 @@ const ALICE_SLOT = "slot-11111111-1111-4111-8111-111111111111";
 const BOB_SLOT = "slot-22222222-2222-4222-8222-222222222222";
 
 function createFixture() {
-  const ___slotRepo = new InMemorySlotRepository();
-  const ___intentRepo = new InMemoryBookingIntentRepository();
-  // @ts-expect-error - Auto-fixed by script
+  const _slotRepo = new InMemorySlotRepository();
+  const _intentRepo = new InMemoryBookingIntentRepository();
   const service = new BookingIntentService(_intentRepo, _slotRepo);
-  // @ts-expect-error - Auto-fixed by script
-  return { _slotRepo, _intentRepo, service };
+  return { slotRepo: _slotRepo, intentRepo: _intentRepo, service };
 }
 
 const customer: AuthContext = { userId: "cust-1", role: "customer", claims: dummyClaims };
@@ -39,7 +37,7 @@ describe("BookingIntentService lifecycle", () => {
   }
 
   beforeEach(() => {
-    ({ _slotRepo, _intentRepo, service } = createFixture());
+    ({ slotRepo, intentRepo, service } = createFixture());
   });
 
   describe("confirmIntent", () => {
