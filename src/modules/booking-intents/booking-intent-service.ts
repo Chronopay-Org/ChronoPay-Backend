@@ -9,10 +9,18 @@ import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
+import { resolvePrice, type StrategyId } from "../../services/pricingStrategy.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
   note?: string;
+  /**
+   * Optional pricing strategy to apply. When provided, the resolved price and
+   * all inputs are snapshotted onto the created intent for auditability.
+   */
+  pricingStrategyId?: StrategyId;
+  /** Base price in the smallest currency unit. Required when pricingStrategyId is set. */
+  basePrice?: number;
 }
 
 export class BookingIntentError extends AppError {
@@ -75,6 +83,29 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
 
+    // ── Pricing snapshot ──────────────────────────────────────────────────────
+    let pricingStrategyId: StrategyId | undefined;
+    let resolvedPrice: number | undefined;
+    let pricingSnapshot: BookingIntentRecord["pricingSnapshot"] | undefined;
+
+    if (input.pricingStrategyId) {
+      const strategyId = input.pricingStrategyId;
+      const basePrice = input.basePrice ?? 0;
+      const activeIntentCount = this.bookingIntentRepository.listAll().filter(
+        (i) => i.status === "pending",
+      ).length;
+      const pricingInput = {
+        basePrice,
+        slotStartTime: slot.startTime,
+        nowMs: Date.now(),
+        activeIntentCount,
+      };
+      const result = resolvePrice(strategyId, pricingInput);
+      pricingStrategyId = result.strategyId;
+      resolvedPrice = result.resolvedPrice;
+      pricingSnapshot = result.snapshot;
+    }
+
     const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
       professional: slot.professional,
@@ -84,6 +115,11 @@ export class BookingIntentService {
       status: "pending",
       note: input.note,
       createdAt: this.now(),
+      ...(pricingStrategyId !== undefined && {
+        pricingStrategyId,
+        resolvedPrice,
+        pricingSnapshot,
+      }),
     });
 
     this.schedulingService.reserveSlot(input.slotId);
