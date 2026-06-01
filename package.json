@@ -33,7 +33,6 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
-    "@redocly/openapi-diff": "^1.0.0",
     "@eslint/js": "^10.0.1",
     "@jest/globals": "^30.3.0",
     "@types/cors": "^2.8.17",
