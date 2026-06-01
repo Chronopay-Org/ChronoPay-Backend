@@ -1,0 +1,9 @@
+{
+  "roles": {
+    "admin": ["support", "professional", "customer"],
+    "support": ["auditor"],
+    "auditor": [],
+    "professional": [],
+    "customer": []
+  }
+}

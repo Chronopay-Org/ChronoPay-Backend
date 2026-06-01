@@ -16,10 +16,10 @@ const ALICE_SLOT = "slot-11111111-1111-4111-8111-111111111111";
 const BOB_SLOT = "slot-22222222-2222-4222-8222-222222222222";
 
 function createFixture() {
-  const _slotRepo = new InMemorySlotRepository();
-  const _intentRepo = new InMemoryBookingIntentRepository();
-  const service = new BookingIntentService(_intentRepo, _slotRepo);
-  return { slotRepo: _slotRepo, intentRepo: _intentRepo, service };
+  const slotRepo = new InMemorySlotRepository();
+  const intentRepo = new InMemoryBookingIntentRepository();
+  const service = new BookingIntentService(intentRepo, slotRepo);
+  return { slotRepo, intentRepo, service };
 }
 
 const customer: AuthContext = { userId: "cust-1", role: "customer", claims: dummyClaims };

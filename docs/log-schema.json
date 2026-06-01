@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/log-schema.json",
+  "title": "LogEntry",
+  "type": "object",
+  "properties": {
+    "level": {
+      "type": "string",
+      "enum": ["fatal","error","warn","info","debug","trace"]
+    },
+    "msg": {"type":"string"},
+    "requestId": {"type":"string"},
+    "route": {"type":"string"},
+    "latencyMs": {"type":"number"},
+    "errCode": {"type":"string"}
+  },
+  "required": ["level","msg","requestId","route","latencyMs"],
+  "if": {"properties":{"level":{"const":"error"}}},
+  "then": {"required":["errCode"]},
+  "additionalProperties": false
+}
