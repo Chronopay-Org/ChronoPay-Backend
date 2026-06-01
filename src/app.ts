@@ -15,6 +15,8 @@ import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/f
 import { register, metricsMiddleware } from "./metrics.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
+import { createCORSMiddleware } from "./middleware/cors.js";
+import { getCORSConfig } from "./config/cors.js";
 import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";

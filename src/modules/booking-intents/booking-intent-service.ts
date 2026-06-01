@@ -3,12 +3,14 @@ import type { SlotRepository } from "../slots/slot-repository.js";
 import type {
   BookingIntentRecord,
   BookingIntentRepository,
+  PricingSnapshot,
 } from "./booking-intent-repository.js";
 import { SchedulingService } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
+import { resolvePrice } from "../../services/pricingStrategy.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -42,6 +44,7 @@ export class BookingIntentService {
     private readonly bookingIntentRepository: BookingIntentRepository,
     private readonly slotRepository: SlotRepository,
     private readonly now: () => string = () => new Date().toISOString(),
+    private readonly nowMs: () => number = () => Date.now(),
   ) {}
 
   private get schedulingService(): SchedulingService {
@@ -75,6 +78,38 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
 
+    // ── Resolve pricing snapshot (if the slot has a strategy configured) ──────
+    let pricingSnapshot: PricingSnapshot | undefined;
+    if (slot.pricingStrategy) {
+      const ps = slot.pricingStrategy;
+      const activeBookings = this.bookingIntentRepository
+        .listAll()
+        .filter((i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"))
+        .length;
+      const capacity = ps.capacity ?? 1;
+      const currentMs = this.nowMs();
+
+      const result = resolvePrice(ps.strategyId, {
+        basePrice: ps.basePrice,
+        slotStartMs: slot.startTime,
+        nowMs: currentMs,
+        activeBookings,
+        capacity,
+        config: ps.config,
+      });
+
+      pricingSnapshot = {
+        strategyId: result.strategyId,
+        resolvedPrice: result.price,
+        basePrice: ps.basePrice,
+        slotStartMs: slot.startTime,
+        nowMs: currentMs,
+        activeBookings,
+        capacity,
+        config: ps.config,
+      };
+    }
+
     const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
       professional: slot.professional,
@@ -84,6 +119,7 @@ export class BookingIntentService {
       status: "pending",
       note: input.note,
       createdAt: this.now(),
+      pricingSnapshot,
     });
 
     this.schedulingService.reserveSlot(input.slotId);
