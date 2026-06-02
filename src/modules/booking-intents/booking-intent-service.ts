@@ -15,6 +15,13 @@ import { resolvePrice } from "../../services/pricingStrategy.js";
 export interface CreateBookingIntentInput {
   slotId: string;
   note?: string;
+  /**
+   * Optional pricing strategy to apply. When provided, the resolved price and
+   * all inputs are snapshotted onto the created intent for auditability.
+   */
+  pricingStrategyId?: StrategyId;
+  /** Base price in the smallest currency unit. Required when pricingStrategyId is set. */
+  basePrice?: number;
 }
 
 export interface CreateRecurringBookingInput {
