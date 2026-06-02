@@ -19,6 +19,7 @@ async function seedSlot(
 ): Promise<number> {
   const res = await request(app)
     .post("/api/v1/slots")
+    .set("x-api-key", "test-api-key")
     .send({ professional, startTime, endTime });
   return res.body.slot.id as number;
 }

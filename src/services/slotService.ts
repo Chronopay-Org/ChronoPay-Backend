@@ -192,6 +192,19 @@ export class SlotService {
     if (!slot) throw new SlotNotFoundError(id);
     return { ...slot };
   }
+
+  async deleteSlot(id: number | string): Promise<number | string> {
+    const index = this._slots.findIndex(s => String(s.id) === String(id));
+    if (index === -1) throw new SlotNotFoundError(id);
+
+    const [removed] = this._slots.splice(index, 1);
+
+    if (this.cache) {
+      this.cache.invalidate("slots:list:all");
+    }
+
+    return removed.id;
+  }
 }
 
 export const slotService = new SlotService();
