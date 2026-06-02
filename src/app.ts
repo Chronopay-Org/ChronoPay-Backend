@@ -16,6 +16,8 @@ import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
+import { createCORSMiddleware } from "./middleware/cors.js";
+import { getCORSConfig } from "./config/cors.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { getCORSConfig } from "./config/cors.js";

@@ -12,6 +12,17 @@ export interface BookingIntentRecord {
   tokenAsset?: string;
   mintTxHash?: string;
   createdAt: string;
+  /** Pricing snapshot — present when a pricing strategy was applied at intent creation. */
+  pricingStrategyId?: string;
+  /** The resolved price at the time the intent was created. */
+  resolvedPrice?: number;
+  /** Raw inputs used to compute the price (snapshotted for auditability). */
+  pricingSnapshot?: {
+    basePrice: number;
+    slotStartTime: number;
+    nowMs: number;
+    activeIntentCount: number;
+  };
 }
 
 
