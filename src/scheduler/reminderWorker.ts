@@ -17,11 +17,16 @@ async function defaultDeliverReminder(reminder: Reminder): Promise<void> {
   console.log(`[reminder] delivering id=${reminder.id} slotId=${reminder.slotId}`);
 }
 
-export async function processReminders(options: ProcessRemindersOptions = {}) {
+// Existing imports and code remain unchanged above
+
+/* New overload for processReminders to accept pre‑filtered reminders */
+export async function processReminders(
+  options: ProcessRemindersOptions & { reminders?: Reminder[] } = {}
+) {
   const repository = options.repository ?? getReminderRepository();
   const now = options.now ?? Date.now();
   const maxRetries = options.maxRetries ?? MAX_RETRIES;
-  const dueReminders = await repository.getDueReminders(now);
+  const dueReminders = options.reminders ?? (await repository.getDueReminders(now));
 
   for (const reminder of dueReminders) {
     // ── Deduplication check ──────────────────────────────────────────────────
@@ -59,3 +64,43 @@ export async function processReminders(options: ProcessRemindersOptions = {}) {
     }
   }
 }
+
+/* Autoscaling worker loop */
+import { ReminderAutoscaler } from "./reminderAutoscaler.js";
+import { defaultAutoscaleConfig } from "./reminderConfig.js";
+
+export async function runReminderWorker(
+  autoscalerConfig?: Partial<ReminderAutoscaleConfig>
+) {
+  const autoscaler = new ReminderAutoscaler(autoscalerConfig);
+  const repository = getReminderRepository();
+
+  while (true) {
+    const now = Date.now();
+    const due = await repository.getDueReminders(now);
+    const backlog = due.length;
+
+    const concurrency = autoscaler.update(backlog);
+    reminderMetrics.setConcurrency(concurrency);
+
+    // Partition due reminders according to concurrency
+    const chunkSize = Math.max(1, Math.ceil(due.length / concurrency));
+    const chunks: Reminder[][] = [];
+    for (let i = 0; i < due.length; i += chunkSize) {
+      chunks.push(due.slice(i, i + chunkSize));
+    }
+
+    // Process chunks in parallel
+    await Promise.all(
+      chunks.map(chunk =>
+        processReminders({ repository, now, reminders: chunk })
+      )
+    );
+
+    // Back‑off when idle to avoid tight loop
+    if (backlog === 0) {
+      await new Promise(res => setTimeout(res, 500));
+    }
+  }
+}
+

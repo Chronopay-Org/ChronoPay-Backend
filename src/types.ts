@@ -3,6 +3,9 @@ export interface Slot {
   professional: string;
   startTime: number | string;
   endTime: number | string;
+  category?: string;
+  price_cents?: number;
+  supplier_rating?: number;
   // Internal-only field should never be exposed
   _internalNote?: string;
 }
