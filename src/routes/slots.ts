@@ -1,8 +1,10 @@
 import { Router, Request, Response } from "express";
 import { slotService } from "../services/slotService.js";
 import { requireApiKey } from "../middleware/apiKeyAuth.js";
-import { validateRequiredFields } from "../middleware/validation.js";
+import { validateBody } from "../middleware/validation.js";
 import { requireFeatureFlag } from "../middleware/featureFlags.js";
+import { CreateSlotBodySchema } from "../middleware/schemas.js";
+
 
 const router = Router();
 
@@ -53,7 +55,7 @@ router.post(
   "/",
   requireApiKey("test-api-key"), // Use a fixed key for now or pass it from app.ts
   requireFeatureFlag("CREATE_SLOT"),
-  validateRequiredFields(["professional", "startTime", "endTime"]),
+  validateBody(CreateSlotBodySchema),
   async (req: Request, res: Response) => {
     try {
       const slot = slotService.createSlot(req.body);
