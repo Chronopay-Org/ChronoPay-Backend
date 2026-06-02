@@ -140,6 +140,19 @@ export function createBudgetedHistogram(options: BudgetedHistogramOptions): Budg
   return histogram;
 }
 
+export function createBudgetedGauge(options: BudgetedHistogramOptions): BudgetedLabelMetric<Gauge> {
+  registerCardinalityBudget(options);
+  const gauge = new Gauge({
+    name: options.name,
+    help: options.help,
+    labelNames: options.budget === 0 ? [] : options.labels,
+    registers: options.registers ?? [register],
+  }) as BudgetedLabelMetric<Gauge>;
+
+  gauge.labels = budgetedLabels(options.name, gauge);
+  return gauge;
+}
+
 export function _resetMetricCardinalityState(): void {
   for (const state of metricLabelBudgets.values()) {
     state.seen.clear();
@@ -207,7 +220,13 @@ export const slotCacheStampedeBlocked = createBudgetedCounter({
   budget: 0,
   registers: [register],
 });
-
+export const settlementsPendingFinality = createBudgetedGauge({
+  name: "settlements_pending_finality",
+  help: "Current number of settlements that are pending finality and awaiting reconcilation.",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
 /** Convenience helpers used by slotCache.ts */
 export function recordCacheHit(): void {
   slotCacheHits.inc();
