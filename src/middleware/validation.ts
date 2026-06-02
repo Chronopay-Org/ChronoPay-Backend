@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { ZodSchema, ZodError } from "zod";
 import {
   BadRequestError,
   InternalServerError,
@@ -126,6 +127,57 @@ export function validateRequiredFields(
         new InternalServerError("Validation middleware error"),
         req,
       );
+    }
+  };
+}
+
+/**
+ * Zod-based body validation middleware.
+ *
+ * Parses and validates `req.body` against the provided Zod schema using
+ * `schema.strip()` semantics (unknown fields are stripped, not rejected).
+ * On success, `req.body` is replaced with the parsed (stripped) output.
+ * On failure, returns a uniform 400 error envelope.
+ *
+ * Error envelope shape:
+ *   { success: false, code: "VALIDATION_ERROR", error: string, details: ValidationDetail[] }
+ *
+ * Security notes:
+ * - Unknown fields are stripped, never silently forwarded.
+ * - Raw field values are never included in error messages.
+ * - Field paths come from the Zod schema, not from user input.
+ *
+ * @param schema  A Zod schema. Must be a ZodObject or ZodEffects wrapping one.
+ */
+export function validateBody<T>(schema: ZodSchema<T>) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      const result = schema.safeParse(req.body);
+
+      if (!result.success) {
+        const details: ValidationDetail[] = result.error.errors.map((issue) => ({
+          path: issue.path.join(".") || "body",
+          rule: issue.code,
+          message: issue.message,
+        }));
+        buildValidationError(res, details);
+        return;
+      }
+
+      // Replace body with the parsed (stripped) output
+      req.body = result.data;
+      next();
+    } catch (err) {
+      if (err instanceof ZodError) {
+        const details: ValidationDetail[] = err.errors.map((issue) => ({
+          path: issue.path.join(".") || "body",
+          rule: issue.code,
+          message: issue.message,
+        }));
+        buildValidationError(res, details);
+        return;
+      }
+      sendErrorResponse(res, new InternalServerError("Validation middleware error"), req);
     }
   };
 }
