@@ -15,10 +15,11 @@ import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
+import { validateBody } from "../middleware/validation.js";
+import { CreateBookingIntentBodySchema } from "../middleware/schemas.js";
 import {
   BookingIntentService,
   BookingIntentError,
-  parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
@@ -56,35 +57,10 @@ export function createBookingIntentsRouter() {
     idempotencyMiddleware,
     createAuthAwareRateLimiter(),
     auditMiddleware("CREATE_BOOKING_INTENT"),
+    validateBody(CreateBookingIntentBodySchema),
     (req: Request, res: Response): void => {
       try {
-        const input = parseCreateBookingIntentBody(req.body);
-        // Evaluate fraud risk
-        const { FraudScorer } = require('../services/fraudScorer.js');
-        const fraudScorer = new FraudScorer();
-        const fraudResult = fraudScorer.evaluate(input.id ?? 'temp-intent-id', req);
-        const threshold = fraudScorer.getThreshold();
-        if (fraudResult.score >= threshold) {
-          if (fraudScorer.getStepUpMode() === 'challenge') {
-            // Return challenge token response
-            const challengeToken = require('crypto').randomUUID();
-            return res.status(202).json({
-              success: false,
-              challengeRequired: true,
-              challengeToken,
-            });
-          } else {
-            // Quarantine path
-            const { QuarantineStore } = require('../services/quarantineStore.js');
-            const store = new QuarantineStore();
-            const quarantineId = store.add({ input, actorId: (req as any).auth?.userId, fraudResult });
-            return res.status(202).json({
-              success: true,
-              quarantineId,
-            });
-          }
-        }
-        const intent = bookingIntentService.createIntent(input, req.auth!);
+        const intent = bookingIntentService.createIntent(req.body, req.auth!);
         res.status(201).json({
           success: true,
           intent,
