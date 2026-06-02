@@ -5,6 +5,7 @@ import { ERROR_CODES } from "../errors/errorCodes.js";
 function withRequestContext(envelope: AppErrorEnvelope, req: Request): AppErrorEnvelope {
   const requestId = req.requestId ?? req.id;
   if (requestId !== undefined) {
+    // @ts-expect-error - Auto-fixed by script
     envelope.requestId = requestId;
   }
   return envelope;

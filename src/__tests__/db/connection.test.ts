@@ -42,11 +42,11 @@ beforeEach(async () => {
   delete process.env.DATABASE_URL;
 
   // Build fresh mock pool methods
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   mockConnectFn = jest.fn<any>().mockResolvedValue(mockClient);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   mockEndFn = jest.fn<any>().mockResolvedValue(undefined);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   mockOnFn = jest.fn<any>();
 
   mockPoolInstance = {

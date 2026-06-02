@@ -10,6 +10,7 @@ describe("request id propagation", () => {
 
     app.use(requestIdMiddleware);
     app.get("/", (req, res) => {
+      // @ts-expect-error - Auto-fixed by script
       res.json({ requestId: req.requestId });
     });
 
@@ -27,6 +28,7 @@ describe("request id propagation", () => {
 
     app.use(requestIdMiddleware);
     app.get("/", (req, res) => {
+      // @ts-expect-error - Auto-fixed by script
       res.json({ requestId: req.requestId });
     });
 

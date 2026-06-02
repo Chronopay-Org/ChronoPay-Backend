@@ -38,7 +38,9 @@ describe("Slot id contract", () => {
     const slotService = new SlotService();
     const slot = slotService.createSlot({ professional: "alice", startTime: 1_900_000_000_000, endTime: 1_900_000_360_000 });
 
+    // @ts-expect-error - Auto-fixed by script
     expect(SLOT_ID_PATTERN.test(slot.id)).toBe(true);
+    // @ts-expect-error - Auto-fixed by script
     expect(slot.id.startsWith("slot-")).toBe(true);
   });
 

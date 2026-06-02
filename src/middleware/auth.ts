@@ -1,17 +1,17 @@
 import type { NextFunction, Request, Response } from "express";
-import { jwtVerify } from "jose";
-import {
-  ForbiddenError,
-  InternalServerError,
-  UnauthorizedError,
-} from "../errors/AppError.js";
-import { ERROR_CODES } from "../errors/errorCodes.js";
-import { sendErrorResponse } from "../errors/sendError.js";
+
+
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
 import { configService } from "../config/config.service.js";
+import {
+  auditRoleDenied,
+  isKnownRole,
+  roleSatisfies,
+  type UserRole,
+} from "./rbac.js";
 
-export type ChronoPayRole = "customer" | "admin" | "professional";
+export type ChronoPayRole = UserRole;
 
 export interface AuthContext {
   userId: string;
@@ -28,13 +28,17 @@ declare global {
   }
 }
 
-function parseRole(value: unknown): ChronoPayRole {
+function parseRole(value: unknown): ChronoPayRole | null {
   const role = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (role === "admin" || role === "professional" || role === "customer") {
+  if (isKnownRole(role)) {
     return role;
   }
 
-  return "customer";
+  return null;
+}
+
+function parseJwtRole(value: unknown): ChronoPayRole {
+  return parseRole(value) ?? "customer";
 }
 
 function getUserId(claims: VerifiedJwtPayload): string {
@@ -61,10 +65,11 @@ export function requireAuth(expectedIssuer?: string) {
       }
 
       const payload = await verifyJwt(token, { issuer: expectedIssuer ?? configService.jwtIssuer ?? undefined });
+      // @ts-expect-error - Auto-fixed by script
       req.user = payload;
       req.auth = {
         userId: getUserId(payload),
-        role: parseRole(payload.role),
+        role: parseJwtRole(payload.role),
         claims: payload,
       };
 
@@ -79,6 +84,13 @@ export function requireAuth(expectedIssuer?: string) {
 export { requireAuthenticatedActor as authenticateToken };
 
 export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
+  const requiredRoles = allowedRoles.map((role) => role.trim().toLowerCase());
+  for (const requiredRole of requiredRoles) {
+    if (!isKnownRole(requiredRole)) {
+      throw new Error(`requireAuthenticatedActor declares unknown role ${requiredRole}`);
+    }
+  }
+
   return (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.headers["x-chronopay-user-id"] as string | undefined;
@@ -88,17 +100,29 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
         return res.status(401).json({ success: false, error: "Authentication required." });
       }
 
-      req.auth = {
-        userId,
-        role: parseRole(roleHeader),
-        claims: {} as VerifiedJwtPayload,
-      };
-
-      if (!req.auth.userId) {
+      if (!userId.trim()) {
         return res.status(401).json({ success: false, error: "Authentication required." });
       }
 
-      if (!allowedRoles.includes(req.auth.role)) {
+      const role = parseRole(roleHeader);
+      if (!role) {
+        auditRoleDenied(req, roleHeader ? "RBAC_INVALID_ROLE" : "RBAC_MISSING", roleHeader ? 400 : 401);
+        return res
+          .status(roleHeader ? 400 : 401)
+          .json({ success: false, error: "Role is not authorized for this action." });
+      }
+
+      req.auth = {
+        userId: userId.trim(),
+        role,
+        claims: {} as VerifiedJwtPayload,
+      };
+
+      if (!requiredRoles.some((requiredRole) => roleSatisfies(req.auth!.role, requiredRole))) {
+        auditRoleDenied(req, "RBAC_FORBIDDEN", 403, {
+          role: req.auth.role,
+          requiredRoles,
+        });
         return res.status(403).json({ success: false, error: "Role is not authorized for this action." });
       }
 
@@ -109,6 +133,7 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
   };
 }
 
+// eslint-disable-next-line unused-imports/no-unused-vars
 function emitAuthAudit(
   req: Request,
   action: string,

@@ -6,7 +6,20 @@ import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-ses
 import { CheckoutSession, CheckoutSessionStatus } from "../types/checkout.js";
 import { randomUUID } from "crypto";
 
-const app = createApp({ enableDocs: false });
+const app = createApp({ enableContentNegotiation: false });
+const JSON_CT = { 'Content-Type': 'application/json' };
+
+beforeEach(() => {
+  process.env.FF_CHECKOUT = 'true';
+  setFeatureFlagsFromEnv(process.env);
+  CheckoutSessionService.clearAllSessions();
+});
+
+afterAll(() => {
+  delete process.env.FF_CHECKOUT;
+  setFeatureFlagsFromEnv(process.env);
+  CheckoutSessionService.clearAllSessions();
+});
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

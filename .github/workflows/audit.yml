@@ -1,0 +1,39 @@
+name: Dependency audit (npm)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch: {}
+
+jobs:
+  npm-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Check PR labels for suppression
+        id: check_labels
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const labels = context.payload.pull_request ? context.payload.pull_request.labels.map(l=>l.name) : [];
+            core.setOutput('suppress', labels.includes('audit/suppress') ? 'true' : 'false');
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit (fail on high+)
+        if: steps.check_labels.outputs.suppress != 'true'
+        run: npm audit --audit-level=high
+
+      - name: Audit suppressed
+        if: steps.check_labels.outputs.suppress == 'true'
+        run: echo "Audit suppressed by label 'audit/suppress'"
