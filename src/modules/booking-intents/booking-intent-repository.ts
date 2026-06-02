@@ -1,4 +1,30 @@
+import type { StrategyId, StrategyConfig } from "../../services/pricingStrategy.js";
+
 export type BookingIntentStatus = "pending" | "confirmed" | "cancelled" | "expired";
+
+/**
+ * Immutable snapshot of the pricing inputs and result captured at intent
+ * creation time.  Stored for auditability — the resolved price never changes
+ * even if the slot's strategy is later updated.
+ */
+export interface PricingSnapshot {
+  /** Strategy that produced the price. */
+  strategyId: StrategyId;
+  /** Resolved price at the moment the intent was created. */
+  resolvedPrice: number;
+  /** Base price used as input. */
+  basePrice: number;
+  /** Slot start time (ms) used as input. */
+  slotStartMs: number;
+  /** "now" timestamp (ms) used as input. */
+  nowMs: number;
+  /** Active bookings count used as input. */
+  activeBookings: number;
+  /** Capacity used as input. */
+  capacity: number;
+  /** Strategy-specific config used as input. */
+  config: StrategyConfig;
+}
 
 export interface BookingIntentRecord {
   id: string;
@@ -12,6 +38,8 @@ export interface BookingIntentRecord {
   tokenAsset?: string;
   mintTxHash?: string;
   createdAt: string;
+  /** Present when the slot had a pricing strategy configured at intent creation. */
+  pricingSnapshot?: PricingSnapshot;
 }
 
 

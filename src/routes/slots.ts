@@ -76,7 +76,7 @@ router.post(
   "/",
   requireApiKey("test-api-key"),
   requireFeatureFlag("CREATE_SLOT"),
-  validateRequiredFields(["professional", "startTime", "endTime"]),
+  validateBody(CreateSlotBodySchema),
   async (req: Request, res: Response) => {
     try {
       const slot = slotService.createSlot(req.body);

@@ -58,12 +58,15 @@ const sanitizeForLogging = (obj: Record<string, unknown>): Record<string, unknow
   const maskValue = (value: string): string =>
     value.length > 4 ? `${value.substring(0, 2)}***${value.substring(value.length - 2)}` : "***";
 
+  const seen = new WeakSet();
   const sanitize = (input: unknown): unknown => {
     if (Array.isArray(input)) {
       return input.map(sanitize);
     }
 
     if (input && typeof input === "object") {
+      if (seen.has(input as object)) return "[Circular]";
+      seen.add(input as object);
       const result: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
         if (value === undefined) {

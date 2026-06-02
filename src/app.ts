@@ -2,6 +2,8 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
+import { getCORSConfig } from "./config/cors.js";
+import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import {
   genericErrorHandler,
@@ -14,14 +16,37 @@ import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
+import { createCORSMiddleware } from "./middleware/cors.js";
+import { getCORSConfig } from "./config/cors.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
+import { createCORSMiddleware } from "./middleware/cors.js";
+import { getCORSConfig } from "./config/cors.js";
 import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
 
+// Simple cookie parser middleware
+function parseCookies(req: Request, _res: Response, next: any): void {
+  const cookieHeader = req.headers.cookie;
+  req.cookies = {};
+
+  if (cookieHeader) {
+    cookieHeader.split(";").forEach((cookie) => {
+      const [key, val] = cookie.split("=");
+      if (key && val) {
+        req.cookies[key.trim()] = decodeURIComponent(val.trim());
+      }
+    });
+  }
+
+  next();
+}
+
 // Import routers
 import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
+import oauth2Router from "./routes/oauth2.js";
+import adminRouter from "./routes/admin.js";
 
 // Import modules
 import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
@@ -215,7 +240,6 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(tracingMiddleware);
   app.use(metricsMiddleware);
   app.use(featureFlagContextMiddleware);
-  // @ts-expect-error - Auto-fixed by script
   app.use(createCORSMiddleware(getCORSConfig()));
 
   // Content negotiation BEFORE express.json() to reject invalid Content-Type early
@@ -228,6 +252,8 @@ export function createApp(options: AppFactoryOptions = {}) {
   }
 
   app.use(express.json({ limit: "100kb" }));
+  app.use(express.urlencoded({ extended: true, limit: "100kb" }));
+  app.use(parseCookies);
   app.use(metricsMiddleware);
   app.use(createRequestLogger());
 
@@ -364,6 +390,12 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3. Buyer Profile Routes
   app.use("/api/v1/buyer-profiles", buyerProfileRouter);
+
+  // 3a. OAuth2 Routes
+  app.use("/api/v1/auth/oauth", oauth2Router);
+
+  // 3b. Admin Routes
+  app.use("/api/v1/admin", adminRouter);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();

@@ -129,6 +129,10 @@ export class AuditLogger {
       console.error("Failed to write to audit log:", error);
     }
   }
+
+  public getLogFilePath(): string {
+    return this.logFilePath;
+  }
 }
 
 // Export a default singleton instance for use across the application

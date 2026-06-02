@@ -81,3 +81,4 @@ export const query = async (text: string, params?: unknown[]): Promise<QueryResu
 
 export default pool;
 
+export { pool };
