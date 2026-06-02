@@ -1,94 +1,202 @@
 /**
  * Dynamic Pricing Strategy Resolver
  *
- * Provides a PricingStrategy interface and three built-in strategies:
- *   - fixed:        always returns the base price unchanged
- *   - time_decay:   price decreases linearly as the slot start time approaches
- *   - demand_based: price increases with the number of active booking intents
+ * Strategies are pure functions of their inputs — given the same inputs they
+ * always return the same price (deterministic / snapshot-safe).
  *
- * All strategies are pure functions of their inputs, making resolution
- * deterministic for a given snapshot.
+ * Supported strategies:
+ *   fixed        – always returns the configured base price
+ *   time_decay   – price decreases linearly as the slot start time approaches
+ *   demand_based – price scales with the ratio of active bookings to capacity
  */
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Core types ───────────────────────────────────────────────────────────────
 
+/** Identifier for a registered pricing strategy. */
 export type StrategyId = "fixed" | "time_decay" | "demand_based";
 
-/** Inputs required to resolve a price. All values are snapshotted at call time. */
+/** Inputs that every strategy receives. */
 export interface PricingInput {
   /** Base price in the smallest currency unit (e.g. stroops or cents). Must be ≥ 0. */
   basePrice: number;
   /** Unix epoch milliseconds when the slot starts. */
-  slotStartTime: number;
+  slotStartMs: number;
   /** Unix epoch milliseconds at the moment of resolution (i.e. "now"). */
   nowMs: number;
+  /** Number of active (pending/confirmed) booking intents for this slot. */
+  activeBookings: number;
+  /** Maximum bookings the slot can hold (capacity). Must be ≥ 1. */
+  capacity: number;
+  /** Strategy-specific configuration (validated per strategy). */
+  config: StrategyConfig;
+}
+
+/** Union of all per-strategy configuration shapes. */
+export type StrategyConfig = FixedConfig | TimeDecayConfig | DemandBasedConfig;
+
+export interface FixedConfig {
+  strategy: "fixed";
+}
+
+export interface TimeDecayConfig {
+  strategy: "time_decay";
   /**
-   * Number of active (pending) booking intents for this slot or professional.
-   * Used by demand_based strategy.
+   * Window in milliseconds before slot start during which decay applies.
+   * Outside this window the full base price is charged.
+   * Must be > 0.
    */
-  activeIntentCount: number;
+  windowMs: number;
+  /**
+   * Minimum multiplier (0–1) applied at the moment the slot starts.
+   * e.g. 0.5 means the price halves at start time.
+   */
+  minMultiplier: number;
 }
 
-/** The resolved price result, always including the strategy identifier for auditability. */
+export interface DemandBasedConfig {
+  strategy: "demand_based";
+  /**
+   * Maximum multiplier applied when the slot is fully booked.
+   * Must be ≥ 1.
+   */
+  maxMultiplier: number;
+}
+
+/** Result returned by every strategy. */
 export interface PricingResult {
-  /** The resolved price in the same unit as basePrice. Always ≥ 0. */
-  resolvedPrice: number;
-  /** The strategy that produced this price. */
+  /** Resolved price (rounded to nearest integer, ≥ 0). */
+  price: number;
+  /** Strategy that produced this result — included for auditability. */
   strategyId: StrategyId;
-  /** A copy of the inputs used, for snapshot / audit purposes. */
-  snapshot: PricingInput;
+  /** Snapshot of the inputs used to compute the price. */
+  snapshot: {
+    basePrice: number;
+    slotStartMs: number;
+    nowMs: number;
+    activeBookings: number;
+    capacity: number;
+    config: StrategyConfig;
+  };
 }
 
-/** A pricing strategy is a pure function: (input) → resolvedPrice. */
-export type PricingStrategy = (input: PricingInput) => number;
+/** A pricing strategy is a pure function of PricingInput → PricingResult. */
+export type PricingStrategy = (input: PricingInput) => PricingResult;
+
+// ─── Validation helpers ───────────────────────────────────────────────────────
+
+function assertPositiveFinite(value: number, name: string): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a finite non-negative number, got ${value}`);
+  }
+}
+
+function assertCapacity(capacity: number): void {
+  if (!Number.isInteger(capacity) || capacity < 1) {
+    throw new Error(`capacity must be an integer ≥ 1, got ${capacity}`);
+  }
+}
 
 // ─── Strategy implementations ─────────────────────────────────────────────────
 
 /**
- * fixed: always returns basePrice regardless of other inputs.
+ * fixed – price never changes regardless of time or demand.
  */
-export const fixedStrategy: PricingStrategy = ({ basePrice }) => basePrice;
+export const fixedStrategy: PricingStrategy = (input) => {
+  assertPositiveFinite(input.basePrice, "basePrice");
 
-/**
- * time_decay: linearly reduces price to a floor as the slot start approaches.
- *
- * Formula:
- *   ratio = clamp((slotStartTime - nowMs) / decayWindowMs, 0, 1)
- *   price = floor + (basePrice - floor) * ratio
- *
- * Constants:
- *   decayWindowMs = 24 hours  (full price when ≥ 24 h away)
- *   floor         = 50 % of basePrice
- *
- * When nowMs ≥ slotStartTime the slot has already started; price = floor.
- */
-export const DECAY_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 h
-export const DECAY_FLOOR_RATIO = 0.5; // 50 % floor
-
-export const timeDecayStrategy: PricingStrategy = ({ basePrice, slotStartTime, nowMs }) => {
-  const floor = Math.round(basePrice * DECAY_FLOOR_RATIO);
-  const msUntilStart = slotStartTime - nowMs;
-  const ratio = Math.min(1, Math.max(0, msUntilStart / DECAY_WINDOW_MS));
-  return Math.round(floor + (basePrice - floor) * ratio);
+  return {
+    price: Math.round(input.basePrice),
+    strategyId: "fixed",
+    snapshot: {
+      basePrice: input.basePrice,
+      slotStartMs: input.slotStartMs,
+      nowMs: input.nowMs,
+      activeBookings: input.activeBookings,
+      capacity: input.capacity,
+      config: input.config,
+    },
+  };
 };
 
 /**
- * demand_based: increases price with the number of active intents.
+ * time_decay – price decreases linearly from basePrice to
+ * basePrice * minMultiplier as nowMs approaches slotStartMs.
  *
- * Formula:
- *   price = basePrice * (1 + activeIntentCount * surchargePerIntent)
- *
- * Constants:
- *   surchargePerIntent = 10 % per active intent
- *   cap                = 3× basePrice
+ * Outside the decay window (or after slot start) the full base price applies.
  */
-export const DEMAND_SURCHARGE_PER_INTENT = 0.1; // 10 % per intent
-export const DEMAND_PRICE_CAP_RATIO = 3.0; // max 3× base
+export const timeDecayStrategy: PricingStrategy = (input) => {
+  assertPositiveFinite(input.basePrice, "basePrice");
 
-export const demandBasedStrategy: PricingStrategy = ({ basePrice, activeIntentCount }) => {
-  const multiplier = 1 + Math.max(0, activeIntentCount) * DEMAND_SURCHARGE_PER_INTENT;
-  const cap = basePrice * DEMAND_PRICE_CAP_RATIO;
-  return Math.round(Math.min(basePrice * multiplier, cap));
+  const cfg = input.config as TimeDecayConfig;
+  if (!Number.isFinite(cfg.windowMs) || cfg.windowMs <= 0) {
+    throw new Error(`time_decay.windowMs must be a positive finite number, got ${cfg.windowMs}`);
+  }
+  if (!Number.isFinite(cfg.minMultiplier) || cfg.minMultiplier < 0 || cfg.minMultiplier > 1) {
+    throw new Error(
+      `time_decay.minMultiplier must be in [0, 1], got ${cfg.minMultiplier}`,
+    );
+  }
+
+  const msUntilStart = input.slotStartMs - input.nowMs;
+
+  let multiplier: number;
+  if (msUntilStart >= cfg.windowMs) {
+    // Outside the decay window — full price
+    multiplier = 1;
+  } else if (msUntilStart <= 0) {
+    // At or past slot start — minimum price
+    multiplier = cfg.minMultiplier;
+  } else {
+    // Linear interpolation within the window
+    const progress = 1 - msUntilStart / cfg.windowMs; // 0 at window start, 1 at slot start
+    multiplier = 1 - progress * (1 - cfg.minMultiplier);
+  }
+
+  return {
+    price: Math.max(0, Math.round(input.basePrice * multiplier)),
+    strategyId: "time_decay",
+    snapshot: {
+      basePrice: input.basePrice,
+      slotStartMs: input.slotStartMs,
+      nowMs: input.nowMs,
+      activeBookings: input.activeBookings,
+      capacity: input.capacity,
+      config: input.config,
+    },
+  };
+};
+
+/**
+ * demand_based – price scales linearly from basePrice (0 bookings) to
+ * basePrice * maxMultiplier (fully booked).
+ */
+export const demandBasedStrategy: PricingStrategy = (input) => {
+  assertPositiveFinite(input.basePrice, "basePrice");
+  assertCapacity(input.capacity);
+
+  const cfg = input.config as DemandBasedConfig;
+  if (!Number.isFinite(cfg.maxMultiplier) || cfg.maxMultiplier < 1) {
+    throw new Error(
+      `demand_based.maxMultiplier must be a finite number ≥ 1, got ${cfg.maxMultiplier}`,
+    );
+  }
+
+  const clampedBookings = Math.min(Math.max(0, input.activeBookings), input.capacity);
+  const demandRatio = clampedBookings / input.capacity;
+  const multiplier = 1 + demandRatio * (cfg.maxMultiplier - 1);
+
+  return {
+    price: Math.max(0, Math.round(input.basePrice * multiplier)),
+    strategyId: "demand_based",
+    snapshot: {
+      basePrice: input.basePrice,
+      slotStartMs: input.slotStartMs,
+      nowMs: input.nowMs,
+      activeBookings: input.activeBookings,
+      capacity: input.capacity,
+      config: input.config,
+    },
+  };
 };
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
@@ -100,35 +208,19 @@ const REGISTRY: Record<StrategyId, PricingStrategy> = {
 };
 
 /**
- * Returns the strategy function for the given id.
- * Throws if the id is not registered (guards against misconfiguration).
- */
-export function getStrategy(id: StrategyId): PricingStrategy {
-  const strategy = REGISTRY[id];
-  if (!strategy) {
-    throw new Error(`Unknown pricing strategy: "${id}"`);
-  }
-  return strategy;
-}
-
-// ─── Resolver ─────────────────────────────────────────────────────────────────
-
-/**
- * Resolves a price using the named strategy and returns a full PricingResult
- * that includes the strategy identifier and a snapshot of the inputs used.
+ * Resolve a price using the registered strategy identified by `strategyId`.
  *
- * The result is deterministic: calling with the same strategyId and input
- * always produces the same resolvedPrice.
+ * @throws if `strategyId` is not registered.
  */
 export function resolvePrice(strategyId: StrategyId, input: PricingInput): PricingResult {
-  if (input.basePrice < 0) {
-    throw new RangeError("basePrice must be ≥ 0");
+  const strategy = REGISTRY[strategyId];
+  if (!strategy) {
+    throw new Error(`Unknown pricing strategy: "${strategyId}"`);
   }
-  const strategy = getStrategy(strategyId);
-  const resolvedPrice = strategy(input);
-  return {
-    resolvedPrice,
-    strategyId,
-    snapshot: { ...input },
-  };
+  return strategy(input);
+}
+
+/** Returns the list of registered strategy identifiers. */
+export function listStrategies(): StrategyId[] {
+  return Object.keys(REGISTRY) as StrategyId[];
 }

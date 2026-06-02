@@ -3,13 +3,14 @@ import type { SlotRepository } from "../slots/slot-repository.js";
 import type {
   BookingIntentRecord,
   BookingIntentRepository,
+  PricingSnapshot,
 } from "./booking-intent-repository.js";
 import { SchedulingService } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
-import { resolvePrice, type StrategyId } from "../../services/pricingStrategy.js";
+import { resolvePrice } from "../../services/pricingStrategy.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -55,6 +56,7 @@ export class BookingIntentService {
     private readonly bookingIntentRepository: BookingIntentRepository,
     private readonly slotRepository: SlotRepository,
     private readonly now: () => string = () => new Date().toISOString(),
+    private readonly nowMs: () => number = () => Date.now(),
   ) {}
 
   private get schedulingService(): SchedulingService {
@@ -88,27 +90,36 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
 
-    // ── Pricing snapshot ──────────────────────────────────────────────────────
-    let pricingStrategyId: StrategyId | undefined;
-    let resolvedPrice: number | undefined;
-    let pricingSnapshot: BookingIntentRecord["pricingSnapshot"] | undefined;
+    // ── Resolve pricing snapshot (if the slot has a strategy configured) ──────
+    let pricingSnapshot: PricingSnapshot | undefined;
+    if (slot.pricingStrategy) {
+      const ps = slot.pricingStrategy;
+      const activeBookings = this.bookingIntentRepository
+        .listAll()
+        .filter((i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"))
+        .length;
+      const capacity = ps.capacity ?? 1;
+      const currentMs = this.nowMs();
 
-    if (input.pricingStrategyId) {
-      const strategyId = input.pricingStrategyId;
-      const basePrice = input.basePrice ?? 0;
-      const activeIntentCount = this.bookingIntentRepository.listAll().filter(
-        (i) => i.status === "pending",
-      ).length;
-      const pricingInput = {
-        basePrice,
-        slotStartTime: slot.startTime,
-        nowMs: Date.now(),
-        activeIntentCount,
+      const result = resolvePrice(ps.strategyId, {
+        basePrice: ps.basePrice,
+        slotStartMs: slot.startTime,
+        nowMs: currentMs,
+        activeBookings,
+        capacity,
+        config: ps.config,
+      });
+
+      pricingSnapshot = {
+        strategyId: result.strategyId,
+        resolvedPrice: result.price,
+        basePrice: ps.basePrice,
+        slotStartMs: slot.startTime,
+        nowMs: currentMs,
+        activeBookings,
+        capacity,
+        config: ps.config,
       };
-      const result = resolvePrice(strategyId, pricingInput);
-      pricingStrategyId = result.strategyId;
-      resolvedPrice = result.resolvedPrice;
-      pricingSnapshot = result.snapshot;
     }
 
     const intent = this.bookingIntentRepository.create({
@@ -120,11 +131,7 @@ export class BookingIntentService {
       status: "pending",
       note: input.note,
       createdAt: this.now(),
-      ...(pricingStrategyId !== undefined && {
-        pricingStrategyId,
-        resolvedPrice,
-        pricingSnapshot,
-      }),
+      pricingSnapshot,
     });
 
     this.schedulingService.reserveSlot(input.slotId);
