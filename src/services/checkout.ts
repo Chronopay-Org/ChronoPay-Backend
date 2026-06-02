@@ -329,6 +329,36 @@ export class CheckoutSessionService {
   }
 
   /**
+   * Returns a paginated batch of sessions ordered by insertion order.
+   */
+  static listSessionBatch(batchSize: number, afterId?: string): {
+    sessions: CheckoutSession[];
+    nextCursor?: string;
+  } {
+    const keys = Array.from(sessionStore.keys());
+    const startIndex = afterId ? keys.indexOf(afterId) + 1 : 0;
+    const pageKeys = keys.slice(startIndex, startIndex + batchSize);
+    const sessions = pageKeys
+      .map((id) => sessionStore.get(id))
+      .filter((session): session is CheckoutSession => session !== undefined);
+    const nextCursor = pageKeys.length === batchSize ? pageKeys[pageKeys.length - 1] : undefined;
+    return { sessions, nextCursor };
+  }
+
+  static getSessionById(sessionId: string): CheckoutSession | undefined {
+    const session = sessionStore.get(sessionId);
+    return session ? { ...session } : undefined;
+  }
+
+  static persistSession(session: CheckoutSession): void {
+    sessionStore.set(session.id, session);
+  }
+
+  static deleteSession(sessionId: string): boolean {
+    return sessionStore.delete(sessionId);
+  }
+
+  /**
    * Cleans up expired sessions from memory
    * Prevents unbounded memory growth
    */
