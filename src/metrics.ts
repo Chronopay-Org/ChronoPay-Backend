@@ -261,6 +261,18 @@ export const expiryCleanupSafetyBrakeTriggers = createBudgetedCounter({
   registers: [register],
 });
 
+/**
+ * Counter tracking which webhook HMAC key successfully verified a request.
+ * Label `key_id` is cardinality-bounded via the budget mechanism.
+ */
+export const webhookHmacVerified = createBudgetedCounter({
+  name: "webhook_hmac_verified_total",
+  help: "Total number of webhook requests verified by a particular HMAC key id",
+  labels: ["key_id"],
+  budget: 8,
+  registers: [register],
+});
+
 export type DependencyFaultName =
   | "disconnect"
   | "timeout"
@@ -310,10 +322,10 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
   res.on("finish", () => {
     const duration = process.hrtime(start);
     const durationInSeconds = duration[0] + duration[1] / 1e9;
-    
+
     // Use Express route patterns only; raw paths can contain user-controlled IDs.
     const route = req.route ? req.route.path : "__unmatched__";
-    
+
     httpRequestDurationMicroseconds
       .labels(req.method, route, res.statusCode.toString())
       .observe(durationInSeconds);
