@@ -15,10 +15,11 @@ import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
+import { validateBody } from "../middleware/validation.js";
+import { CreateBookingIntentBodySchema } from "../middleware/schemas.js";
 import {
   BookingIntentService,
   BookingIntentError,
-  parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
@@ -56,7 +57,7 @@ export function createBookingIntentsRouter() {
     idempotencyMiddleware,
     createAuthAwareRateLimiter(),
     auditMiddleware("CREATE_BOOKING_INTENT"),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
         const input = parseCreateBookingIntentBody(req.body);
         // Evaluate fraud risk
@@ -84,11 +85,19 @@ export function createBookingIntentsRouter() {
             });
           }
         }
-        const intent = bookingIntentService.createIntent(input, req.auth!);
-        res.status(201).json({
-          success: true,
-          intent,
-        });
+        if ((input as any).rrule) {
+          const report = await bookingIntentService.createRecurringIntents(input as any, req.auth!);
+          res.status(201).json({
+            success: true,
+            report,
+          });
+        } else {
+          const intent = await bookingIntentService.createIntent(input as any, req.auth!);
+          res.status(201).json({
+            success: true,
+            intent,
+          });
+        }
       } catch (error) {
         handleServiceError(error, res);
       }

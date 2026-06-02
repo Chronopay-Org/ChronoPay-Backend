@@ -104,5 +104,3 @@ export async function runReminderWorker(
   }
 }
 
-// Duplicate original implementation removed
-}

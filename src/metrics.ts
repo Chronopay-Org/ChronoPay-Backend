@@ -229,6 +229,38 @@ export const dependencyFaults = createBudgetedCounter({
   registers: [register],
 });
 
+export const expiryCleanupBookingIntentsExpired = createBudgetedCounter({
+  name: "expiry_cleanup_booking_intents_expired_total",
+  help: "Total number of booking intents expired by the expiry cleanup worker",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+export const expiryCleanupCheckoutSessionsSoftExpired = createBudgetedCounter({
+  name: "expiry_cleanup_checkout_sessions_soft_expired_total",
+  help: "Total number of checkout sessions soft-expired by the expiry cleanup worker",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+export const expiryCleanupCheckoutSessionsDeleted = createBudgetedCounter({
+  name: "expiry_cleanup_checkout_sessions_deleted_total",
+  help: "Total number of orphaned checkout sessions deleted by the expiry cleanup worker",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+export const expiryCleanupSafetyBrakeTriggers = createBudgetedCounter({
+  name: "expiry_cleanup_safety_brake_triggers_total",
+  help: "Total number of expiry cleanup sweeps skipped because the candidate sweep size exceeded the safety threshold",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
 export type DependencyFaultName =
   | "disconnect"
   | "timeout"
