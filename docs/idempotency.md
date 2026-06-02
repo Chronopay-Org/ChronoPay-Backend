@@ -28,3 +28,24 @@ To prevent **cross-endpoint replay confusion**, an idempotency key is tightly bo
 
 ## Redis Lock Lifecycle (TTL)
 Once a request successfully completes, its response status and body are written to Redis with a TTL (Time-To-Live) of 24 hours. After this period, the key expires, and a retry using the same key will be treated as a completely new request.
+
+## Middleware Test Coverage
+
+The middleware behavior is covered by `src/middleware/__tests__/idempotency.test.ts`.
+
+- Replay of stored responses for identical retries
+- `422` payload mismatch for same key and different body hash
+- Concurrency guard (`409`) so concurrent first-requests with same key do not both execute
+- Missing-key pass-through behavior
+- Expired-key behavior (treated as a new request)
+- Redis-unavailable fail-closed behavior (`503`)
+- Encryption codec security checks (no plaintext leak, tamper detection)
+
+### Collision and Trust Assumption
+
+Idempotency correctness assumes:
+
+1. SHA-256 request hashes are collision-resistant in practice.
+2. Redis idempotency entries are trusted and not tampered with by untrusted actors.
+
+If a collision were to occur (or a cache entry were maliciously forged with a matching hash), the middleware would replay the cached response because the hash is the binding primitive.
