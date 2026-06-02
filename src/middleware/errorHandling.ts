@@ -41,6 +41,7 @@ export function genericErrorHandler(
   res: Response,
   _next: NextFunction,
 ) {
+  console.error("[ERROR]", err);
   if (err instanceof Error && "statusCode" in err && "code" in err) {
     const e = err as any;
     if (typeof e.statusCode === "number" && typeof e.code === "string") {

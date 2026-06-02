@@ -1,9 +1,24 @@
+import type { StrategyId, StrategyConfig } from "../../services/pricingStrategy.js";
+
+/** Optional pricing strategy attached to a slot by the supplier. */
+export interface SlotPricingStrategy {
+  strategyId: StrategyId;
+  /** Base price in the smallest currency unit (e.g. stroops). Must be ≥ 0. */
+  basePrice: number;
+  /** Maximum concurrent bookings this slot supports (default: 1). */
+  capacity?: number;
+  /** Strategy-specific configuration. */
+  config: StrategyConfig;
+}
+
 export interface SlotRecord {
   id: string;
   professional: string;
   startTime: number;
   endTime: number;
   bookable: boolean;
+  /** Optional dynamic pricing configuration set by the supplier. */
+  pricingStrategy?: SlotPricingStrategy;
 }
 
 export interface SlotRepository {

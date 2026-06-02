@@ -202,11 +202,11 @@ export const createRequestLogger = () => {
         params: req.params,
         headers: sanitizeRequestHeaders(req.headers as Record<string, unknown>),
         remoteAddress: req.ip,
-        userAgent: req.get("user-agent"),
+        userAgent: typeof req.get === "function" ? req.get("user-agent") : undefined,
       }),
       res: (res: Response) => ({
         statusCode: res.statusCode,
-        headers: res.getHeaders(),
+        headers: typeof res.getHeaders === "function" ? res.getHeaders() : {},
         responseTime: (res as any).responseTime,
       }),
     },

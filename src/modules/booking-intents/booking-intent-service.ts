@@ -3,15 +3,29 @@ import type { SlotRepository } from "../slots/slot-repository.js";
 import type {
   BookingIntentRecord,
   BookingIntentRepository,
+  PricingSnapshot,
 } from "./booking-intent-repository.js";
 import { SchedulingService } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
+import { resolvePrice } from "../../services/pricingStrategy.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
+  note?: string;
+  /**
+   * Optional pricing strategy to apply. When provided, the resolved price and
+   * all inputs are snapshotted onto the created intent for auditability.
+   */
+  pricingStrategyId?: StrategyId;
+  /** Base price in the smallest currency unit. Required when pricingStrategyId is set. */
+  basePrice?: number;
+}
+
+export interface CreateRecurringBookingInput {
+  rrule: string;
   note?: string;
 }
 
@@ -42,6 +56,7 @@ export class BookingIntentService {
     private readonly bookingIntentRepository: BookingIntentRepository,
     private readonly slotRepository: SlotRepository,
     private readonly now: () => string = () => new Date().toISOString(),
+    private readonly nowMs: () => number = () => Date.now(),
   ) {}
 
   private get schedulingService(): SchedulingService {
@@ -75,6 +90,38 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
 
+    // ── Resolve pricing snapshot (if the slot has a strategy configured) ──────
+    let pricingSnapshot: PricingSnapshot | undefined;
+    if (slot.pricingStrategy) {
+      const ps = slot.pricingStrategy;
+      const activeBookings = this.bookingIntentRepository
+        .listAll()
+        .filter((i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"))
+        .length;
+      const capacity = ps.capacity ?? 1;
+      const currentMs = this.nowMs();
+
+      const result = resolvePrice(ps.strategyId, {
+        basePrice: ps.basePrice,
+        slotStartMs: slot.startTime,
+        nowMs: currentMs,
+        activeBookings,
+        capacity,
+        config: ps.config,
+      });
+
+      pricingSnapshot = {
+        strategyId: result.strategyId,
+        resolvedPrice: result.price,
+        basePrice: ps.basePrice,
+        slotStartMs: slot.startTime,
+        nowMs: currentMs,
+        activeBookings,
+        capacity,
+        config: ps.config,
+      };
+    }
+
     const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
       professional: slot.professional,
@@ -84,11 +131,75 @@ export class BookingIntentService {
       status: "pending",
       note: input.note,
       createdAt: this.now(),
+      pricingSnapshot,
     });
 
     this.schedulingService.reserveSlot(input.slotId);
 
     return intent;
+  }
+
+  async createRecurringIntents(input: CreateRecurringBookingInput, actor: AuthContext): Promise<{ successes: BookingIntentRecord[]; failures: { date: string; reason: string }[] }> {
+    const { expandRRule, RecurrenceError } = await import("../../services/recurrenceService.js");
+
+    let occurrences: Date[];
+    try {
+      occurrences = expandRRule(input.rrule);
+    } catch (err) {
+      if (err instanceof RecurrenceError) {
+        throw new BookingIntentError(400, err.message);
+      }
+      throw err;
+    }
+
+    const successes: BookingIntentRecord[] = [];
+    const failures: { date: string; reason: string }[] = [];
+
+    // For each occurrence, attempt to find a matching slot and create intent
+    for (const occ of occurrences) {
+      const startEpoch = occ.getTime();
+      const slot = this.slotRepository.list().find((s) => s.startTime === startEpoch && s.bookable);
+      if (!slot) {
+        failures.push({ date: occ.toISOString(), reason: "No available slot at this time" });
+        continue;
+      }
+
+      // Basic conflicts and checks similar to single-create
+      if (slot.professional === actor.userId) {
+        failures.push({ date: occ.toISOString(), reason: "Cannot book your own slot" });
+        continue;
+      }
+
+      const existingForCustomer = await this.bookingIntentRepository.findBySlotIdAndCustomer(slot.id, actor.userId);
+      if (existingForCustomer) {
+        failures.push({ date: occ.toISOString(), reason: "Customer already has an intent for this slot" });
+        continue;
+      }
+
+      const existingForSlot = await this.bookingIntentRepository.findBySlotId(slot.id);
+      if (existingForSlot) {
+        failures.push({ date: occ.toISOString(), reason: "Slot already has active booking intent" });
+        continue;
+      }
+
+      const intent = await this.bookingIntentRepository.create({
+        slotId: slot.id,
+        professional: slot.professional,
+        customerId: actor.userId,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        status: "pending",
+        note: input.note,
+        createdAt: this.now(),
+      });
+
+      // Reserve slot
+      this.schedulingService.reserveSlot(slot.id);
+
+      successes.push(intent);
+    }
+
+    return { successes, failures };
   }
 
   confirmIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
@@ -157,12 +268,40 @@ export class BookingIntentService {
 
 export const SLOT_ID_PATTERN = /^slot-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntentInput {
+export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntentInput | CreateRecurringBookingInput {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new BookingIntentError(400, "Booking intent payload must be a JSON object.");
   }
 
-  const { slotId, note } = body as { slotId?: unknown; note?: unknown };
+  const { slotId, note, rrule } = body as { slotId?: unknown; note?: unknown; rrule?: unknown };
+
+
+  // If an RRULE is provided, treat this as a recurring booking request
+  if (rrule !== undefined) {
+    if (typeof rrule !== "string" || rrule.trim().length === 0) {
+      throw new BookingIntentError(400, "rrule must be a non-empty string.");
+    }
+    const normalizedRRule = rrule.trim();
+
+    if (note === undefined) {
+      return { rrule: normalizedRRule };
+    }
+
+    if (typeof note !== "string") {
+      throw new BookingIntentError(400, "note must be a string when provided.");
+    }
+
+    const sanitizedNote = sanitizeNote(note);
+    if (sanitizedNote === null) {
+      throw new BookingIntentError(400, "note cannot be empty when provided.");
+    }
+
+    if (sanitizedNote.length > 500) {
+      throw new BookingIntentError(400, "note must be 500 characters or fewer.");
+    }
+
+    return { rrule: normalizedRRule, note: sanitizedNote };
+  }
 
   if (typeof slotId !== "string" || slotId.trim().length === 0) {
     throw new BookingIntentError(400, "slotId is required.");
@@ -171,10 +310,6 @@ export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntent
   const normalizedSlotId = slotId.trim();
   if (!SLOT_ID_PATTERN.test(normalizedSlotId)) {
     throw new BookingIntentError(400, "slotId format is invalid.");
-  }
-
-  if (note === undefined) {
-    return { slotId: normalizedSlotId };
   }
 
   if (typeof note !== "string") {
