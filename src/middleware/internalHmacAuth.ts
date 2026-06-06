@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { webhookHmacVerified } from "../metrics.js";
 
 const SIGNATURE_HEADER = "x-webhook-signature";
 const HMAC_ALGORITHM = "sha256";
@@ -42,7 +43,10 @@ function compareSignatures(expectedHex: string, actualHex: string) {
 
 export function internalHmacAuth(expectedSecret?: string) {
   return (req: Request, res: Response, next: NextFunction) => {
-    if (!expectedSecret) {
+    const currentSecret = expectedSecret ?? process.env.SETTLEMENTS_WEBHOOK_SECRET;
+    const previousSecret = process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS;
+
+    if (!currentSecret) {
       return res.status(500).json({
         success: false,
         error: "Settlement webhook signing secret is not configured.",
@@ -53,6 +57,7 @@ export function internalHmacAuth(expectedSecret?: string) {
     const providedSignature = getSignatureFromHeader(signatureHeader);
 
     if (!providedSignature) {
+      webhookHmacVerified.labels("missing").inc();
       return res.status(401).json({
         success: false,
         error: "Missing webhook signature.",
@@ -60,17 +65,28 @@ export function internalHmacAuth(expectedSecret?: string) {
     }
 
     const rawBody = req.rawBody ?? Buffer.from("");
-    const computedSignature = createHmac(HMAC_ALGORITHM, expectedSecret)
-      .update(rawBody)
-      .digest("hex");
 
-    if (!compareSignatures(providedSignature, computedSignature)) {
-      return res.status(403).json({
-        success: false,
-        error: "Invalid webhook signature.",
-      });
+    const computeHex = (secret: string) =>
+      createHmac(HMAC_ALGORITHM, secret).update(rawBody).digest("hex");
+
+    const currentHex = computeHex(currentSecret);
+    if (compareSignatures(providedSignature, currentHex)) {
+      webhookHmacVerified.labels("current").inc();
+      return next();
     }
 
-    next();
+    if (previousSecret) {
+      const prevHex = computeHex(previousSecret);
+      if (compareSignatures(providedSignature, prevHex)) {
+        webhookHmacVerified.labels("previous").inc();
+        return next();
+      }
+    }
+
+    webhookHmacVerified.labels("invalid").inc();
+    return res.status(403).json({
+      success: false,
+      error: "Invalid webhook signature.",
+    });
   };
 }
