@@ -59,4 +59,26 @@ router.get("/audit/export/download", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * @route POST /api/v1/admin/webhooks/rotate
+ * @desc Promote the NEXT webhook secret to CURRENT and move the previous CURRENT to PREVIOUS.
+ * @access Private (admin token only)
+ */
+router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response) => {
+  const next = process.env.SETTLEMENTS_WEBHOOK_SECRET_NEXT;
+  if (!next) {
+    return res.status(400).json({ success: false, error: "No NEXT webhook secret configured" });
+  }
+
+  const oldCurrent = process.env.SETTLEMENTS_WEBHOOK_SECRET;
+  if (oldCurrent) {
+    process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS = oldCurrent;
+  }
+
+  process.env.SETTLEMENTS_WEBHOOK_SECRET = next;
+  delete process.env.SETTLEMENTS_WEBHOOK_SECRET_NEXT;
+
+  return res.status(200).json({ success: true });
+});
+
 export default router;
