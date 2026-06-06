@@ -1,12 +1,16 @@
 import { Router, Request, Response } from "express";
-import { slotService } from "../services/slotService.js";
+import { slotService, SlotNotFoundError, SlotValidationError } from "../services/slotService.js";
 import { requireApiKey } from "../middleware/apiKeyAuth.js";
-import { validateBody } from "../middleware/validation.js";
-import { requireFeatureFlag } from "../middleware/featureFlags.js";
-import { CreateSlotBodySchema } from "../middleware/schemas.js";
-
+import { validateRequiredFields } from "../middleware/validation.js";
+import { requireFeatureFlag, featureFlagContextMiddleware } from "../middleware/featureFlags.js";
+import { requireRole } from "../middleware/rbac.js";
+import { parseSlotIdParam } from "../middleware/slotIdParam.js";
+import { authorizeSlotDelete, assertSlotDeleteAllowed } from "../middleware/slotAuthorization.js";
 
 const router = Router();
+const SLOT_NOT_FOUND = "Slot not found";
+
+router.use(featureFlagContextMiddleware);
 
 /**
  * Reset slot store for tests
@@ -22,13 +26,13 @@ router.get("/", async (req: Request, res: Response) => {
   try {
     const pageStr = req.query.page as string;
     const limitStr = req.query.limit as string;
-    
+
     const page = pageStr !== undefined ? parseInt(pageStr) : 1;
     const limit = limitStr !== undefined ? parseInt(limitStr) : 10;
 
     const result = await slotService.list({ page, limit });
-    
-    res.set("X-Cache", "MISS"); // Stub for tests expecting cache headers
+
+    res.set("X-Cache", "MISS");
     res.json({
       success: true,
       data: result.data,
@@ -37,8 +41,8 @@ router.get("/", async (req: Request, res: Response) => {
       limit: result.limit,
       total: result.total,
       meta: {
-          cache: "miss"
-      }
+        cache: "miss",
+      },
     });
   } catch (error: any) {
     res.status(400).json({
@@ -49,11 +53,28 @@ router.get("/", async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/v1/slots/:id
+ */
+router.get("/:id", parseSlotIdParam, async (req: Request, res: Response) => {
+  try {
+    const slot = await slotService.findById(req.params.id);
+    res.set("X-Cache", "MISS");
+    res.json({ slot });
+  } catch (error) {
+    if (error instanceof SlotNotFoundError) {
+      res.status(404).json({ success: false, error: SLOT_NOT_FOUND });
+      return;
+    }
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+/**
  * POST /api/v1/slots
  */
 router.post(
   "/",
-  requireApiKey("test-api-key"), // Use a fixed key for now or pass it from app.ts
+  requireApiKey("test-api-key"),
   requireFeatureFlag("CREATE_SLOT"),
   validateBody(CreateSlotBodySchema),
   async (req: Request, res: Response) => {
@@ -63,8 +84,8 @@ router.post(
         success: true,
         slot,
         meta: {
-            invalidatedKeys: ["slots:list:all"]
-        }
+          invalidatedKeys: ["slots:list:all"],
+        },
       });
     } catch (error: any) {
       const status = error.name === "SlotValidationError" ? 422 : 500;
@@ -73,8 +94,59 @@ router.post(
         error: error.message,
       });
     }
-  }
+  },
 );
+
+/**
+ * PATCH /api/v1/slots/:id
+ */
+router.patch("/:id", requireRole(["admin"]), async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const updatedSlot = slotService.updateSlot(id, req.body);
+
+    res.json({
+      success: true,
+      slot: updatedSlot,
+      meta: {
+        invalidatedKeys: ["slots:list:all"],
+      },
+    });
+  } catch (error: any) {
+    if (error instanceof SlotNotFoundError) {
+      res.status(404).json({ success: false, error: error.message });
+    } else if (error instanceof SlotValidationError) {
+      res.status(422).json({ success: false, error: error.message });
+    } else {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+});
+
+/**
+ * DELETE /api/v1/slots/:id
+ */
+router.delete("/:id", authorizeSlotDelete, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (req.slotDeleteAuth) {
+      const allowed = await assertSlotDeleteAllowed(req, res, id);
+      if (!allowed) {
+        return;
+      }
+    }
+
+    const deletedSlotId = await slotService.deleteSlot(id);
+    res.json({ success: true, deletedSlotId });
+  } catch (error: any) {
+    if (error instanceof SlotNotFoundError) {
+      res.status(404).json({ success: false, error: SLOT_NOT_FOUND });
+    } else {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+});
 
 export { router };
 export default router;
