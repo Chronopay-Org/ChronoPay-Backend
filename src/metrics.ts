@@ -140,6 +140,19 @@ export function createBudgetedHistogram(options: BudgetedHistogramOptions): Budg
   return histogram;
 }
 
+export function createBudgetedGauge(options: BudgetedHistogramOptions): BudgetedLabelMetric<Gauge> {
+  registerCardinalityBudget(options);
+  const gauge = new Gauge({
+    name: options.name,
+    help: options.help,
+    labelNames: options.budget === 0 ? [] : options.labels,
+    registers: options.registers ?? [register],
+  }) as BudgetedLabelMetric<Gauge>;
+
+  gauge.labels = budgetedLabels(options.name, gauge);
+  return gauge;
+}
+
 export function _resetMetricCardinalityState(): void {
   for (const state of metricLabelBudgets.values()) {
     state.seen.clear();
@@ -207,7 +220,13 @@ export const slotCacheStampedeBlocked = createBudgetedCounter({
   budget: 0,
   registers: [register],
 });
-
+export const settlementsPendingFinality = createBudgetedGauge({
+  name: "settlements_pending_finality",
+  help: "Current number of settlements that are pending finality and awaiting reconcilation.",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
 /** Convenience helpers used by slotCache.ts */
 export function recordCacheHit(): void {
   slotCacheHits.inc();
@@ -261,6 +280,18 @@ export const expiryCleanupSafetyBrakeTriggers = createBudgetedCounter({
   registers: [register],
 });
 
+/**
+ * Counter tracking which webhook HMAC key successfully verified a request.
+ * Label `key_id` is cardinality-bounded via the budget mechanism.
+ */
+export const webhookHmacVerified = createBudgetedCounter({
+  name: "webhook_hmac_verified_total",
+  help: "Total number of webhook requests verified by a particular HMAC key id",
+  labels: ["key_id"],
+  budget: 8,
+  registers: [register],
+});
+
 export type DependencyFaultName =
   | "disconnect"
   | "timeout"
@@ -310,10 +341,10 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
   res.on("finish", () => {
     const duration = process.hrtime(start);
     const durationInSeconds = duration[0] + duration[1] / 1e9;
-    
+
     // Use Express route patterns only; raw paths can contain user-controlled IDs.
     const route = req.route ? req.route.path : "__unmatched__";
-    
+
     httpRequestDurationMicroseconds
       .labels(req.method, route, res.statusCode.toString())
       .observe(durationInSeconds);
