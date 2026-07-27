@@ -66,6 +66,8 @@ jobs:
         run: npm ci
       - name: Typecheck
         run: npm run typecheck
+      - name: Check structured log schemas
+        run: npm run check-log-schemas
       - name: Build
         if: github.event_name != 'pull_request'
         run: npm run build

@@ -21,7 +21,7 @@ module.exports = {
     "^(\\.{1,2}/.*)$": "$1",
   },
   transform: { "^.+\\.tsx?$": ["ts-jest", { useESM: true }] },
-  testMatch: ["**/__tests__/**/*.test.ts"],
+  testMatch: ["**/__tests__/**/*.test.ts", "**/*.test.ts"],
   clearMocks: true,
   coverageDirectory: "coverage",
   coverageReporters: ["lcov", "text-summary"],

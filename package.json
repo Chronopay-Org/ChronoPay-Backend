@@ -13,7 +13,8 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --coverage",
     "migrate": "tsx src/scripts/migrate.ts",
-    "generate-openapi": "tsx src/scripts/generate-openapi.ts"
+    "generate-openapi": "tsx src/scripts/generate-openapi.ts",
+    "check-log-schemas": "tsx src/scripts/check-log-schemas.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
