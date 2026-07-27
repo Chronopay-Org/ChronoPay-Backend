@@ -1,8 +1,15 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type Response, NextFunction } from "express";
 import { graphqlAllowlistService } from "../services/graphqlAllowlist.service.js";
 import crypto from "crypto";
+import { createLoaders } from "../graphql/loaders.js";
 
 const router = Router();
+
+// Wire DataLoader batching per request
+router.use((req: Request, res: Response, next: NextFunction) => {
+  (req as any).loaders = createLoaders();
+  next();
+});
 
 router.post("/", (req: Request, res: Response) => {
   const { query, hash, operationName, extensions } = req.body;
