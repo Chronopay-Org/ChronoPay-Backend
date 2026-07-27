@@ -35,7 +35,10 @@
     "zod": "^3.21.4"
   },
   "overrides": {
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "ethers": {
+      "ws": "^8.21.0"
+    }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -64,11 +67,5 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "ajv": "^8.12.0"
-
-  },
-  "overrides": {
-    "ethers": {
-      "ws": "8.20.1"
-    }
   }
 }
