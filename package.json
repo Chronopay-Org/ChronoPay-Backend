@@ -14,7 +14,8 @@
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --coverage",
     "migrate": "tsx src/scripts/migrate.ts",
     "generate-openapi": "tsx src/scripts/generate-openapi.ts",
-    "check-log-schemas": "tsx src/scripts/check-log-schemas.ts"
+    "check-log-schemas": "tsx src/scripts/check-log-schemas.ts",
+    "check-openapi-examples": "npm run generate-openapi -- openapi-spec.json && tsx src/scripts/check-openapi-examples.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
