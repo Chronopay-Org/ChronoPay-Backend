@@ -70,6 +70,8 @@ jobs:
         run: npm run check-log-schemas
       - name: Check OpenAPI examples
         run: npm run check-openapi-examples
+      - name: Run Pact contract tests
+        run: npm run test:pact && npm run verify:pact
       - name: Build
         if: github.event_name != 'pull_request'
         run: npm run build
