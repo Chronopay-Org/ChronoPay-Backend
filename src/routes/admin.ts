@@ -11,7 +11,7 @@ import {
   type PayoutQuarantineEntry,
 } from "../services/quarantineStore.js";
 import { _settlements } from "../services/settlementReconciler.js";
-import type { SessionListOptions } from "../types/impersonation.types.js";
+import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 
 const router = Router();
 
@@ -298,80 +298,35 @@ router.post(
   }
 );
 
-// ─── Payout Quarantine Admin API ───────────────────────────────────────────
+/**
+ * @route GET /api/v1/admin/fraud/hitl/queue
+ * @desc Get pending review items for medium-risk fraud scores.
+ * @access Private (admin role required)
+ */
+router.get("/fraud/hitl/queue", requireAuthenticatedActor(["admin"]), (req: Request, res: Response) => {
+  res.json({ success: true, items: fraudReviewQueue.getPendingItems() });
+});
 
-router.get(
-  "/payouts/quarantine",
-  requireAuthenticatedActor(["admin"]),
-  (req: Request, res: Response) => {
-    try {
-      const service = getPayoutQuarantineService();
-      const entries = service.list();
-      return res.status(200).json({
-        success: true,
-        entries,
-        total: entries.length,
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to list quarantined payouts",
-      });
-    }
-  },
-);
+/**
+ * @route POST /api/v1/admin/fraud/hitl/:id/decision
+ * @desc Operator endpoint for approve/reject/refer on HITL queue items.
+ * @access Private (admin role required)
+ */
+router.post("/fraud/hitl/:id/decision", requireAuthenticatedActor(["admin"]), (req: Request, res: Response) => {
+  const { decision, notes } = req.body;
+  const operatorId = req.auth?.userId || "unknown";
 
-router.post(
-  "/payouts/:transactionId/quarantine/release",
-  requireAuthenticatedActor(["admin"]),
-  (req: Request, res: Response) => {
-    try {
-      const { transactionId } = req.params;
-      const initiatorId = req.auth?.userId;
-      const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+  if (!["approved", "rejected", "referred"].includes(decision)) {
+    return res.status(400).json({ success: false, error: "Invalid decision. Must be approved, rejected, or referred." });
+  }
 
-      if (!initiatorId) {
-        return res.status(401).json({ success: false, error: "Missing admin identity" });
-      }
-
-      const service = getPayoutQuarantineService();
-      const released = service.release(transactionId, {
-        releasedBy: initiatorId,
-        reason,
-      });
-
-      if (!released) {
-        return res.status(404).json({
-          success: false,
-          error: `No quarantine entry found for payout '${transactionId}'`,
-        });
-      }
-
-      void defaultAuditLogger.log(
-        "payout.quarantine.released",
-        {
-          body: { transactionId, releasedBy: initiatorId, reason },
-        },
-        {
-          actorIp: getActorIp(req),
-          resource: req.originalUrl,
-          status: 200,
-        },
-      );
-
-      return res.status(200).json({
-        success: true,
-        released: true,
-        payoutId: transactionId,
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to release quarantined payout",
-      });
-    }
-  },
-);
+  try {
+    const item = fraudReviewQueue.decide(req.params.id, operatorId, decision, notes);
+    return res.json({ success: true, item });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, error: err.message });
+  }
+});
 
 // --- Mock Dispute Logic for E2E Tests ---
 type Dispute = {
