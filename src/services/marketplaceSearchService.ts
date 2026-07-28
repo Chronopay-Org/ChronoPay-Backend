@@ -29,6 +29,7 @@ export interface SearchResult {
   ltrReranked?: boolean;
 }
 
+import { SearchQueryTracker } from "../cache/searchCacheWarmup.js";
 export interface CursorData {
   sortBy: "rating" | "price" | "relevance";
   rating?: number;
@@ -275,8 +276,14 @@ export class MarketplaceSearchService {
       set: (key: string, value: SearchResult, ttlMs: number) => Promise<void>;
     }
   ): Promise<SearchResult> {
+    // Record search query in tracker if configured
+    if (this.queryTracker) {
+      this.queryTracker.recordQuery(query);
+    }
+
     // Generate cache key from query parameters
     const cacheKey = this.generateCacheKey(query);
+
 
     // Try to get from cache first
     if (cache) {
