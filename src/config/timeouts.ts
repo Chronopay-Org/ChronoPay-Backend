@@ -16,7 +16,35 @@ export type TimeoutConfig = {
     baseDelayMs: number;
     maxTotalBudgetMs: number;
   };
+  /** Default per-query statement_timeout in milliseconds. */
+  queryBudget: {
+    /** Global default budget applied when no route-specific budget is configured. */
+    defaultMs: number;
+    /** Per-route overrides. Key = Express route pattern (e.g. "/api/v1/admin/"). */
+    routeOverrides: Record<string, number>;
+  };
 };
+
+/**
+ * Parse route override string like "/api/v1/admin/:*:60000,/api/v1/checkout:15000".
+ * Returns a map of route pattern → budget in ms.
+ */
+function parseRouteOverrides(raw: string | undefined): Record<string, number> {
+  if (!raw) return {};
+  const overrides: Record<string, number> = {};
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const lastColon = trimmed.lastIndexOf(":");
+    if (lastColon === -1) continue;
+    const route = trimmed.slice(0, lastColon);
+    const ms = parseInt(trimmed.slice(lastColon + 1), 10);
+    if (route && !isNaN(ms) && ms > 0) {
+      overrides[route] = ms;
+    }
+  }
+  return overrides;
+}
 
 const getEnvInt = (key: string, defaultValue: number): number => {
   const value = process.env[key];
@@ -41,6 +69,10 @@ export const timeoutConfig: TimeoutConfig = {
     baseDelayMs: getEnvInt("RETRY_BASE_DELAY_MS", 200),
     maxTotalBudgetMs: getEnvInt("RETRY_MAX_TOTAL_BUDGET_MS", 8000),
   },
+  queryBudget: {
+    defaultMs: getEnvInt("QUERY_BUDGET_DEFAULT_MS", 30000),
+    routeOverrides: parseRouteOverrides(process.env.QUERY_BUDGET_ROUTE_OVERRIDES),
+  },
 };
 
 /**
@@ -59,4 +91,8 @@ export function validateTimeoutConfig(config: TimeoutConfig = timeoutConfig): vo
   checkPositive(config.retry.maxAttempts, "retry.maxAttempts");
   checkPositive(config.retry.baseDelayMs, "retry.baseDelayMs");
   checkPositive(config.retry.maxTotalBudgetMs, "retry.maxTotalBudgetMs");
+  checkPositive(config.queryBudget.defaultMs, "queryBudget.defaultMs");
+  for (const [route, ms] of Object.entries(config.queryBudget.routeOverrides)) {
+    if (ms <= 0) throw new Error(`Timeout configuration error: queryBudget.routeOverrides["${route}"] must be positive, got ${ms}`);
+  }
 }

@@ -7,6 +7,11 @@
  */
 
 import { recordReputationQuery, recordSmallCellSuppression } from "../metrics.js";
+import {
+  ReputationBootstrapService,
+  reputationBootstrapService,
+  type BootstrapEvaluation,
+} from "./reputationBootstrapService.js";
 
 export type SignalCategory =
   | "on_time_delivery"
@@ -82,6 +87,16 @@ export interface PrivacyMetadata {
   suppressedCategoryCount: number;
 }
 
+export interface BootstrapMetadata {
+  granted: boolean;
+  active: boolean;
+  scoreContribution: number;
+  consumed: boolean;
+  expiresAt: string | null;
+  decayProgress: number;
+  reasonInactive: string | null;
+}
+
 export interface ReputationSignalProjectionResponse {
   supplierId: string;
   tenantId: string;
@@ -89,6 +104,7 @@ export interface ReputationSignalProjectionResponse {
   overallRatingTier: "Top Rated" | "Standard" | "At Risk" | "New Supplier";
   categoryBreakdown: SignalCategoryProjection[];
   privacyMetadata: PrivacyMetadata;
+  bootstrap: BootstrapMetadata;
   generatedAt: string;
 }
 
@@ -101,15 +117,18 @@ export interface SupplierRecord {
 
 export interface ReputationServiceOptions {
   minCellSizeThreshold?: number;
+  bootstrapService?: ReputationBootstrapService;
 }
 
 export class ReputationTransparencyService {
   private minCellSizeThreshold: number;
   private suppliers: Map<string, SupplierRecord> = new Map();
   private supplierSignals: Map<string, Map<SignalCategory, RawCategoryEvaluation>> = new Map();
+  private bootstrap: ReputationBootstrapService;
 
   constructor(options: ReputationServiceOptions = {}) {
     this.minCellSizeThreshold = options.minCellSizeThreshold ?? 5;
+    this.bootstrap = options.bootstrapService ?? reputationBootstrapService;
 
     // Seed mock/default suppliers for demonstration and tests
     this.seedDefaultSuppliers();
@@ -200,6 +219,10 @@ export class ReputationTransparencyService {
     return { isAuthorized: false, isNotFound: false, isForbidden: true };
   }
 
+  public getBootstrapService(): ReputationBootstrapService {
+    return this.bootstrap;
+  }
+
   /**
    * Projects supplier reputation signals with privacy safeguards:
    * - Redacts raw buyer / counterparty IDs
@@ -277,19 +300,42 @@ export class ReputationTransparencyService {
       }
     }
 
-    // Overall Score Calculation
+    const allCategoriesSuppressed = suppressedCategoryCount === categories.length;
+
+    let baseScore: number;
+    if (totalValidWeight > 0) {
+      baseScore = Math.round((totalWeightedScoreSum / totalValidWeight) * 10) / 10;
+    } else {
+      baseScore = 0;
+    }
+
+    const bootstrapEval: BootstrapEvaluation = this.bootstrap.evaluate(supplierId);
+
     let overallScore: number;
     if (totalValidWeight > 0) {
-      // Normalize sum to 100 scale if some categories were suppressed
-      overallScore = Math.round((totalWeightedScoreSum / totalValidWeight) * 10) / 10;
+      overallScore = baseScore;
+    } else if (bootstrapEval.active) {
+      overallScore = bootstrapEval.scoreContribution;
     } else {
-      // If all categories are suppressed due to low data, assign neutral baseline for new suppliers
       overallScore = 70.0;
     }
 
-    const overallRatingTier = this.determineRatingTier(overallScore, suppressedCategoryCount === categories.length);
+    const allSuppressedAndNoBootstrap = allCategoriesSuppressed && !bootstrapEval.active;
+
+    const overallRatingTier = this.determineRatingTier(overallScore, allSuppressedAndNoBootstrap);
 
     recordReputationQuery(supplier.tenantId, "success");
+
+    const bootstrapRecord = this.bootstrap.getRecord(supplierId);
+    const bootstrapMeta: BootstrapMetadata = {
+      granted: !!bootstrapRecord,
+      active: bootstrapEval.active,
+      scoreContribution: bootstrapEval.scoreContribution,
+      consumed: bootstrapEval.consumed,
+      expiresAt: bootstrapEval.expiresAt ? bootstrapEval.expiresAt.toISOString() : null,
+      decayProgress: bootstrapEval.decayProgress,
+      reasonInactive: bootstrapEval.reasonInactive ?? null,
+    };
 
     return {
       supplierId: supplier.id,
@@ -303,6 +349,7 @@ export class ReputationTransparencyService {
         minCellSizeThreshold: this.minCellSizeThreshold,
         suppressedCategoryCount,
       },
+      bootstrap: bootstrapMeta,
       generatedAt: new Date().toISOString(),
     };
   }

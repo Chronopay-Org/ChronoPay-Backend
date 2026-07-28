@@ -1,6 +1,7 @@
 import { Pool, PoolClient } from "pg";
 import { logger } from "../utils/logger.js";
-import { slowQueryCounter, slowQueryDuration } from "../metrics.js";
+import { slowQueryCounter, slowQueryDuration, queryBudgetBreaches } from "../metrics.js";
+import { getQueryBudgetContext } from "./queryBudgetContext.js";
 
 /**
  * Module-level singleton pool. Lazily initialized on first call to getPool().
@@ -46,6 +47,40 @@ let _slowQueryThresholdMs: number | null = process.env.SLOW_QUERY_THRESHOLD_MS
 /** @internal — for test injection only */
 export function _setSlowQueryThreshold(ms: number | null): void {
   _slowQueryThresholdMs = ms;
+}
+
+/** PostgreSQL error code returned when statement_timeout cancels a query. */
+const PG_STATEMENT_TIMEOUT_CODE = "57014";
+
+/**
+ * Record a budget breach at the connection layer.
+ * Called by any query wrapper when a PostgreSQL query_canceled (57014) error
+ * is detected while a QueryBudgetContext is active.
+ *
+ * Idempotent — only records the first breach per request.
+ *
+ * @internal
+ */
+export function _recordBudgetBreach(queryText: string, budgetMs: number, route: string): void {
+  queryBudgetBreaches.labels(route).inc();
+  logger.warn(
+    {
+      query: queryText,
+      budgetMs,
+      route,
+    },
+    "query budget breached — statement_timeout cancelled query",
+  );
+}
+
+/**
+ * Detect whether an error is a PostgreSQL statement_timeout cancellation.
+ */
+export function isStatementTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as NodeJS.ErrnoException).code === PG_STATEMENT_TIMEOUT_CODE
+  );
 }
 
 /**
@@ -117,7 +152,11 @@ export async function closePool(): Promise<void> {
 }
 
 /**
- * Executes `fn` inside a database transaction.
+ * Executes `fn` inside a database transaction with per-request statement_timeout.
+ *
+ * When an active QueryBudgetContext exists (set by the query-budget middleware),
+ * the transaction client runs `SET LOCAL statement_timeout` after BEGIN so that
+ * all statements within the transaction respect the budget.
  *
  * Acquires a client from the pool, issues BEGIN, and invokes `fn`. On success,
  * COMMIT is issued and the result is returned. On any error thrown by `fn`,
@@ -129,13 +168,27 @@ export async function closePool(): Promise<void> {
 export async function withTransaction<T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
+  const ctx = getQueryBudgetContext();
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+
+    // Set statement_timeout for the transaction if a budget is active
+    if (ctx && !ctx.breached) {
+      await client.query(
+        `SET LOCAL statement_timeout = '${ctx.budgetMs}ms'`,
+      );
+    }
+
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
   } catch (originalErr) {
+    // Detect budget breach
+    if (ctx && !ctx.breached && isStatementTimeoutError(originalErr)) {
+      ctx.breached = true;
+      _recordBudgetBreach("(transaction)", ctx.budgetMs, ctx.route);
+    }
     try {
       await client.query("ROLLBACK");
     } catch (rollbackErr) {

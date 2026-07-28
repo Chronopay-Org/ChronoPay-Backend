@@ -24,6 +24,12 @@ import { InMemoryBookingIntentRepository } from "../modules/booking-intents/book
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
+import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+
+import { QuarantineStore } from '../services/quarantineStore.js';
+import { FraudScorer } from '../services/fraudScorer.js';
+import { getFraudReasonCode, getFraudMessage, FraudReasonCode } from '../services/fraudReasonCodes.js';
+import crypto from 'crypto';
 
 export function createBookingIntentsRouter() {
   const router = Router();
@@ -72,6 +78,16 @@ export function createBookingIntentsRouter() {
           `v${process.env.FRAUD_MODEL_VERSION || 'default'}`,
           fraudResult.score,
         );
+
+        // Medium risk -> HITL review queue
+        if (fraudResult.score === threshold - 1 && fraudResult.score > 0) {
+          fraudReviewQueue.enqueue(
+            input.id ?? 'temp-intent-id',
+            fraudResult.score,
+            fraudResult.reasons
+          );
+        }
+
         if (fraudResult.score >= threshold) {
           const locale = (req.headers["accept-language"]?.split(",")[0].split("-")[0]) || "en";
           

@@ -6,10 +6,11 @@
  * the validators used at the listener boundary, and the wire-shape for a batch
  * returned from the `getEvents` JSON-RPC method.
  *
- * The four event kinds are emitted by the escrow contract and represent
+ * The five event kinds are emitted by the escrow contract and represent
  * authoritative lifecycle transitions of a buyer's escrow balance:
  *
- *   - `Held`     : buyer funds locked in escrow for a booking intent.
+ *   - `Held`     : buyer funds locked in escrow for a booking intent (refundable hold).
+ *   - `Captured` : payment captured from refundable hold, escalating to firm booking.
  *   - `Released` : escrow funds paid out to the supplier (service delivered).
  *   - `Refunded` : escrow funds returned to the buyer (dispute resolved).
  *   - `Slashed`  : escrow funds forfeited (protocol penalty applied).
@@ -18,7 +19,7 @@
  * that tuple is the natural idempotency key.
  */
 
-export type EscrowEventKind = "Held" | "Released" | "Refunded" | "Slashed";
+export type EscrowEventKind = "Held" | "Captured" | "Released" | "Refunded" | "Slashed";
 
 export interface EscrowEvent {
   readonly kind: EscrowEventKind;
@@ -69,6 +70,7 @@ export class EscrowEventValidationError extends Error {
 
 const ESCROW_EVENT_KINDS: ReadonlySet<EscrowEventKind> = new Set<EscrowEventKind>([
   "Held",
+  "Captured",
   "Released",
   "Refunded",
   "Slashed",
