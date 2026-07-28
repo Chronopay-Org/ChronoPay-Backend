@@ -296,6 +296,41 @@ describe("HorizonContractClient.sendTransaction()", () => {
     const client = makeClient();
     await expect(client.sendTransaction(args("submitTransaction", XDR))).rejects.toBeInstanceOf(Error);
   });
+
+  it("submitMemoTransaction validates memo hash format and posts to Horizon", async () => {
+    const client = makeClient();
+    const invalidHash = "12345";
+    await expect(client.submitMemoTransaction(invalidHash)).rejects.toBeInstanceOf(
+      ContractInvalidRequestError,
+    );
+
+    const validHash = "ab".repeat(32);
+    mockOk({ hash: TX_HASH });
+
+    const res = await client.submitMemoTransaction(validHash);
+    expect(res.hash).toBe(TX_HASH);
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/transactions`,
+      expect.objectContaining({
+        method: "POST",
+        body: `tx=${encodeURIComponent(`tx_memo_hash=${validHash}`)}`,
+      }),
+    );
+  });
+
+  it("getTransactionMemo fetches transaction details including memo by tx hash", async () => {
+    const client = makeClient();
+    const memoHash = "cd".repeat(32);
+    mockOk({ hash: TX_HASH, memo: memoHash, memo_type: "hash" });
+
+    const txData = await client.getTransactionMemo(TX_HASH);
+    expect(txData.hash).toBe(TX_HASH);
+    expect(txData.memo).toBe(memoHash);
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/transactions/${TX_HASH}`,
+      expect.anything(),
+    );
+  });
 });
 
 // ─── Circuit breaker integration ─────────────────────────────────────────────
