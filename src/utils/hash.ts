@@ -2,8 +2,11 @@ import crypto from "crypto";
 
 /**
  * Recursively sort object keys to ensure deterministic stringification.
+ * Exported because the dispute finality hash chain (and other tamper-
+ * evident surfaces) need to canonicalise payloads the same way the
+ * request-hash code does.
  */
-function stableStringify(obj: any): any {
+export function stableStringify(obj: any): any {
   if (obj === null || typeof obj !== "object") {
     return obj;
   }

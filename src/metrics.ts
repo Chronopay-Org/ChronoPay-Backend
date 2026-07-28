@@ -227,6 +227,55 @@ export const settlementsPendingFinality = createBudgetedGauge({
   budget: 0,
   registers: [register],
 });
+
+// ─── Timezone drift monitor metrics ───────────────────────────────────────────
+
+/**
+ * Gauge tracking the count of ambiguous slots (DST proximity, metadata issues)
+ * per tenant and severity level.
+ */
+export const tzDriftAmbiguousSlots = createBudgetedGauge({
+  name: "tz_drift_ambiguous_slots",
+  help: "Number of slots with ambiguous timezone information grouped by tenant and severity",
+  labels: ["tenant_id", "severity"],
+  budget: 64,
+  registers: [register],
+});
+
+/**
+ * Gauge tracking the count of slots with missing timezone info
+ * per tenant and severity level.
+ */
+export const tzDriftMissingTzSlots = createBudgetedGauge({
+  name: "tz_drift_missing_tz_slots",
+  help: "Number of slots with missing timezone offset information grouped by tenant and severity",
+  labels: ["tenant_id", "severity"],
+  budget: 64,
+  registers: [register],
+});
+
+/**
+ * Gauge storing the timestamp (epoch seconds) of the last completed
+ * timezone drift scan. Alerts can reference this to detect stale runs.
+ */
+export const tzDriftLastScanTimestamp = createBudgetedGauge({
+  name: "tz_drift_last_scan_timestamp_seconds",
+  help: "Unix timestamp (seconds) of the last completed timezone drift scan",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter tracking the total number of slots scanned across all sweeps.
+ */
+export const tzDriftSlotsScannedTotal = createBudgetedCounter({
+  name: "tz_drift_slots_scanned_total",
+  help: "Total number of slots scanned by the timezone drift monitor",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
 /** Convenience helpers used by slotCache.ts */
 export function recordCacheHit(): void {
   slotCacheHits.inc();
