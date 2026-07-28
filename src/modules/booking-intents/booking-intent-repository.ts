@@ -1,28 +1,6 @@
 import type { StrategyId, StrategyConfig } from "../../services/pricingStrategy.js";
 
-export type BookingType = "standard" | "refundable_hold";
-export type BookingIntentStatus =
-  | "pending"
-  | "confirmed"
-  | "cancelled"
-  | "expired"
-  | "hold_placed"
-  | "hold_refunded"
-  | "auto_refunded";
-
-export interface SupplierHoldPolicy {
-  defaultHoldDeadlineMs: number;
-  allowPerSlotOverride: boolean;
-  minimumHoldDeadlineMs: number;
-  maximumHoldDeadlineMs: number;
-}
-
-export const DEFAULT_SUPPLIER_HOLD_POLICY: SupplierHoldPolicy = {
-  defaultHoldDeadlineMs: 24 * 60 * 60 * 1000,
-  allowPerSlotOverride: true,
-  minimumHoldDeadlineMs: 15 * 60 * 1000,
-  maximumHoldDeadlineMs: 7 * 24 * 60 * 60 * 1000,
-};
+export type BookingIntentStatus = "pending" | "confirmed" | "firm" | "cancelled" | "expired";
 
 /**
  * Immutable snapshot of the pricing inputs and result captured at intent
@@ -48,11 +26,46 @@ export interface PricingSnapshot {
   config: StrategyConfig;
 }
 
-export interface RefundMetadata {
-  refundedAt: string;
-  refundedAmountCents: number;
-  refundReason: "customer_cancel" | "deadline_missed" | "supplier_cancel" | "admin_action";
-  refundTxHash?: string;
+export interface CancellationPolicyVersion {
+  /** Semantic version string identifying the policy (e.g. "v1-timezone-tier", "v2-prorated") */
+  versionId: string;
+  /** ISO 8601 timestamp when this policy became active */
+  effectiveFrom: string;
+  /** Optional ISO 8601 timestamp when this policy was superseded (undefined = current) */
+  effectiveUntil?: string;
+  /** Human-readable description of the policy terms */
+  description: string;
+}
+
+export interface CancellationPolicySnapshot {
+  /** Version ID of the cancellation policy captured at booking time */
+  policyVersionId: string;
+  /** Snapshot of the policy terms for auditability */
+  policyTerms: ProratedCancellationTerms;
+  /** "now" timestamp (ms) when the snapshot was captured */
+  capturedAtMs: number;
+}
+
+export interface ProratedCancellationTerms {
+  /** Cancellation fee tiers keyed by hours-until-start (inclusive floor) */
+  tiers: {
+    /** Minimum hours until start for this tier */
+    minHoursUntilStart: number;
+    /** Optional maximum hours until start (exclusive). Undefined = unbounded upper end */
+    maxHoursUntilStart?: number;
+    /** Ratio (0–1) of the base price that is REFUNDED in this tier */
+    refundRatio: number;
+    /** Flat cancellation fee (smallest currency unit) deducted from base refund */
+    flatFee?: number;
+    /** Percentage fee (0–1) of the base refund, e.g. 0.05 = 5% */
+    percentageFee?: number;
+    /** Tax reversal ratio (0–1) applied to the base refund */
+    taxReversalRatio?: number;
+  }[];
+  /** Minimum refund (smallest currency unit). Caps lower bound. */
+  minRefundAmount?: number;
+  /** Maximum refund (smallest currency unit). Caps upper bound. */
+  maxRefundAmount?: number;
 }
 
 export interface BookingIntentRecord {
@@ -73,6 +86,13 @@ export interface BookingIntentRecord {
   refundedAt?: string;
   refundMetadata?: RefundMetadata;
   pricingSnapshot?: PricingSnapshot;
+  /**
+   * Cancellation policy version captured at booking creation time.
+   * Used for grandfathering — cancellations always apply the policy version
+   * that was active when the booking was made, even if the policy is later
+   * updated.
+   */
+  cancellationPolicySnapshot?: CancellationPolicySnapshot;
 }
 
 export interface BookingIntentRepository {

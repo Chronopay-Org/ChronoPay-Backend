@@ -4,12 +4,7 @@ import type {
   BookingIntentRecord,
   BookingIntentRepository,
   PricingSnapshot,
-  BookingType,
-  SupplierHoldPolicy,
-  RefundMetadata,
-} from "./booking-intent-repository.js";
-import {
-  DEFAULT_SUPPLIER_HOLD_POLICY as DEFAULT_POLICY,
+  CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
 import { SchedulingService, SlotExpiredError } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
@@ -17,7 +12,12 @@ import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
 import { resolvePrice } from "../../services/pricingStrategy.js";
-import { CancellationPolicyService, RefundBreakdown } from "../../services/cancellationPolicy.js";
+import {
+  CancellationPolicyService,
+  RefundBreakdown,
+  createDefaultRegistry,
+  VersionedPolicyRegistry,
+} from "../../services/cancellationPolicy.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -71,47 +71,31 @@ export class BookingIntentError extends AppError {
 }
 
 export class BookingIntentService {
+  private cancellationPolicyService: CancellationPolicyService;
+  private getPolicyRegistrySync: () => VersionedPolicyRegistry;
+
   constructor(
     private readonly bookingIntentRepository: BookingIntentRepository,
     private readonly slotRepository: SlotRepository,
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly nowMs: () => number = () => Date.now(),
-    private readonly supplierPolicies: SupplierPolicies = {
-      getHoldPolicy: () => DEFAULT_POLICY,
-    },
-  ) {}
+    policyRegistry?: VersionedPolicyRegistry,
+  ) {
+    const registry = policyRegistry ?? createDefaultRegistry();
+    this.getPolicyRegistrySync = () => registry;
+    this.cancellationPolicyService = new CancellationPolicyService({
+      getPolicyRegistrySync: this.getPolicyRegistrySync,
+      nowMs: this.nowMs,
+      nowIso: this.now,
+    });
+  }
 
   private get schedulingService(): SchedulingService {
     return new SchedulingService(this.slotRepository, this.bookingIntentRepository);
   }
 
-  private resolveHoldDeadline(
-    slot: { professional: string; startTime: number },
-    inputHoldDeadlineMs?: number,
-  ): number {
-    const policy = this.supplierPolicies.getHoldPolicy(slot.professional);
-    const now = this.nowMs();
-
-    let deadlineMs: number;
-    if (inputHoldDeadlineMs !== undefined && policy.allowPerSlotOverride) {
-      const clamped = Math.max(
-        policy.minimumHoldDeadlineMs,
-        Math.min(policy.maximumHoldDeadlineMs, inputHoldDeadlineMs),
-      );
-      deadlineMs = now + clamped;
-    } else {
-      deadlineMs = now + policy.defaultHoldDeadlineMs;
-    }
-
-    if (slot.startTime > 0 && deadlineMs > slot.startTime) {
-      deadlineMs = slot.startTime;
-    }
-
-    return deadlineMs;
-  }
-
-  private resolveIntentPrice(intent: BookingIntentRecord): number {
-    return intent.pricingSnapshot?.resolvedPrice ?? 0;
+  private captureCancellationPolicySnapshot(): CancellationPolicySnapshot {
+    return this.cancellationPolicyService.snapshotCurrentPolicy();
   }
 
   async createIntent(
@@ -161,9 +145,7 @@ export class BookingIntentService {
       const activeBookings = this.bookingIntentRepository
         .listAll()
         .filter(
-          (i) =>
-            i.slotId === slot.id &&
-            (i.status === "pending" || i.status === "confirmed" || i.status === "hold_placed"),
+          (i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"),
         ).length;
       const capacity = ps.capacity ?? 1;
       const currentMs = this.nowMs();
@@ -189,13 +171,7 @@ export class BookingIntentService {
       };
     }
 
-    const bookingType: BookingType = input.bookingType ?? "standard";
-    const isRefundableHold = bookingType === "refundable_hold";
-    const status = isRefundableHold ? "hold_placed" : "pending";
-    const holdUntilMs = isRefundableHold
-      ? this.resolveHoldDeadline(slot, input.holdDeadlineMs)
-      : undefined;
-    const holdPlacedAt = isRefundableHold ? this.now() : undefined;
+    const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
 
     const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
@@ -210,6 +186,7 @@ export class BookingIntentService {
       holdUntilMs,
       holdPlacedAt,
       pricingSnapshot,
+      cancellationPolicySnapshot,
     });
 
     this.schedulingService.reserveSlot(input.slotId);
@@ -272,6 +249,8 @@ export class BookingIntentService {
         continue;
       }
 
+      const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
+
       const intent = await this.bookingIntentRepository.create({
         slotId: slot.id,
         professional: slot.professional,
@@ -281,6 +260,7 @@ export class BookingIntentService {
         status: "pending",
         note: input.note,
         createdAt: this.now(),
+        cancellationPolicySnapshot,
       });
 
       // Reserve slot
@@ -365,16 +345,6 @@ export class BookingIntentService {
       );
     }
 
-    if (intent.bookingType === "refundable_hold" && intent.status === "hold_placed") {
-      const fullAmount = this.resolveIntentPrice(intent);
-      return {
-        refundAmountCents: fullAmount,
-        feeAmountCents: 0,
-        totalPaidCents: fullAmount,
-        policyApplied: "refundable_hold_full_refund",
-      };
-    }
-
     const policy = new CancellationPolicyService();
     return policy.calculateRefund(intent);
   }
@@ -397,110 +367,6 @@ export class BookingIntentService {
     return updated;
   }
 
-  autoRefundHold(intentId: string): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
-    if (!intent) {
-      throw new BookingIntentError(404, "Booking intent not found.");
-    }
-
-    if (intent.bookingType !== "refundable_hold") {
-      throw new BookingIntentError(409, `Intent "${intentId}" is not a refundable hold.`);
-    }
-
-    if (intent.status !== "hold_placed") {
-      throw new BookingIntentError(
-        409,
-        `Cannot auto-refund intent with status "${intent.status}".`,
-      );
-    }
-
-    const nowMs = this.nowMs();
-    if (intent.holdUntilMs !== undefined && intent.holdUntilMs > nowMs) {
-      throw new BookingIntentError(
-        409,
-        `Hold deadline has not yet passed (${new Date(intent.holdUntilMs).toISOString()}).`,
-      );
-    }
-
-    const refundAmount = this.resolveIntentPrice(intent);
-
-    const updated = this.bookingIntentRepository.update(intentId, {
-      status: "auto_refunded",
-      refundedAt: this.now(),
-      refundMetadata: {
-        refundedAt: this.now(),
-        refundedAmountCents: refundAmount,
-        refundReason: "deadline_missed",
-      },
-    });
-
-    this.schedulingService.releaseSlot(intent.slotId);
-
-    return updated;
-  }
-
-  processExpiredHolds(): AutoRefundResult[] {
-    const expired = this.bookingIntentRepository.findExpiredHolds(this.nowMs());
-    const results: AutoRefundResult[] = [];
-
-    for (const intent of expired) {
-      try {
-        const refunded = this.autoRefundHold(intent.id);
-        results.push({
-          intentId: refunded.id,
-          success: true,
-          refundedAmountCents: refunded.refundMetadata?.refundedAmountCents ?? 0,
-        });
-      } catch (err) {
-        results.push({
-          intentId: intent.id,
-          success: false,
-          refundedAmountCents: 0,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    return results;
-  }
-
-  getHoldStatus(
-    intentId: string,
-    actor: AuthContext,
-  ): {
-    holdUntilMs: number | undefined;
-    remainingMs: number;
-    holdPlacedAt: string | undefined;
-    isPastDeadline: boolean;
-    refundableAmountCents: number;
-  } {
-    const intent = this.bookingIntentRepository.findById(intentId);
-    if (!intent) {
-      throw new BookingIntentError(404, "Booking intent not found.");
-    }
-
-    if (
-      intent.customerId !== actor.userId &&
-      actor.role !== "admin" &&
-      intent.professional !== actor.userId
-    ) {
-      throw new BookingIntentError(403, "You are not authorized to view this booking intent.");
-    }
-
-    const nowMs = this.nowMs();
-    const holdUntilMs = intent.holdUntilMs;
-    const remainingMs = holdUntilMs !== undefined ? Math.max(0, holdUntilMs - nowMs) : 0;
-
-    return {
-      holdUntilMs,
-      remainingMs,
-      holdPlacedAt: intent.holdPlacedAt,
-      isPastDeadline: holdUntilMs !== undefined && holdUntilMs <= nowMs,
-      refundableAmountCents:
-        intent.bookingType === "refundable_hold" ? this.resolveIntentPrice(intent) : 0,
-    };
-  }
-
   createIntentTraced(
     input: CreateBookingIntentInput,
     actor: AuthContext,
@@ -513,24 +379,6 @@ export class BookingIntentService {
 
 export const SLOT_ID_PATTERN =
   /^slot-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const VALID_BOOKING_TYPES = new Set(["standard", "refundable_hold"]);
-
-function parseBookingType(raw: unknown): BookingType | undefined {
-  if (raw === undefined) return undefined;
-  if (typeof raw !== "string" || !VALID_BOOKING_TYPES.has(raw)) {
-    throw new BookingIntentError(400, "bookingType must be 'standard' or 'refundable_hold'.");
-  }
-  return raw as BookingType;
-}
-
-function parseHoldDeadlineMs(raw: unknown): number | undefined {
-  if (raw === undefined) return undefined;
-  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
-    throw new BookingIntentError(400, "holdDeadlineMs must be a positive number of milliseconds.");
-  }
-  return raw;
-}
 
 export function parseCreateBookingIntentBody(
   body: unknown,
@@ -547,9 +395,7 @@ export function parseCreateBookingIntentBody(
     holdDeadlineMs?: unknown;
   };
 
-  const parsedBookingType = parseBookingType(bookingType);
-  const parsedHoldDeadlineMs = parseHoldDeadlineMs(holdDeadlineMs);
-
+  // If an RRULE is provided, treat this as a recurring booking request
   if (rrule !== undefined) {
     if (typeof rrule !== "string" || rrule.trim().length === 0) {
       throw new BookingIntentError(400, "rrule must be a non-empty string.");

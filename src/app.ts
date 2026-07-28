@@ -10,7 +10,7 @@ import {
   jsonParseErrorHandler,
   notFoundHandler,
 } from "./middleware/errorHandling.js";
-import { validateRequiredFields } from "./middleware/validation.js";
+import { validateRequiredFields, validateBody } from "./middleware/validation.js";
 import { authenticateToken as requireAuth } from "./middleware/auth.js";
 import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
@@ -45,13 +45,26 @@ import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
 import graphqlRouter from "./routes/graphql.js";
+import webhookRoutes, { registerWebhookRoutes } from "./routes/webhooks.js";
 import webhookRouter, { registerWebhookRoutes } from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
+import fraudModelsRouter from "./routes/fraudModels.js";
+import { requireAdminToken } from "./middleware/authorization.js";
+import { listReputationEvents } from "./services/reputationWriteAudit.js";
+import {
+  listReputationSnapshots,
+  runSnapshotJob,
+  DEFAULT_TIER_BOUNDARIES,
+} from "./services/reputationSnapshotService.js";
 
 // Import modules
 import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
 import { InMemoryBookingIntentRepository } from "./modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
+import { ConflictPreviewService } from "./services/conflictPreviewService.js";
+import { RecurrenceError } from "./services/recurrenceService.js";
+import { ConflictPreviewBodySchema } from "./middleware/schemas.js";
+import { isValidIANATimezone } from "./validation/reminderValidation.js";
 
 export interface AppFactoryOptions {
   apiKey?: string;
@@ -377,6 +390,49 @@ export function createApp(options: AppFactoryOptions = {}) {
     }
   );
 
+  // 1a. Conflict Preview Route
+  app.post(
+    "/api/v1/slots/conflicts/preview",
+    rbacMiddleware,
+    requireApiKey(options.apiKey),
+    requireFeatureFlag("CREATE_SLOT"),
+    validateBody(ConflictPreviewBodySchema),
+    async (req, res) => {
+      try {
+        const { rrule, professional, slotDurationMs, timezone, horizonDays } = req.body;
+
+        if (timezone && !isValidIANATimezone(timezone)) {
+          return res.status(422).json({
+            success: false,
+            error: "timezone must be a valid IANA timezone identifier",
+          });
+        }
+
+        const service = new ConflictPreviewService();
+        const result = await service.previewConflicts({
+          rrule,
+          professional,
+          slotDurationMs,
+          timezone,
+          horizonDays,
+        });
+
+        res.json({ success: true, data: result });
+      } catch (error: any) {
+        if (error instanceof RecurrenceError) {
+          return res.status(422).json({
+            success: false,
+            error: error.message,
+          });
+        }
+        res.status(500).json({
+          success: false,
+          error: "Conflict preview failed",
+        });
+      }
+    }
+  );
+
   app.delete("/api/v1/slots/:id", (req, res) => {
       const { id } = req.params;
       const userId = req.header("x-user-id");
@@ -402,6 +458,90 @@ export function createApp(options: AppFactoryOptions = {}) {
   // 3b. Admin Routes
   app.use("/api/v1/admin", adminRouter);
   app.use("/api/v1/admin", redactionPolicyRouter);
+
+  // 3b-i. Fraud model admin routes (#455 rollback hotkey)
+  app.use("/api/v1/admin/fraud-models", fraudModelsRouter);
+
+  // 3b-ii. Reputation write-audit history (#457)
+  app.get(
+    "/api/v1/admin/suppliers/:supplierId/reputation/history",
+    requireAdminToken,
+    async (req: Request, res: Response) => {
+      try {
+        const { supplierId } = req.params;
+        const limit = req.query.limit !== undefined ? parseInt(String(req.query.limit), 10) : 50;
+        const offset = req.query.offset !== undefined ? parseInt(String(req.query.offset), 10) : 0;
+        if (isNaN(limit) || limit < 1 || limit > 200)
+          return res.status(400).json({ success: false, error: "limit must be between 1 and 200" });
+        if (isNaN(offset) || offset < 0)
+          return res.status(400).json({ success: false, error: "offset must be a non-negative integer" });
+        const since = typeof req.query.since === "string" ? new Date(req.query.since) : undefined;
+        const until = typeof req.query.until === "string" ? new Date(req.query.until) : undefined;
+        if (since && isNaN(since.getTime()))
+          return res.status(400).json({ success: false, error: "since must be a valid ISO 8601 date" });
+        if (until && isNaN(until.getTime()))
+          return res.status(400).json({ success: false, error: "until must be a valid ISO 8601 date" });
+        const result = await listReputationEvents({ supplierId: supplierId.trim(), limit, offset, since, until });
+        return res.status(200).json({ success: true, ...result });
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: err.message ?? "Failed to list reputation history" });
+      }
+    },
+  );
+
+  // 3b-iii. Reputation daily snapshot endpoints (#458)
+  app.get(
+    "/api/v1/admin/reputation/snapshots",
+    requireAdminToken,
+    async (req: Request, res: Response) => {
+      try {
+        const limit = req.query.limit !== undefined ? parseInt(String(req.query.limit), 10) : 90;
+        const offset = req.query.offset !== undefined ? parseInt(String(req.query.offset), 10) : 0;
+        if (isNaN(limit) || limit < 1 || limit > 365)
+          return res.status(400).json({ success: false, error: "limit must be between 1 and 365" });
+        if (isNaN(offset) || offset < 0)
+          return res.status(400).json({ success: false, error: "offset must be a non-negative integer" });
+        const result = await listReputationSnapshots({
+          supplierId: typeof req.query.supplierId === "string" ? req.query.supplierId : undefined,
+          since: typeof req.query.since === "string" ? req.query.since : undefined,
+          until: typeof req.query.until === "string" ? req.query.until : undefined,
+          limit,
+          offset,
+        });
+        return res.status(200).json({ success: true, ...result });
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: err.message ?? "Failed to list reputation snapshots" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/admin/reputation/snapshots/run",
+    requireAdminToken,
+    async (req: Request, res: Response) => {
+      try {
+        const { suppliers, snapshotDate, tierBoundaries } = req.body ?? {};
+        if (!Array.isArray(suppliers) || suppliers.length === 0)
+          return res.status(400).json({ success: false, error: "suppliers must be a non-empty array of { supplierId, score }" });
+        for (const s of suppliers) {
+          if (typeof s.supplierId !== "string" || !s.supplierId.trim())
+            return res.status(400).json({ success: false, error: "Each supplier must have a non-empty supplierId" });
+          if (typeof s.score !== "number" || !Number.isFinite(s.score))
+            return res.status(400).json({ success: false, error: `Invalid score for supplier ${s.supplierId}` });
+        }
+        let date: Date | undefined;
+        if (snapshotDate) {
+          date = new Date(snapshotDate);
+          if (isNaN(date.getTime()))
+            return res.status(400).json({ success: false, error: "snapshotDate must be a valid YYYY-MM-DD date" });
+        }
+        const result = await runSnapshotJob(suppliers, date, tierBoundaries ?? DEFAULT_TIER_BOUNDARIES);
+        return res.status(200).json({ success: true, ...result });
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: err.message ?? "Snapshot job failed" });
+      }
+    },
+  );
 
   // 3c. GDPR Export Routes
   app.use("/api/v1/gdpr/export", gdprExportRouter);

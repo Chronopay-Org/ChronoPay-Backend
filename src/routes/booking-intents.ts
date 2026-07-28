@@ -24,6 +24,7 @@ import { InMemoryBookingIntentRepository } from "../modules/booking-intents/book
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
+import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 
 export function createBookingIntentsRouter() {
   const router = Router();
@@ -71,7 +72,20 @@ export function createBookingIntentsRouter() {
         // module is import-side-effect-free so a missing baseline is a no-op
         // rather than a request blocker. `FRAUD_MODEL_VERSION` threads the
         // histogram label through the deployment env (e.g. "2025-q1-r3").
-        recordFraudScore(`v${process.env.FRAUD_MODEL_VERSION || "default"}`, fraudResult.score);
+        recordFraudScore(
+          `v${process.env.FRAUD_MODEL_VERSION || 'default'}`,
+          fraudResult.score,
+        );
+
+        // Medium risk -> HITL review queue
+        if (fraudResult.score === threshold - 1 && fraudResult.score > 0) {
+          fraudReviewQueue.enqueue(
+            input.id ?? 'temp-intent-id',
+            fraudResult.score,
+            fraudResult.reasons
+          );
+        }
+
         if (fraudResult.score >= threshold) {
           const locale = req.headers["accept-language"]?.split(",")[0].split("-")[0] || "en";
 
