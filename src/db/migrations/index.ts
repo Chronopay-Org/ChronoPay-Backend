@@ -16,6 +16,8 @@ import { migration as migration004 } from "./004_create_booking_intents_table.js
 import { migration as migration005 } from "./005_add_token_references_to_booking_intents.js";
 import { migration as migration006 } from "./006_create_reminders_table.js";
 import { migration as migration007 } from "./007_create_checkout_sessions_table.js";
+import { migration as migration011 } from "./011_create_outbox_table.js";
+import { migration as migration012 } from "./012_create_redemption_ledger.js";
 
 export const migrations: Migration[] = [
   migration001,
@@ -25,6 +27,8 @@ export const migrations: Migration[] = [
   migration005,
   migration006,
   migration007,
+  migration011,
+  migration012,
 ];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────
