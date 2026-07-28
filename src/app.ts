@@ -405,12 +405,16 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3b. Admin Routes
   app.use("/api/v1/admin", adminRouter);
+  app.use("/api/v1/admin", redactionPolicyRouter);
+
+  // 3c. GDPR Export Routes
+  app.use("/api/v1/gdpr/export", gdprExportRouter);
   
   // 3c. Legal Holds Routes
   app.use("/api/v1/admin", legalHoldRouter);
 
-  // 3c. GraphQL Route
-  app.use("/api/v1/graphql", graphqlRouter);
+  // 3d. Reputation Transparency Routes
+  app.use("/api/v1/suppliers", reputationRouter);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
@@ -440,7 +444,7 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 5. Webhooks Routes
   registerWebhookRoutes(app);
-  app.use("/api/v1", webhookRouter);
+  app.use("/api/v1", webhookRoutes);
 
   // 6. SMS Routes
   app.post("/api/v1/notifications/sms", validateRequiredFields(["to", "message"]), (req, res) => {

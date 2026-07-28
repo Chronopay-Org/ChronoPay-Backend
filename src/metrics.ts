@@ -227,6 +227,55 @@ export const settlementsPendingFinality = createBudgetedGauge({
   budget: 0,
   registers: [register],
 });
+
+// ─── Timezone drift monitor metrics ───────────────────────────────────────────
+
+/**
+ * Gauge tracking the count of ambiguous slots (DST proximity, metadata issues)
+ * per tenant and severity level.
+ */
+export const tzDriftAmbiguousSlots = createBudgetedGauge({
+  name: "tz_drift_ambiguous_slots",
+  help: "Number of slots with ambiguous timezone information grouped by tenant and severity",
+  labels: ["tenant_id", "severity"],
+  budget: 64,
+  registers: [register],
+});
+
+/**
+ * Gauge tracking the count of slots with missing timezone info
+ * per tenant and severity level.
+ */
+export const tzDriftMissingTzSlots = createBudgetedGauge({
+  name: "tz_drift_missing_tz_slots",
+  help: "Number of slots with missing timezone offset information grouped by tenant and severity",
+  labels: ["tenant_id", "severity"],
+  budget: 64,
+  registers: [register],
+});
+
+/**
+ * Gauge storing the timestamp (epoch seconds) of the last completed
+ * timezone drift scan. Alerts can reference this to detect stale runs.
+ */
+export const tzDriftLastScanTimestamp = createBudgetedGauge({
+  name: "tz_drift_last_scan_timestamp_seconds",
+  help: "Unix timestamp (seconds) of the last completed timezone drift scan",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter tracking the total number of slots scanned across all sweeps.
+ */
+export const tzDriftSlotsScannedTotal = createBudgetedCounter({
+  name: "tz_drift_slots_scanned_total",
+  help: "Total number of slots scanned by the timezone drift monitor",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
 /** Convenience helpers used by slotCache.ts */
 export function recordCacheHit(): void {
   slotCacheHits.inc();
@@ -239,6 +288,58 @@ export function recordCacheMiss(): void {
 export function recordStampedeBlocked(): void {
   slotCacheStampedeBlocked.inc();
 }
+
+// ─── Search cache warmup metrics ───────────────────────────────────────────────
+
+export const searchCacheWarmupCoverageRatio = createBudgetedGauge({
+  name: "search_cache_warmup_coverage_ratio",
+  help: "Ratio of successfully warmed search queries to target top-N queries after taxonomy edit",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+export const searchCacheWarmupTotal = createBudgetedCounter({
+  name: "search_cache_warmup_total",
+  help: "Total number of search cache warmup runs triggered by taxonomy updates",
+  labels: ["status"],
+  budget: 8,
+  registers: [register],
+});
+
+export const searchCacheWarmupQueriesTotal = createBudgetedCounter({
+  name: "search_cache_warmup_queries_total",
+  help: "Total number of search queries replayed during cache warmup",
+  labels: ["result"],
+  budget: 8,
+  registers: [register],
+});
+
+export const searchCacheWarmupDurationSeconds = createBudgetedHistogram({
+  name: "search_cache_warmup_duration_seconds",
+  help: "Duration in seconds of search cache warmup runs",
+  labels: [],
+  budget: 0,
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10],
+  registers: [register],
+});
+
+export function recordWarmupCoverage(ratio: number): void {
+  searchCacheWarmupCoverageRatio.set(ratio);
+}
+
+export function recordWarmupExecution(status: "success" | "partial" | "failed" | "cancelled"): void {
+  searchCacheWarmupTotal.labels(status).inc();
+}
+
+export function recordWarmupQueryReplayed(result: "success" | "failure"): void {
+  searchCacheWarmupQueriesTotal.labels(result).inc();
+}
+
+export function recordWarmupDuration(durationSeconds: number): void {
+  searchCacheWarmupDurationSeconds.observe(durationSeconds);
+}
+
 
 export const dependencyFaults = createBudgetedCounter({
   name: "dependency_faults_total",
@@ -369,6 +470,32 @@ export const slowQueryDuration = createBudgetedHistogram({
   registers: [register],
 });
 
+// ─── Reputation Transparency Metrics ─────────────────────────────────────────
+
+export const reputationTransparencyRequestsTotal = createBudgetedCounter({
+  name: "reputation_transparency_requests_total",
+  help: "Total number of supplier reputation signal projection requests",
+  labels: ["tenant", "status"],
+  budget: 100,
+  registers: [register],
+});
+
+export const reputationSmallCellSuppressionsTotal = createBudgetedCounter({
+  name: "reputation_small_cell_suppressions_total",
+  help: "Total number of small-cell count suppressions applied to protect counterparty privacy",
+  labels: ["tenant", "category"],
+  budget: 100,
+  registers: [register],
+});
+
+export function recordReputationQuery(tenant: string, status: string): void {
+  reputationTransparencyRequestsTotal.labels(tenant || "unknown", status).inc();
+}
+
+export function recordSmallCellSuppression(tenant: string, category: string): void {
+  reputationSmallCellSuppressionsTotal.labels(tenant || "unknown", category).inc();
+}
+
 /**
  * Express middleware to track HTTP request duration.
  */
@@ -389,3 +516,4 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
 
   next();
 };
+

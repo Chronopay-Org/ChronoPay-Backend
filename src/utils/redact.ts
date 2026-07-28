@@ -10,6 +10,7 @@
  * - Non-mutating: creates a new object
  * - Circular reference detection
  * - Preserves original data structure and types
+ * - Hot-reloadable policy via redactionPolicy.ts
  */
 
 /**
@@ -94,9 +95,10 @@ const DEFAULT_MASK_PATTERN = (value: string): string => {
 
 /**
  * Checks if a field name should be redacted (case-insensitive)
+ * Reads from the current hot-reloadable policy.
  */
 const isSensitiveField = (fieldName: string): boolean => {
-  return SENSITIVE_FIELDS.has(fieldName.toLowerCase());
+  return policyIsFieldRedacted(fieldName);
 };
 
 /**
@@ -177,7 +179,8 @@ export const redact = (
 
 /**
  * Checks if a value would be redacted
- * Useful for testing and validation
+ * Useful for testing and validation.
+ * Reads from the current hot-reloadable policy.
  */
 export const wouldBeRedacted = (fieldName: string): boolean => {
   return isSensitiveField(fieldName);
@@ -185,9 +188,10 @@ export const wouldBeRedacted = (fieldName: string): boolean => {
 
 /**
  * Gets the list of all recognized sensitive field names
+ * from the current hot-reloadable policy.
  */
 export const getSensitiveFields = (): string[] => {
-  return Array.from(SENSITIVE_FIELDS);
+  return policyGetPolicyFields();
 };
 
 /**
