@@ -19,7 +19,8 @@
     "migrate": "tsx src/scripts/migrate.ts",
     "canary": "tsx scripts/canary.ts",
     "generate-openapi": "tsx src/scripts/generate-openapi.ts",
-    "release:sdk": "node scripts/release-sdk.js"
+    "release:sdk": "node scripts/release-sdk.js",
+    "verify-deploy-pr": "tsx scripts/verify-deploy-pr.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

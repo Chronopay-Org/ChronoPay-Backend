@@ -5,6 +5,8 @@ import { capacityForecaster } from "../services/capacityForecaster.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { _settlements } from "../services/settlementReconciler.js";
+import { getImpersonationSessionStore } from "../services/impersonationSessionStore.js";
+import type { SessionListOptions } from "../types/impersonation.types.js";
 
 const router = Router();
 
@@ -256,7 +258,21 @@ router.get(
   requireAdminToken,
   async (req: Request, res: Response) => {
     try {
-      const opts: SessionListOptions = {};
+      const store = getImpersonationSessionStore();
+      const opts: SessionListOptions = {
+        targetUserId: typeof req.query.targetUserId === "string" ? req.query.targetUserId : undefined,
+        adminId: typeof req.query.adminId === "string" ? req.query.adminId : undefined,
+        since: typeof req.query.since === "string" ? req.query.since : undefined,
+        limit: req.query.limit !== undefined ? parseInt(String(req.query.limit), 10) : undefined,
+        offset: req.query.offset !== undefined ? parseInt(String(req.query.offset), 10) : undefined,
+      };
+      const result = await store.listSessions(opts);
+      return res.status(200).json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message ?? "Failed to list impersonation sessions" });
+    }
+  },
+);
 
 export const resetDisputesState = () => {
   disputes.clear();
