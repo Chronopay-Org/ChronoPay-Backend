@@ -2,8 +2,14 @@ import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
 import { capacityForecaster } from "../services/capacityForecaster.js";
+import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
+import {
+  getPayoutQuarantineService,
+  type PayoutQuarantineEntry,
+} from "../services/quarantineStore.js";
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 
@@ -22,6 +28,11 @@ function buildBaseUrl(req: Request): string {
   const scheme = req.protocol;
   const host = req.get("host") ?? "localhost";
   return `${scheme}://${host}`;
+}
+
+function getActorIp(req: Request): string {
+  const rawIp = req.ip?.replace("::ffff:", "") ?? req.socket?.remoteAddress?.replace("::ffff:", "") ?? "127.0.0.1";
+  return rawIp || "127.0.0.1";
 }
 
 /**
@@ -95,6 +106,64 @@ router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response)
   return res.status(200).json({ success: true });
 });
 
+// --- Refund Routes ---
+
+/**
+ * @route POST /api/v1/admin/refunds
+ * @desc Create a partial refund against a completed payment session.
+ *       Enforces the invariant that sum of refunds <= captured amount.
+ * @access Private (admin token only)
+ */
+router.post("/refunds", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { paymentId, amountCents, currency, reason, refundedBy } = req.body;
+
+    if (!paymentId) {
+      return res.status(400).json({ success: false, error: "paymentId is required" });
+    }
+    if (!amountCents || typeof amountCents !== "number" || amountCents <= 0) {
+      return res.status(400).json({ success: false, error: "amountCents must be a positive integer" });
+    }
+
+    const refund = await RefundService.createRefundTraced({
+      paymentId,
+      amountCents,
+      currency,
+      reason,
+      refundedBy,
+    });
+
+    return res.status(201).json({ success: true, refund });
+  } catch (error: any) {
+    const status = error.status ?? 500;
+    return res.status(status).json({
+      success: false,
+      error: error.message ?? "Refund creation failed",
+      code: error.code,
+      details: error.details,
+    });
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/payments/:id/trace
+ * @desc Retrieve a payment trace including the original payment and all linked refund entries.
+ * @access Private (admin token only)
+ */
+router.get("/payments/:id/trace", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const trace = await RefundService.getPaymentTraceTraced(req.params.id);
+    return res.json({ success: true, trace });
+  } catch (error: any) {
+    const status = error.status ?? 500;
+    return res.status(status).json({
+      success: false,
+      error: error.message ?? "Trace retrieval failed",
+    });
+  }
+});
+
+// ----------------------------------------
 /**
  * @route POST /api/v1/admin/payouts/:transactionId/replay
  * @desc Initiate a replay of a failed supplier payout. Requires a reason and subsequent approval from a different admin.
@@ -143,7 +212,7 @@ router.post(
         context: { transactionId, initiatorId, reason, expiresAt },
       },
       {
-        actorIp: req.ip?.replace("::ffff:", "") || req.socket?.remoteAddress?.replace("::ffff:", "") || "127.0.0.1",
+        actorIp: getActorIp(req),
         resource: req.originalUrl,
         status: 202,
       }
@@ -215,7 +284,7 @@ router.post(
         },
       },
       {
-        actorIp: req.ip?.replace("::ffff:", "") || req.socket?.remoteAddress?.replace("::ffff:", "") || "127.0.0.1",
+        actorIp: getActorIp(req),
         resource: req.originalUrl,
         status: 200,
       }
@@ -282,6 +351,8 @@ type Dispute = {
  *     offset        – pagination offset (default 0)
  * @access Private (admin token only)
  */
+const impersonationSessionStore = new InMemoryImpersonationSessionStore();
+
 router.get(
   "/impersonation/sessions",
   requireAdminToken,
@@ -289,11 +360,38 @@ router.get(
     try {
       const opts: SessionListOptions = {};
 
-export const resetDisputesState = () => {
-  disputes.clear();
-  ledgers = { buyer: 1000, supplier: 1000 };
-  resetSeniorPool();
-};
+      if (typeof req.query.targetUserId === "string") {
+        opts.targetUserId = req.query.targetUserId;
+      }
+      if (typeof req.query.adminId === "string") {
+        opts.adminId = req.query.adminId;
+      }
+      if (typeof req.query.since === "string") {
+        opts.since = req.query.since;
+      }
+      if (typeof req.query.limit === "string") {
+        const parsed = Number.parseInt(req.query.limit, 10);
+        if (Number.isFinite(parsed)) {
+          opts.limit = parsed;
+        }
+      }
+      if (typeof req.query.offset === "string") {
+        const parsed = Number.parseInt(req.query.offset, 10);
+        if (Number.isFinite(parsed)) {
+          opts.offset = parsed;
+        }
+      }
+
+      const sessions = await impersonationSessionStore.listSessions(opts);
+      return res.status(200).json({ success: true, sessions });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list impersonation sessions",
+      });
+    }
+  },
+);
 
 function readStringField(body: any, key: string, fallback: unknown): string {
   if (!body || typeof body !== "object") {

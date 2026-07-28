@@ -57,6 +57,9 @@ export const ERROR_CODES = {
   UNPROCESSABLE_ENTITY: { status: 422, code: "UNPROCESSABLE_ENTITY" },
   BUNDLE_EXPIRED: { status: 422, code: "BUNDLE_EXPIRED" },
 
+  // --- Query budget (503) ---
+  QUERY_BUDGET_EXCEEDED: { status: 503, code: "QUERY_BUDGET_EXCEEDED" },
+
   // --- Infrastructure (500 / 503) ---
   INTERNAL_ERROR: { status: 500, code: "INTERNAL_ERROR" },
   DB_ERROR: { status: 500, code: "DB_ERROR" },
