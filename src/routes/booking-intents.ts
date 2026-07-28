@@ -26,11 +26,6 @@ import { logger } from "../utils/logger.js";
 import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 
-import { QuarantineStore } from '../services/quarantineStore.js';
-import { FraudScorer } from '../services/fraudScorer.js';
-import { getFraudReasonCode, getFraudMessage, FraudReasonCode } from '../services/fraudReasonCodes.js';
-import crypto from 'crypto';
-
 export function createBookingIntentsRouter() {
   const router = Router();
 
