@@ -16,11 +16,7 @@ import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
-import { createCORSMiddleware } from "./middleware/cors.js";
-import { getCORSConfig } from "./config/cors.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
-import { createCORSMiddleware } from "./middleware/cors.js";
-import { getCORSConfig } from "./config/cors.js";
 import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
@@ -50,6 +46,8 @@ import adminRouter from "./routes/admin.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
 import graphqlRouter from "./routes/graphql.js";
 import webhookRoutes, { registerWebhookRoutes } from "./routes/webhooks.js";
+import webhookRouter, { registerWebhookRoutes } from "./routes/webhooks.js";
+import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 
 // Import modules
 import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
@@ -260,6 +258,11 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(metricsMiddleware);
   app.use(createRequestLogger());
 
+  // ── Impersonation session recorder ────────────────────────────────────────
+  // Must be registered AFTER any auth middleware that populates req.impersonation.
+  // It is a transparent no-op for requests without an impersonation context.
+  app.use(impersonationRecorder());
+
   // ── Feature flag context middleware (makes flags available to routes) ──────
   app.use(featureFlagContextMiddleware);
 
@@ -399,15 +402,16 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3b. Admin Routes
   app.use("/api/v1/admin", adminRouter);
+  app.use("/api/v1/admin", redactionPolicyRouter);
+
+  // 3c. GDPR Export Routes
+  app.use("/api/v1/gdpr/export", gdprExportRouter);
   
   // 3c. Legal Holds Routes
   app.use("/api/v1/admin", legalHoldRouter);
 
-  // 3c. GraphQL Route
-  app.use("/api/v1/graphql", graphqlRouter);
-
-  // 3c. GraphQL Route
-  app.use("/api/v1/graphql", graphqlRouter);
+  // 3d. Reputation Transparency Routes
+  app.use("/api/v1/suppliers", reputationRouter);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();

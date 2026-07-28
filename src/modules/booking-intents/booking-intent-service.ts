@@ -5,12 +5,13 @@ import type {
   BookingIntentRepository,
   PricingSnapshot,
 } from "./booking-intent-repository.js";
-import { SchedulingService } from "../../services/schedulingService.js";
+import { SchedulingService, SlotExpiredError } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
 import { resolvePrice } from "../../services/pricingStrategy.js";
+import { CancellationPolicyService, RefundBreakdown } from "../../services/cancellationPolicy.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -33,9 +34,11 @@ export class BookingIntentError extends AppError {
   constructor(
     readonly status: number,
     message: string,
+    codeOverride?: string,
   ) {
     const code =
-      status === 400
+      codeOverride ??
+      (status === 400
         ? ERROR_CODES.BAD_REQUEST.code
         : status === 403
           ? ERROR_CODES.FORBIDDEN.code
@@ -45,7 +48,7 @@ export class BookingIntentError extends AppError {
               ? ERROR_CODES.CONFLICT.code
               : status === 422
                 ? ERROR_CODES.UNPROCESSABLE_ENTITY.code
-                : ERROR_CODES.INTERNAL_ERROR.code;
+                : ERROR_CODES.INTERNAL_ERROR.code);
     super(message, status, code, true);
     this.name = "BookingIntentError";
   }
@@ -71,6 +74,17 @@ export class BookingIntentService {
 
     if (!slot.bookable) {
       throw new BookingIntentError(409, "Selected slot is not bookable.");
+    }
+
+    if (slot.validUntil !== undefined && slot.validUntil !== null) {
+      const currentTime = this.nowMs();
+      if (currentTime >= slot.validUntil) {
+        throw new BookingIntentError(
+          422,
+          "Bundle for this slot has expired. Redemption is no longer available.",
+          ERROR_CODES.BUNDLE_EXPIRED.code,
+        );
+      }
     }
 
     if (slot.professional === actor.userId) {
@@ -238,6 +252,20 @@ export class BookingIntentService {
     this.schedulingService.releaseSlot(intent.slotId);
 
     return updated;
+  }
+
+  previewCancel(intentId: string, actor: AuthContext): RefundBreakdown {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+      throw new BookingIntentError(403, "You are not authorized to preview cancel this booking intent.");
+    }
+
+    const policy = new CancellationPolicyService();
+    return policy.calculateRefund(intent);
   }
 
   expireIntent(intentId: string): BookingIntentRecord {

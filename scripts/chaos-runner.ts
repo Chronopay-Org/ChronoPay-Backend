@@ -28,7 +28,7 @@ export async function persistOutcome(outcome: ScenarioOutcome): Promise<void> {
       const data = fs.readFileSync(OUTCOMES_FILE, 'utf-8');
       outcomes = JSON.parse(data);
     }
-  } catch (err) {
+  } catch {
     // ignore read error
   }
   
@@ -66,9 +66,9 @@ export async function runScenario(spec: ScenarioSpec): Promise<ScenarioOutcome> 
     let preCheckPassed = false;
     try {
       preCheckPassed = await spec.preCheck();
-    } catch (err: any) {
+    } catch {
       outcome.status = 'PRE_CHECK_FAILED';
-      outcome.error = `Pre-check threw error: ${err.message}`;
+      outcome.error = 'Pre-check threw error';
       outcome.durationMs = Date.now() - start;
       await persistOutcome(outcome);
       return outcome;
@@ -85,9 +85,9 @@ export async function runScenario(spec: ScenarioSpec): Promise<ScenarioOutcome> 
     // Run
     try {
       await spec.run();
-    } catch (err: any) {
+    } catch {
       outcome.status = 'RUN_FAILED';
-      outcome.error = `Run threw error: ${err.message}`;
+      outcome.error = 'Run threw error';
       outcome.durationMs = Date.now() - start;
       await persistOutcome(outcome);
       return outcome;
@@ -97,9 +97,9 @@ export async function runScenario(spec: ScenarioSpec): Promise<ScenarioOutcome> 
     let postCheckPassed = false;
     try {
       postCheckPassed = await spec.postCheck();
-    } catch (err: any) {
+    } catch {
       outcome.status = 'POST_CHECK_FAILED';
-      outcome.error = `Post-check threw error: ${err.message}`;
+      outcome.error = 'Post-check threw error';
       outcome.durationMs = Date.now() - start;
       await persistOutcome(outcome);
       return outcome;
@@ -110,9 +110,9 @@ export async function runScenario(spec: ScenarioSpec): Promise<ScenarioOutcome> 
       outcome.error = 'Post-check failed or returned false.';
     }
 
-  } catch (err: any) {
+  } catch {
     outcome.status = 'ABORTED';
-    outcome.error = `Unexpected error: ${err.message}`;
+    outcome.error = 'Unexpected error';
   }
 
   outcome.durationMs = Date.now() - start;
