@@ -21,7 +21,12 @@ import { getPayoutDlqStore } from "../services/payoutDlqStore.js";
 import type { PayoutDlqStatus } from "../services/payoutDlqStore.js";
 import { getImpersonationSessionStore } from "../services/impersonationSessionStore.js";
 import type { SessionListOptions } from "../types/impersonation.types.js";
-import type { SeniorPanelVote } from "../types/dispute.js";
+import type { Dispute as DisputeDomainType, SeniorPanelVote } from "../types/dispute.js";
+import {
+  scanAndAutoResolve,
+  reverseAutoResolve,
+} from "../services/disputeDeadlineService.js";
+import { startDisputeDeadlineScheduler, isDisputeDeadlineSchedulerRunning } from "../scheduler/disputeDeadlineScheduler.js";
 import type { LocalIntentStatus } from "../services/escrowDriftReconciler.js";
 import { getTzDriftMetricsSnapshot } from "../metrics/tzDriftMetrics.js";
 import { getLastScanFindings } from "../scheduler/tzDriftMonitor.js";
@@ -30,7 +35,7 @@ const router = Router();
 const disputeQueueService = new DisputeArbitrationQueueService();
 
 // In-memory dispute state for E2E tests
-const disputes = new Map<string, any>();
+const disputes = new Map<string, DisputeDomainType>();
 let ledgers = { buyer: 1000, supplier: 1000 };
 
 // --- Pending Payout Replays State ---
@@ -291,6 +296,14 @@ router.get(
     }
   },
 );
+
+/**
+ * Export a snapshot of the current dispute list. Used by the dispute deadline
+ * scheduler in `src/index.ts` and by tests via `resetDisputesState`.
+ */
+export function getDisputes(): DisputeDomainType[] {
+  return Array.from(disputes.values());
+}
 
 export const resetDisputesState = () => {
   disputes.clear();
@@ -684,6 +697,85 @@ router.post("/disputes/:id/timeout", requireAdminToken, (req, res) => {
   return res.status(200).json({ success: true, dispute });
 });
 // ----------------------------------------
+
+/**
+ * @route POST /api/v1/admin/disputes/deadline/scan
+ * @desc Trigger a one-off scan of stale disputes for auto-resolution.
+ *   Returns the list of disputes that were auto-resolved during this scan.
+ * @access Private (admin token only)
+ */
+router.post("/disputes/deadline/scan", requireAdminToken, (_req: Request, res: Response) => {
+  try {
+    const allDisputes = Array.from(disputes.values()) as DisputeDomainType[];
+    // Support configurable windows via query params for testing
+    const now = Date.now();
+    const result = scanAndAutoResolve(allDisputes, {
+      now: () => now,
+    });
+    return res.status(200).json({
+      success: true,
+      resolved: result.resolved,
+      skipped: result.skipped,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message ?? "Deadline scan failed",
+    });
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/disputes/:id/reverse-auto-resolve
+ * @desc Reverse an auto-resolution within the reversal window.
+ *   The dispute is restored to the status it held before auto-resolution.
+ * @access Private (admin token only)
+ */
+router.post("/disputes/:id/reverse-auto-resolve", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const result = reverseAutoResolve(
+      disputes,
+      req.params.id,
+    );
+
+    if (!result.reversed) {
+      const statusMap: Record<string, number> = {
+        DISPUTE_NOT_FOUND: 404,
+        NOT_AUTO_RESOLVED: 400,
+        REVERSAL_WINDOW_EXPIRED: 410,
+        INVALID_STATE: 409,
+      };
+      const httpStatus = result.error ? (statusMap[result.error.code] ?? 400) : 400;
+      return res.status(httpStatus).json({
+        success: false,
+        error: result.error?.message ?? "Reversal failed",
+        code: result.error?.code,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      dispute: result.dispute,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message ?? "Reversal failed",
+    });
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/disputes/deadline/status
+ * @desc Check whether the dispute deadline scheduler is running.
+ * @access Private (admin token only)
+ */
+router.get("/disputes/deadline/status", requireAdminToken, (_req: Request, res: Response) => {
+  return res.status(200).json({
+    success: true,
+    running: isDisputeDeadlineSchedulerRunning(),
+  });
+});
 
 // ─── Timezone Drift Monitor Admin API ─────────────────────────────────────────
 
