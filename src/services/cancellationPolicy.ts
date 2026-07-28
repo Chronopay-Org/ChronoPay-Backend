@@ -6,6 +6,7 @@ import {
 } from "../modules/booking-intents/booking-intent-repository.js";
 import { BookingIntentError } from "../modules/booking-intents/booking-intent-service.js";
 import { AuditLogger, defaultAuditLogger } from "./auditLogger.js";
+import { HoldFeePolicyService } from "./holdFeePolicy.js";
 
 export interface RefundBreakdown {
   fee: number;
@@ -23,6 +24,13 @@ export interface RefundBreakdown {
   hoursUntilStart: number;
   /** Base price before any adjustments */
   basePrice: number;
+  /**
+   * Non-refundable hold fee retention in smallest currency unit.
+   * Deducted from the cancellation refund. Disclosed separately
+   * so it is visible in the booking receipt.
+   * Defaults to 0 when no hold fee policy applies.
+   */
+  holdFee: number;
 }
 
 export interface CancellationPolicyChangeAudit {
@@ -197,6 +205,7 @@ export function computeRefundWithTerms(
       tierApplied: null,
       hoursUntilStart,
       basePrice: price,
+      holdFee: 0,
     };
   }
 
@@ -229,6 +238,20 @@ export function computeRefundWithTerms(
     },
     hoursUntilStart,
     basePrice: price,
+    holdFee: 0,
+  };
+}
+
+export function applyHoldFeeToRefund(
+  breakdown: RefundBreakdown,
+  holdFeeCents: number,
+): RefundBreakdown {
+  const validatedFee = Math.max(0, Math.round(holdFeeCents));
+  const netRefund = Math.max(0, breakdown.netRefund - validatedFee);
+  return {
+    ...breakdown,
+    holdFee: validatedFee,
+    netRefund,
   };
 }
 
@@ -326,7 +349,10 @@ export class CancellationPolicyService {
     };
   }
 
-  calculateRefund(intent: BookingIntentRecord): RefundBreakdown {
+  calculateRefund(
+    intent: BookingIntentRecord,
+    holdFeeService?: HoldFeePolicyService,
+  ): RefundBreakdown {
     if (intent.status === "cancelled") {
       throw new BookingIntentError(409, "Already cancelled");
     }
@@ -349,12 +375,22 @@ export class CancellationPolicyService {
     }
 
     validateProratedCancellationTerms(terms);
-    return computeRefundWithTerms(terms, price, hoursUntilStart, policyVersionId);
+    const breakdown = computeRefundWithTerms(terms, price, hoursUntilStart, policyVersionId);
+
+    // Apply hold fee retention if a snapshot exists on the intent
+    if (intent.holdFeePolicySnapshot) {
+      const svc = holdFeeService ?? new HoldFeePolicyService();
+      const holdFeeCents = svc.computeRetention(intent.holdFeePolicySnapshot);
+      return applyHoldFeeToRefund(breakdown, holdFeeCents);
+    }
+
+    return breakdown;
   }
 
   async previewRefundWithOverride(
     intent: BookingIntentRecord,
     overrideTerms: ProratedCancellationTerms,
+    holdFeeService?: HoldFeePolicyService,
   ): Promise<RefundBreakdown> {
     if (intent.status === "cancelled") {
       throw new BookingIntentError(409, "Already cancelled");
@@ -365,7 +401,15 @@ export class CancellationPolicyService {
     const hoursUntilStart = msUntilStart / (1000 * 60 * 60);
 
     const version = intent.cancellationPolicySnapshot?.policyVersionId ?? "override-preview";
-    return computeRefundWithTerms(overrideTerms, price, hoursUntilStart, version);
+    const breakdown = computeRefundWithTerms(overrideTerms, price, hoursUntilStart, version);
+
+    if (intent.holdFeePolicySnapshot) {
+      const svc = holdFeeService ?? new HoldFeePolicyService();
+      const holdFeeCents = svc.computeRetention(intent.holdFeePolicySnapshot);
+      return applyHoldFeeToRefund(breakdown, holdFeeCents);
+    }
+
+    return breakdown;
   }
 
   async registerNewPolicyVersion(params: {
