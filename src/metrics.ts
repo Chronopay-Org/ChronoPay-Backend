@@ -227,6 +227,88 @@ export const settlementsPendingFinality = createBudgetedGauge({
   budget: 0,
   registers: [register],
 });
+
+// ─── Treasury drain metrics ─────────────────────────────────────────────────
+
+/**
+ * Gauge tracking the current balance of a pre-funded treasury per asset and account.
+ */
+export const treasuryBalance = createBudgetedGauge({
+  name: "treasury_balance",
+  help: "Current balance of the pre-funded instant-payout treasury",
+  labels: ["asset", "account"],
+  budget: 16,
+  registers: [register],
+});
+
+/**
+ * Gauge encoding the staged severity of a treasury drain alarm per asset and account.
+ * 0 = ok, 1 = warning, 2 = page, 3 = critical
+ */
+export const treasuryDrainSeverity = createBudgetedGauge({
+  name: "treasury_drain_severity",
+  help: "Current severity of the treasury drain alarm (0=ok, 1=warning, 2=page, 3=critical)",
+  labels: ["asset", "account"],
+  budget: 16,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time a poll failure or stale read is detected.
+ */
+export const treasuryPollFailures = createBudgetedCounter({
+  name: "treasury_poll_failures_total",
+  help: "Total number of treasury balance poll failures or staleness detections",
+  labels: ["asset", "account"],
+  budget: 16,
+  registers: [register],
+});
+
+/**
+ * Counter incremented when an unknown asset is observed in treasury response.
+ */
+export const treasuryUnknownAsset = createBudgetedCounter({
+  name: "treasury_unknown_asset_total",
+  help: "Total number of times an unknown asset was observed in a treasury balance response",
+  labels: ["asset"],
+  budget: 16,
+  registers: [register],
+});
+
+// ─── Instant payout fee metrics ────────────────────────────────────────────
+
+/**
+ * Counter tracking total fees collected per tier.
+ */
+export const instantPayoutFeesTotal = createBudgetedCounter({
+  name: "instant_payout_fees_total",
+  help: "Total instant payout fees collected, by supplier tier",
+  labels: ["tier"],
+  budget: 4,
+  registers: [register],
+});
+
+/**
+ * Gauge tracking current monthly fee accrual per supplier and currency.
+ */
+export const instantPayoutMonthlyAccrual = createBudgetedGauge({
+  name: "instant_payout_monthly_accrual",
+  help: "Current monthly fee accrual for an instant payout supplier",
+  labels: ["supplier", "currency"],
+  budget: 64,
+  registers: [register],
+});
+
+/**
+ * Counter tracking how many payouts hit their monthly cap.
+ */
+export const instantPayoutCapHits = createBudgetedCounter({
+  name: "instant_payout_cap_hits_total",
+  help: "Total number of instant payouts where the monthly fee cap was reached",
+  labels: ["supplier"],
+  budget: 64,
+  registers: [register],
+});
 /** Convenience helpers used by slotCache.ts */
 export function recordCacheHit(): void {
   slotCacheHits.inc();
@@ -277,6 +359,43 @@ export const expiryCleanupSafetyBrakeTriggers = createBudgetedCounter({
   help: "Total number of expiry cleanup sweeps skipped because the candidate sweep size exceeded the safety threshold",
   labels: [],
   budget: 0,
+  registers: [register],
+});
+
+// ─── Outbox compaction metrics ────────────────────────────────────────────────
+
+/**
+ * Counter incremented for each row compacted (deleted) from the outbox table.
+ */
+export const outboxCompactionRowsDeleted = createBudgetedCounter({
+  name: "outbox_compaction_rows_deleted_total",
+  help: "Total number of acked outbox rows compacted (deleted) after retention window",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time the compaction worker triggers the safety
+ * brake (skips the run because candidate row count exceeds the threshold).
+ */
+export const outboxCompactionSafetyBrakeTriggers = createBudgetedCounter({
+  name: "outbox_compaction_safety_brake_triggers_total",
+  help: "Total number of outbox compaction runs skipped due to safety threshold",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Histogram tracking the duration (in milliseconds) of a single compaction sweep.
+ */
+export const outboxCompactionDurationMs = createBudgetedHistogram({
+  name: "outbox_compaction_duration_ms",
+  help: "Duration in milliseconds of an outbox compaction sweep",
+  labels: [],
+  budget: 0,
+  buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000],
   registers: [register],
 });
 

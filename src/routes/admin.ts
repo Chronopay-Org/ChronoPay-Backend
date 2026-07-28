@@ -128,8 +128,23 @@ router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response)
 // failures; `logAudit()` swallows errors so a flaky disk does not stall
 // the dispute pipeline.
 
-const disputes = new Map<string, Dispute>();
-let ledgers = { buyer: 1000, supplier: 1000 };
+/**
+ * @route GET /api/v1/admin/impersonation/sessions
+ * @desc List impersonation sessions with optional filters.
+ *   Query params:
+ *     targetUserId  – filter by impersonated user
+ *     adminId       – filter by the admin who performed the impersonation
+ *     since         – ISO 8601 lower-bound for startedAt
+ *     limit         – max results (default 50, max 200)
+ *     offset        – pagination offset (default 0)
+ * @access Private (admin token only)
+ */
+router.get(
+  "/impersonation/sessions",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const opts: SessionListOptions = {};
 
 export const resetDisputesState = () => {
   disputes.clear();

@@ -260,6 +260,11 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(metricsMiddleware);
   app.use(createRequestLogger());
 
+  // ── Impersonation session recorder ────────────────────────────────────────
+  // Must be registered AFTER any auth middleware that populates req.impersonation.
+  // It is a transparent no-op for requests without an impersonation context.
+  app.use(impersonationRecorder());
+
   // ── Feature flag context middleware (makes flags available to routes) ──────
   app.use(featureFlagContextMiddleware);
 
@@ -399,6 +404,10 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3b. Admin Routes
   app.use("/api/v1/admin", adminRouter);
+  app.use("/api/v1/admin", redactionPolicyRouter);
+
+  // 3c. GDPR Export Routes
+  app.use("/api/v1/gdpr/export", gdprExportRouter);
   
   // 3c. Legal Holds Routes
   app.use("/api/v1/admin", legalHoldRouter);
