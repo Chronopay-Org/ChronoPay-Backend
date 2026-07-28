@@ -1,7 +1,10 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
-import { capacityForecaster } from "../services/capacityForecaster.js";
+import { getImpersonationSessionStore } from "../services/impersonationSessionStore.js";
+import type { SessionListOptions } from "../types/impersonation.types.js";
+import { defaultAuditLogger } from "../services/auditLogger.js";
+import { IMPERSONATION_AUDIT_ACTIONS } from "../types/auditEvent.js";
 
 const router = Router();
 
@@ -82,88 +85,167 @@ router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response)
   return res.status(200).json({ success: true });
 });
 
-// --- Mock Dispute Logic for E2E Tests ---
-type Dispute = {
-  id: string;
-  status: "OPEN" | "EVIDENCED" | "ADJUDICATED" | "APPEALED" | "CLOSED" | "TIMEOUT";
-  buyerId: string;
-  supplierId: string;
-  amount: number;
-  evidence: string[];
-  ruling?: string;
-  arbiter?: string;
-};
+// ─── Impersonation Session Review API ────────────────────────────────────────
 
-const disputes = new Map<string, Dispute>();
-let ledgers = { buyer: 1000, supplier: 1000 };
+/**
+ * @route GET /api/v1/admin/impersonation/sessions
+ * @desc List impersonation sessions with optional filters.
+ *   Query params:
+ *     targetUserId  – filter by impersonated user
+ *     adminId       – filter by the admin who performed the impersonation
+ *     since         – ISO 8601 lower-bound for startedAt
+ *     limit         – max results (default 50, max 200)
+ *     offset        – pagination offset (default 0)
+ * @access Private (admin token only)
+ */
+router.get(
+  "/impersonation/sessions",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const opts: SessionListOptions = {};
 
-export const resetDisputesState = () => {
-  disputes.clear();
-  ledgers = { buyer: 1000, supplier: 1000 };
-};
+      if (typeof req.query.targetUserId === "string") {
+        opts.targetUserId = req.query.targetUserId;
+      }
+      if (typeof req.query.adminId === "string") {
+        opts.adminId = req.query.adminId;
+      }
+      if (typeof req.query.since === "string") {
+        const ts = new Date(req.query.since);
+        if (isNaN(ts.getTime())) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid 'since' timestamp" });
+        }
+        opts.since = ts.toISOString();
+      }
+      if (req.query.limit !== undefined) {
+        const lim = parseInt(String(req.query.limit), 10);
+        if (isNaN(lim) || lim < 1 || lim > 200) {
+          return res
+            .status(400)
+            .json({ success: false, error: "limit must be between 1 and 200" });
+        }
+        opts.limit = lim;
+      }
+      if (req.query.offset !== undefined) {
+        const off = parseInt(String(req.query.offset), 10);
+        if (isNaN(off) || off < 0) {
+          return res
+            .status(400)
+            .json({ success: false, error: "offset must be a non-negative integer" });
+        }
+        opts.offset = off;
+      }
 
-router.post("/disputes", requireAdminToken, (req, res) => {
-  const { buyerId, supplierId, amount } = req.body;
-  const id = `dispute-${Date.now()}`;
-  disputes.set(id, {
-    id,
-    status: "OPEN",
-    buyerId,
-    supplierId,
-    amount,
-    evidence: [],
-  });
-  return res.status(201).json({ success: true, dispute: disputes.get(id) });
-});
+      const store = getImpersonationSessionStore();
+      const sessions = await store.listSessions(opts);
 
-router.post("/disputes/:id/evidence", requireAdminToken, (req, res) => {
-  const dispute = disputes.get(req.params.id);
-  if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
-  if (req.body.failUpload) return res.status(500).json({ success: false, error: "Evidence upload failed" });
-  
-  dispute.evidence.push(req.body.evidence);
-  dispute.status = "EVIDENCED";
-  return res.status(200).json({ success: true, dispute, evidenceAnchor: `anchor-${Date.now()}` });
-});
+      return res.status(200).json({ success: true, sessions });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list impersonation sessions",
+      });
+    }
+  },
+);
 
-router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
-  const dispute = disputes.get(req.params.id);
-  if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
-  
-  const { ruling, arbiter } = req.body;
-  dispute.ruling = ruling;
-  dispute.arbiter = arbiter;
-  dispute.status = "ADJUDICATED";
+/**
+ * @route GET /api/v1/admin/impersonation/sessions/:sessionId
+ * @desc Retrieve a full impersonation session record including all request logs.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/impersonation/sessions/:sessionId",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
 
-  if (ruling === "BUYER_FAVOR") {
-    ledgers.buyer += dispute.amount;
-    ledgers.supplier -= dispute.amount;
-  } else {
-    ledgers.buyer -= dispute.amount;
-    ledgers.supplier += dispute.amount;
-  }
-  
-  return res.status(200).json({ 
-    success: true, 
-    dispute, 
-    rulingAudit: `audit-${Date.now()}`,
-    ledgers 
-  });
-});
+      if (!sessionId || typeof sessionId !== "string" || sessionId.trim() === "") {
+        return res.status(400).json({ success: false, error: "Missing sessionId" });
+      }
 
-router.post("/disputes/:id/appeal", requireAdminToken, (req, res) => {
-  const dispute = disputes.get(req.params.id);
-  if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
-  dispute.status = "APPEALED";
-  return res.status(200).json({ success: true, dispute });
-});
+      const store = getImpersonationSessionStore();
+      const session = await store.getSession(sessionId.trim());
 
-router.post("/disputes/:id/timeout", requireAdminToken, (req, res) => {
-  const dispute = disputes.get(req.params.id);
-  if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
-  dispute.status = "TIMEOUT";
-  return res.status(200).json({ success: true, dispute });
-});
-// ----------------------------------------
+      if (!session) {
+        return res.status(404).json({
+          success: false,
+          error: `Impersonation session '${sessionId}' not found`,
+        });
+      }
+
+      // Audit the review access itself
+      void defaultAuditLogger.logImpersonationEvent(
+        "impersonation.session.reviewed",
+        {
+          impersonationSessionId: session.sessionId,
+          adminId: session.adminId,
+          targetUserId: session.targetUserId,
+        },
+        { reviewedBy: req.ip ?? "unknown" },
+      );
+
+      return res.status(200).json({ success: true, session });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to retrieve impersonation session",
+      });
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/impersonation/sessions/:sessionId/close
+ * @desc Manually close an active impersonation session.
+ *   Useful when the front-end token expires before the server-side TTL.
+ * @access Private (admin token only)
+ */
+router.post(
+  "/impersonation/sessions/:sessionId/close",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+
+      if (!sessionId || typeof sessionId !== "string" || sessionId.trim() === "") {
+        return res.status(400).json({ success: false, error: "Missing sessionId" });
+      }
+
+      const store = getImpersonationSessionStore();
+      const existing = await store.getSession(sessionId.trim());
+
+      if (!existing) {
+        return res.status(404).json({
+          success: false,
+          error: `Impersonation session '${sessionId}' not found`,
+        });
+      }
+
+      const closed = await store.closeSession(sessionId.trim());
+
+      void defaultAuditLogger.logImpersonationEvent(
+        IMPERSONATION_AUDIT_ACTIONS.SESSION_CLOSED,
+        {
+          impersonationSessionId: closed.sessionId,
+          adminId: closed.adminId,
+          targetUserId: closed.targetUserId,
+        },
+        { closedBy: "admin-api", requestCount: closed.requests.length },
+      );
+
+      return res.status(200).json({ success: true, session: closed });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to close impersonation session",
+      });
+    }
+  },
+);
 
 export default router;
