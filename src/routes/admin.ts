@@ -5,10 +5,8 @@ import { auditExportService } from "../services/auditExportService.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
-import {
-  getPayoutQuarantineService,
-  type PayoutQuarantineEntry,
-} from "../services/quarantineStore.js";
+
+
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 
@@ -378,15 +376,7 @@ router.get(
   requireAdminToken,
   async (req: Request, res: Response) => {
     try {
-      const _opts: SessionListOptions = {};
-      return res.status(200).json({ success: true, sessions: [] });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
-    }
-  },
-);
-
-      if (typeof req.query.targetUserId === "string") {
+      const opts: SessionListOptions = {};      if (typeof req.query.targetUserId === "string") {
         opts.targetUserId = req.query.targetUserId;
       }
       if (typeof req.query.adminId === "string") {

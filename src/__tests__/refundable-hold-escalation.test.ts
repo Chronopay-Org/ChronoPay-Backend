@@ -19,9 +19,7 @@ import {
 import {
   EscrowStateProjector,
 } from "../scheduler/escrowStateProjector.js";
-import type { EscrowEvent } from "../scheduler/escrowEventTypes.js";
 import {
-  FakeEscrowContractClient,
   VALID_CONTRACT_ADDRESS,
   makeEvent,
 } from "../test-helpers/escrowContractClient.js";

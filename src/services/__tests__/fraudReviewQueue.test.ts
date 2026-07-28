@@ -29,7 +29,7 @@ describe("FraudReviewQueue", () => {
 
   it("should allow operator to approve and emit to feature store", () => {
     const item = fraudReviewQueue.enqueue("intent-2", 1, ["shared_ip"]);
-    const decided = fraudReviewQueue.decide(item.id, "operator-1", "approved", "looks fine");
+    const _decided = fraudReviewQueue.decide(item.id, "operator-1", "approved", "looks fine");
     
     expect(decided.status).toBe("approved");
     expect(decided.operatorId).toBe("operator-1");
@@ -58,7 +58,7 @@ describe("FraudReviewQueue", () => {
     // Fast-forward past the 15 min SLA
     jest.advanceTimersByTime(16 * 60 * 1000);
     
-    const decided = fraudReviewQueue.decide(item.id, "operator-2", "rejected", "too risky");
+    const _decided = fraudReviewQueue.decide(item.id, "operator-2", "rejected", "too risky");
     
     const log = fraudReviewQueue.getFeatureStoreLog();
     expect(log[0].slaBreached).toBe(true);

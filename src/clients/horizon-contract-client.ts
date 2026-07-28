@@ -315,6 +315,7 @@ export class HorizonContractClient implements IContractClient {
     } catch {
       return false;
     }
+  }
   /**
    * Checks the account balance against the Stellar minimum reserve before submitting a payout.
    * The reserve is derived from the effective subentry count, including trustlines and offers.

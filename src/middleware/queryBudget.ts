@@ -4,7 +4,7 @@ import {
   type QueryBudgetContext,
 } from "../db/queryBudgetContext.js";
 import { timeoutConfig } from "../config/timeouts.js";
-import { queryBudgetBreaches, queryBudgetSqlTimeMs } from "../metrics.js";
+import { queryBudgetSqlTimeMs } from "../metrics.js";
 import { logger } from "../utils/logger.js";
 import { getTraceContext } from "../tracing/index.js";
 

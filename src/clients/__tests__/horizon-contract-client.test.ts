@@ -537,7 +537,6 @@ import {
   concatBuffers,
   defaultFeeBumpEnvelope,
   defaultRegularEnvelope,
-  hexToBytes,
   int64BE,
   makePaymentOperation,
   makeTestSig,
@@ -545,7 +544,7 @@ import {
   toBase64Xdr,
   uint32BE,
 } from "./fee-bump-fixtures.js";
-import { ENVELOPE_TYPE_FEE_BUMP, ENVELOPE_TYPE_TX, KEY_TYPE_ED25519 } from "../fee-bump-validator.js";
+import { ENVELOPE_TYPE_FEE_BUMP, ENVELOPE_TYPE_TX } from "../fee-bump-validator.js";
 
 describe("HorizonContractClient.sendTransaction() — fee-bump validation (issue #436)", () => {
   it("posts a valid fee-bump envelope to /transactions", async () => {
