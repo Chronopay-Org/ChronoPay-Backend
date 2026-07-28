@@ -47,8 +47,7 @@ import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
-import { legalHoldRouter } from "./routes/legalHold.js";
-import webhookRouter, { registerWebhookRoutes } from "./routes/webhooks.js";
+import graphqlRouter from "./routes/graphql.js";
 
 // Import modules
 import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
@@ -401,6 +400,9 @@ export function createApp(options: AppFactoryOptions = {}) {
   
   // 3c. Legal Holds Routes
   app.use("/api/v1/admin", legalHoldRouter);
+
+  // 3c. GraphQL Route
+  app.use("/api/v1/graphql", graphqlRouter);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
