@@ -10,8 +10,8 @@
     "dev": "tsx watch src/index.ts",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.{ts,js,cjs,mjs}\" \".github/workflows/*.{yml,yaml}\" \"eslint.config.js\" \"package.json\" \"tsconfig.json\" \"README.md\" \".prettierrc\"",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
-    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --coverage",
+    "test": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --runInBand",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --runInBand --coverage",
     "migrate": "tsx src/scripts/migrate.ts",
     "canary": "tsx scripts/canary.ts",
     "generate-openapi": "tsx src/scripts/generate-openapi.ts"
