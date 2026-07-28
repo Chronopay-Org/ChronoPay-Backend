@@ -9,7 +9,7 @@
  * - Backward compatibility with old ERROR_CODES
  */
 
-import { describe, it, expect, beforeEach } from "@jest/globals";
+import { describe, it, expect } from "@jest/globals";
 import {
   ERROR_TAXONOMY,
   type PublicErrorCode,
@@ -152,7 +152,7 @@ describe("Error Taxonomy", () => {
 
     it("should fallback to English for missing keys", () => {
       const messageKey = "errors.validation.bad_request" as any;
-      const enMessage = resolveMessage(messageKey, "en");
+      resolveMessage(messageKey, "en");
       const fallback = resolveMessage("nonexistent.key" as any, "es");
       // Should return the key itself as fallback
       expect(fallback).toBe("nonexistent.key");

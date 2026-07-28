@@ -8,7 +8,17 @@
  *   fixed        – always returns the configured base price
  *   time_decay   – price decreases linearly as the slot start time approaches
  *   demand_based – price scales with the ratio of active bookings to capacity
+ *
+ * Bundle Discount Support:
+ *   Discount curves can be applied to bundle purchases with min-buy thresholds
+ *   and stackability rules. See discountCurveService for details.
  */
+
+import {
+  resolveBundleDiscount,
+  type BundlePricingContext,
+  type AppliedDiscountRecord,
+} from "./discountCurveService.js";
 
 // ─── Core types ───────────────────────────────────────────────────────────────
 
@@ -223,4 +233,57 @@ export function resolvePrice(strategyId: StrategyId, input: PricingInput): Prici
 /** Returns the list of registered strategy identifiers. */
 export function listStrategies(): StrategyId[] {
   return Object.keys(REGISTRY) as StrategyId[];
+}
+
+// ─── Bundle Pricing with Discount Curves ──────────────────────────────────────
+
+/** Result of bundle pricing including discount information. */
+export interface BundlePricingResult {
+  /** Strategy result before discount. */
+  strategyResult: PricingResult;
+  /** Applied discount record (if any). */
+  discount: AppliedDiscountRecord;
+  /** Final price after discount. */
+  finalPrice: number;
+  /** Total savings from discount. */
+  savings: number;
+}
+
+/**
+ * Resolve bundle price with discount curves applied.
+ *
+ * This function first applies the pricing strategy, then applies any applicable
+ * discount curves based on the bundle context and quantity.
+ *
+ * @param strategyId - The pricing strategy to use
+ * @param input - The pricing input
+ * @param bundleContext - Bundle-specific context for discount resolution
+ * @returns BundlePricingResult with discount applied
+ */
+export function resolveBundlePrice(
+  strategyId: StrategyId,
+  input: PricingInput,
+  bundleContext: Omit<BundlePricingContext, "basePricePerUnit">,
+): BundlePricingResult {
+  // First, resolve the base price using the strategy
+  const strategyResult = resolvePrice(strategyId, input);
+
+  // Then, resolve any applicable discount
+  const discountContext: BundlePricingContext = {
+    ...bundleContext,
+    basePricePerUnit: input.basePrice,
+  };
+
+  const discount = resolveBundleDiscount(discountContext);
+
+  // Calculate final price
+  const finalPrice = discount.finalPrice;
+  const savings = discount.discountAmount;
+
+  return {
+    strategyResult,
+    discount,
+    finalPrice,
+    savings,
+  };
 }

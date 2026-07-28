@@ -31,10 +31,7 @@ import {
   SLOT_CACHE_TTL_SECONDS,
 } from "./redisClient.js";
 import {
-  recordCacheHit,
-  recordCacheMiss,
   recordDependencyFault,
-  recordStampedeBlocked,
 } from "../metrics.js";
 
 

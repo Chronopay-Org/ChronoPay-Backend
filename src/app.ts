@@ -16,11 +16,7 @@ import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
-import { createCORSMiddleware } from "./middleware/cors.js";
-import { getCORSConfig } from "./config/cors.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
-import { createCORSMiddleware } from "./middleware/cors.js";
-import { getCORSConfig } from "./config/cors.js";
 import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
@@ -47,6 +43,9 @@ import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
+import { legalHoldRouter } from "./routes/legalHold.js";
+import graphqlRouter from "./routes/graphql.js";
+import webhookRouter, { registerWebhookRoutes } from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 
 // Import modules
@@ -404,9 +403,16 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3b. Admin Routes
   app.use("/api/v1/admin", adminRouter);
+  app.use("/api/v1/admin", redactionPolicyRouter);
+
+  // 3c. GDPR Export Routes
+  app.use("/api/v1/gdpr/export", gdprExportRouter);
   
   // 3c. Legal Holds Routes
   app.use("/api/v1/admin", legalHoldRouter);
+
+  // 3d. Reputation Transparency Routes
+  app.use("/api/v1/suppliers", reputationRouter);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
@@ -436,7 +442,7 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 5. Webhooks Routes
   registerWebhookRoutes(app);
-  // app.use("/api/v1", webhookRouter);
+  app.use("/api/v1", webhookRoutes);
 
   // 6. SMS Routes
   app.post("/api/v1/notifications/sms", validateRequiredFields(["to", "message"]), (req, res) => {
