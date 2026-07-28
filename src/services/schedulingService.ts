@@ -15,6 +15,21 @@ export class SlotNotFoundError extends Error {
   }
 }
 
+export class TenantPausedError extends Error {
+  constructor(tenantId: string) {
+    super(`Tenant ${tenantId} is paused`);
+    this.name = "TenantPausedError";
+  }
+}
+
+export class BundleReservationError extends Error {
+  constructor(bundleId: string, cause: Error) {
+    super(`Failed to reserve bundle ${bundleId}: ${cause.message}`);
+    this.name = "BundleReservationError";
+    this.cause = cause;
+  }
+}
+
 /**
  * Coordinates slot reservation with booking intent state transitions.
  *
@@ -26,6 +41,9 @@ export class SlotNotFoundError extends Error {
  * together.
  */
 export class SchedulingService {
+  public pausedTenants: Set<string> = new Set();
+  private reservedBundles: Map<string, Set<string>> = new Map();
+
   constructor(
     private readonly slotRepository: SlotRepository,
     private readonly bookingIntentRepository: BookingIntentRepository,
@@ -44,5 +62,43 @@ export class SchedulingService {
 
   releaseSlot(slotId: string): void {
     this.slotRepository.updateBookable(slotId, true);
+  }
+
+  reserveBundle(bundleId: string, slotIds: string[], tenantId?: string): void {
+    if (tenantId && this.pausedTenants.has(tenantId)) {
+      throw new TenantPausedError(tenantId);
+    }
+
+    if (this.reservedBundles.has(bundleId)) {
+      throw new Error(`Bundle ${bundleId} is already reserved`);
+    }
+
+    const uniqueSlotIds = Array.from(new Set(slotIds));
+    const reserved: string[] = [];
+
+    try {
+      for (const slotId of uniqueSlotIds) {
+        this.reserveSlot(slotId);
+        reserved.push(slotId);
+      }
+      this.reservedBundles.set(bundleId, new Set(uniqueSlotIds));
+    } catch (error) {
+      // Rollback
+      for (const slotId of reserved) {
+        this.releaseSlot(slotId);
+      }
+      throw new BundleReservationError(bundleId, error as Error);
+    }
+  }
+
+  releaseBundle(bundleId: string): void {
+    const slots = this.reservedBundles.get(bundleId);
+    if (!slots) {
+      throw new Error(`Bundle ${bundleId} not found`);
+    }
+    for (const slotId of slots) {
+      this.releaseSlot(slotId);
+    }
+    this.reservedBundles.delete(bundleId);
   }
 }
