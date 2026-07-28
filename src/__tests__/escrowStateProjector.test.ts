@@ -55,7 +55,7 @@ function setup(opts: { allowList?: string[]; withIntent?: "yes" | "no" }) {
         createdAt: new Date(1_700_000_000_000).toISOString(),
       })
       .then((record) => {
-        intentId = record.id;
+        _intentId = record.id;
       });
   }
   return { slots, intents, projector };
