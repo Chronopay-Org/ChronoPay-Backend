@@ -228,85 +228,52 @@ export const settlementsPendingFinality = createBudgetedGauge({
   registers: [register],
 });
 
-// ─── Treasury drain metrics ─────────────────────────────────────────────────
+// ─── Timezone drift monitor metrics ───────────────────────────────────────────
 
 /**
- * Gauge tracking the current balance of a pre-funded treasury per asset and account.
+ * Gauge tracking the count of ambiguous slots (DST proximity, metadata issues)
+ * per tenant and severity level.
  */
-export const treasuryBalance = createBudgetedGauge({
-  name: "treasury_balance",
-  help: "Current balance of the pre-funded instant-payout treasury",
-  labels: ["asset", "account"],
-  budget: 16,
-  registers: [register],
-});
-
-/**
- * Gauge encoding the staged severity of a treasury drain alarm per asset and account.
- * 0 = ok, 1 = warning, 2 = page, 3 = critical
- */
-export const treasuryDrainSeverity = createBudgetedGauge({
-  name: "treasury_drain_severity",
-  help: "Current severity of the treasury drain alarm (0=ok, 1=warning, 2=page, 3=critical)",
-  labels: ["asset", "account"],
-  budget: 16,
-  registers: [register],
-});
-
-/**
- * Counter incremented each time a poll failure or stale read is detected.
- */
-export const treasuryPollFailures = createBudgetedCounter({
-  name: "treasury_poll_failures_total",
-  help: "Total number of treasury balance poll failures or staleness detections",
-  labels: ["asset", "account"],
-  budget: 16,
-  registers: [register],
-});
-
-/**
- * Counter incremented when an unknown asset is observed in treasury response.
- */
-export const treasuryUnknownAsset = createBudgetedCounter({
-  name: "treasury_unknown_asset_total",
-  help: "Total number of times an unknown asset was observed in a treasury balance response",
-  labels: ["asset"],
-  budget: 16,
-  registers: [register],
-});
-
-// ─── Instant payout fee metrics ────────────────────────────────────────────
-
-/**
- * Counter tracking total fees collected per tier.
- */
-export const instantPayoutFeesTotal = createBudgetedCounter({
-  name: "instant_payout_fees_total",
-  help: "Total instant payout fees collected, by supplier tier",
-  labels: ["tier"],
-  budget: 4,
-  registers: [register],
-});
-
-/**
- * Gauge tracking current monthly fee accrual per supplier and currency.
- */
-export const instantPayoutMonthlyAccrual = createBudgetedGauge({
-  name: "instant_payout_monthly_accrual",
-  help: "Current monthly fee accrual for an instant payout supplier",
-  labels: ["supplier", "currency"],
+export const tzDriftAmbiguousSlots = createBudgetedGauge({
+  name: "tz_drift_ambiguous_slots",
+  help: "Number of slots with ambiguous timezone information grouped by tenant and severity",
+  labels: ["tenant_id", "severity"],
   budget: 64,
   registers: [register],
 });
 
 /**
- * Counter tracking how many payouts hit their monthly cap.
+ * Gauge tracking the count of slots with missing timezone info
+ * per tenant and severity level.
  */
-export const instantPayoutCapHits = createBudgetedCounter({
-  name: "instant_payout_cap_hits_total",
-  help: "Total number of instant payouts where the monthly fee cap was reached",
-  labels: ["supplier"],
+export const tzDriftMissingTzSlots = createBudgetedGauge({
+  name: "tz_drift_missing_tz_slots",
+  help: "Number of slots with missing timezone offset information grouped by tenant and severity",
+  labels: ["tenant_id", "severity"],
   budget: 64,
+  registers: [register],
+});
+
+/**
+ * Gauge storing the timestamp (epoch seconds) of the last completed
+ * timezone drift scan. Alerts can reference this to detect stale runs.
+ */
+export const tzDriftLastScanTimestamp = createBudgetedGauge({
+  name: "tz_drift_last_scan_timestamp_seconds",
+  help: "Unix timestamp (seconds) of the last completed timezone drift scan",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter tracking the total number of slots scanned across all sweeps.
+ */
+export const tzDriftSlotsScannedTotal = createBudgetedCounter({
+  name: "tz_drift_slots_scanned_total",
+  help: "Total number of slots scanned by the timezone drift monitor",
+  labels: [],
+  budget: 0,
   registers: [register],
 });
 /** Convenience helpers used by slotCache.ts */
@@ -321,6 +288,58 @@ export function recordCacheMiss(): void {
 export function recordStampedeBlocked(): void {
   slotCacheStampedeBlocked.inc();
 }
+
+// ─── Search cache warmup metrics ───────────────────────────────────────────────
+
+export const searchCacheWarmupCoverageRatio = createBudgetedGauge({
+  name: "search_cache_warmup_coverage_ratio",
+  help: "Ratio of successfully warmed search queries to target top-N queries after taxonomy edit",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+export const searchCacheWarmupTotal = createBudgetedCounter({
+  name: "search_cache_warmup_total",
+  help: "Total number of search cache warmup runs triggered by taxonomy updates",
+  labels: ["status"],
+  budget: 8,
+  registers: [register],
+});
+
+export const searchCacheWarmupQueriesTotal = createBudgetedCounter({
+  name: "search_cache_warmup_queries_total",
+  help: "Total number of search queries replayed during cache warmup",
+  labels: ["result"],
+  budget: 8,
+  registers: [register],
+});
+
+export const searchCacheWarmupDurationSeconds = createBudgetedHistogram({
+  name: "search_cache_warmup_duration_seconds",
+  help: "Duration in seconds of search cache warmup runs",
+  labels: [],
+  budget: 0,
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10],
+  registers: [register],
+});
+
+export function recordWarmupCoverage(ratio: number): void {
+  searchCacheWarmupCoverageRatio.set(ratio);
+}
+
+export function recordWarmupExecution(status: "success" | "partial" | "failed" | "cancelled"): void {
+  searchCacheWarmupTotal.labels(status).inc();
+}
+
+export function recordWarmupQueryReplayed(result: "success" | "failure"): void {
+  searchCacheWarmupQueriesTotal.labels(result).inc();
+}
+
+export function recordWarmupDuration(durationSeconds: number): void {
+  searchCacheWarmupDurationSeconds.observe(durationSeconds);
+}
+
 
 export const dependencyFaults = createBudgetedCounter({
   name: "dependency_faults_total",
@@ -451,6 +470,54 @@ export const slowQueryDuration = createBudgetedHistogram({
   registers: [register],
 });
 
+// ─── Escrow drift reconciler metrics ──────────────────────────────────────────
+
+/**
+ * Gauge set to 1 when drift is detected between chain escrow state and local DB.
+ */
+export const escrowDriftDetected = createBudgetedGauge({
+  name: "escrow_drift_detected",
+  help: "Whether escrow state drift has been detected (1 = drift, 0 = clean)",
+  labels: ["slot_id"],
+  budget: 128,
+  buckets: [],
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time an escrow reader returns a result that
+ * disagrees with the quorum majority for any slot.
+ */
+export const escrowReaderDisagreementTotal = createBudgetedCounter({
+  name: "escrow_reader_disagreement_total",
+  help: "Total number of reader disagreements observed during escrow drift reconciliation",
+  labels: ["reader_id"],
+  budget: 8,
+  registers: [register],
+});
+
+/**
+ * Counter incremented on each drift reconciliation tick.
+ */
+export const escrowDriftReconciliationTicks = createBudgetedCounter({
+  name: "escrow_drift_reconciliation_ticks_total",
+  help: "Total number of escrow drift reconciliation ticks performed",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time a drift override is applied.
+ */
+export const escrowDriftOverridesApplied = createBudgetedCounter({
+  name: "escrow_drift_overrides_applied_total",
+  help: "Total number of manual escrow drift overrides applied",
+  labels: ["slot_id"],
+  budget: 64,
+  registers: [register],
+});
+
 /**
  * Express middleware to track HTTP request duration.
  */
@@ -471,3 +538,4 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
 
   next();
 };
+

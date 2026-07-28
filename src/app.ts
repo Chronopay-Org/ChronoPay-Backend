@@ -49,7 +49,7 @@ import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
 import graphqlRouter from "./routes/graphql.js";
-import webhookRoutes, { registerWebhookRoutes } from "./routes/webhooks.js";
+import webhookRouter, { registerWebhookRoutes } from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 
 // Import modules
@@ -413,11 +413,8 @@ export function createApp(options: AppFactoryOptions = {}) {
   // 3c. Legal Holds Routes
   app.use("/api/v1/admin", legalHoldRouter);
 
-  // 3c. GraphQL Route
-  app.use("/api/v1/graphql", graphqlRouter);
-
-  // 3c. GraphQL Route
-  app.use("/api/v1/graphql", graphqlRouter);
+  // 3d. Reputation Transparency Routes
+  app.use("/api/v1/suppliers", reputationRouter);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();

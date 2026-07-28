@@ -64,9 +64,9 @@ describe("redact utility", () => {
     it("should pass through non-sensitive fields unchanged", () => {
       const obj = {
         id: 123,
-        email: "user@example.com",
         name: "John Doe",
         active: true,
+        city: "New York",
       };
       const result = redact(obj);
 
@@ -145,7 +145,8 @@ describe("redact utility", () => {
       const result = redact(obj);
 
       expect(result.id).toBe("user-123");
-      expect(result.email).toBe("user@example.com");
+      // email is now a PII-sensitive field
+      expect(result.email).toBe("us***om");
       expect(result.apiKey).toBe("sk***90");
       expect((result.settings as any).theme).toBe("dark");
       expect((result.settings as any).password).toBe("us***rd");
@@ -539,7 +540,8 @@ describe("redact utility", () => {
       const result = redact(authResponse) as any;
 
       expect(result.success).toBe(true);
-      expect(result.user.email).toBe("user@example.com");
+      // email is now a PII-sensitive field
+      expect(result.user.email).toBe("us***om");
       expect(result.token).not.toContain("eyJ");
       expect(result.token).toBe("ey***lt");
       expect(result.refreshToken).toBe("re***ue");
@@ -625,7 +627,8 @@ describe("redact utility", () => {
       expect(result.level).toBe("ERROR");
       expect(result.error.name).toBe("AuthenticationError");
       expect(result.context.userId).toBe("user-123");
-      expect(result.attemptedPassword.email).toBe("user@example.com");
+      // email is now a PII-sensitive field
+      expect(result.attemptedPassword.email).toBe("us***om");
       expect(result.attemptedPassword.password).toBe("wr***rd");
     });
 
@@ -653,7 +656,8 @@ describe("redact utility", () => {
 
       expect(result.id).toBe("evt_123456");
       expect(result.data.paymentId).toBe("pay_abc123");
-      expect(result.data.customer.email).toBe("customer@example.com");
+      // email is now a PII-sensitive field
+      expect(result.data.customer.email).toBe("cu***om");
       expect(result.data.customer.apiKey).toBe("sk***ey");
       expect(result.data.metadata.order_id).toBe("ord_123");
       expect(result.data.metadata.tracking_token).toBe("tr***45");
@@ -670,7 +674,8 @@ describe("redact utility", () => {
       });
 
       it("should identify non-sensitive fields", () => {
-        expect(wouldBeRedacted("email")).toBe(false);
+        // email is now in the SENSITIVE_FIELDS set (PII)
+        expect(wouldBeRedacted("email")).toBe(true);
         expect(wouldBeRedacted("name")).toBe(false);
         expect(wouldBeRedacted("userId")).toBe(false);
       });

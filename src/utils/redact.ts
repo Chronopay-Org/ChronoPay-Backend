@@ -13,11 +13,74 @@
  * - Hot-reloadable policy via redactionPolicy.ts
  */
 
-import {
-  getCurrentPolicy,
-  isFieldRedacted as policyIsFieldRedacted,
-  getPolicyFields as policyGetPolicyFields,
-} from "./redactionPolicy.js";
+/**
+ * Sensitive field names that should be redacted
+ * Includes common variations and case-insensitive matches
+ */
+const SENSITIVE_FIELDS = new Set([
+  "password",
+  "secret",
+  "token",
+  "apikey",
+  "api_key",
+  "authorization",
+  "cookie",
+  "session",
+  "privatekey",
+  "private_key",
+  "accesstoken",
+  "access_token",
+  "refreshtoken",
+  "refresh_token",
+  "bearer",
+  "x-api-key",
+  "api-key",
+  "app_secret",
+  "appsecret",
+  "client_secret",
+  "clientsecret",
+  "signing_key",
+  "signingkey",
+  "hmac",
+  "jwt",
+  "aws_secret",
+  "awssecret",
+  "database_url",
+  "databaseurl",
+  "db_password",
+  "dbpassword",
+  "encryption_key",
+  "encryptionkey",
+  "webhook_secret",
+  "webhooksecret",
+  "oauth_token",
+  "oauthtoken",
+  "auth_code",
+  "authcode",
+  "cardtoken",
+  "card_token",
+  "tracking_token",
+  "trackingtoken",
+  // PII fields
+  "email",
+  "phone",
+  "ssn",
+  "social_security",
+  "socialsecurity",
+  "dob",
+  "date_of_birth",
+  "dateofbirth",
+  "passport",
+  "passport_number",
+  "passportnumber",
+  "driver_license",
+  "driverslicense",
+  "driverlicense",
+  "tax_id",
+  "taxid",
+  "national_id",
+  "nationalid",
+]);
 
 /**
  * Default mask pattern for redacted values
@@ -88,7 +151,10 @@ export const redact = (
   }
 
   // Handle plain objects
-  if (obj.constructor === Object) {
+  // Use toString instead of constructor check to avoid cross-realm issues
+  // (e.g., structuredClone in Jest's VM sandbox creates objects with a
+  // different Object constructor)
+  if (Object.prototype.toString.call(obj) === "[object Object]") {
     const redacted: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(obj)) {

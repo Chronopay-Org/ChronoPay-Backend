@@ -149,6 +149,14 @@ export class SlotService {
     if (!Number.isFinite(data.startTime) || !Number.isFinite(data.endTime)) {
         throw new SlotValidationError("startTime and endTime must be finite numbers");
     }
+    if (data.validUntil !== undefined && data.validUntil !== null) {
+        if (!Number.isFinite(data.validUntil)) {
+            throw new SlotValidationError("validUntil must be a finite number");
+        }
+        if (data.validUntil <= data.endTime) {
+            throw new SlotValidationError("validUntil must be after endTime");
+        }
+    }
 
     const slot = { id: this.nextId++, ...data };
     this._slots.push(slot);
@@ -175,6 +183,19 @@ export class SlotService {
     if ((data.startTime !== undefined && !Number.isFinite(data.startTime)) || 
         (data.endTime !== undefined && !Number.isFinite(data.endTime))) {
         throw new SlotValidationError("startTime and endTime must be finite numbers");
+    }
+
+    if (data.validUntil !== undefined && data.validUntil !== null) {
+        if (!Number.isFinite(data.validUntil)) {
+            throw new SlotValidationError("validUntil must be a finite number");
+        }
+    }
+
+    if (data.validUntil !== undefined && data.validUntil !== null) {
+        const resolvedEnd = data.endTime !== undefined ? data.endTime : this._slots[index].endTime;
+        if (data.validUntil <= resolvedEnd) {
+            throw new SlotValidationError("validUntil must be after endTime");
+        }
     }
     
     this._slots[index] = { ...this._slots[index], ...data };
