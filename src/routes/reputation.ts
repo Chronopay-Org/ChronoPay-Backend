@@ -7,6 +7,7 @@
 import { Router, type Request, type Response } from "express";
 import { reputationTransparencyService } from "../services/reputationTransparencyService.js";
 import { recordReputationQuery } from "../metrics.js";
+import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 
 const router = Router();
 
@@ -59,7 +60,10 @@ function getAuthenticatedActor(req: Request): {
  * @desc    Get aggregated signal breakdown & weights driving supplier reputation score
  * @access  Private (Supplier Owner or Admin only)
  */
-router.get("/:supplierId/reputation/signals", (req: Request, res: Response) => {
+router.get(
+  "/:supplierId/reputation/signals",
+  createAuthAwareRateLimiter(),
+  (req: Request, res: Response) => {
   try {
     const { supplierId } = req.params;
     const actor = getAuthenticatedActor(req);

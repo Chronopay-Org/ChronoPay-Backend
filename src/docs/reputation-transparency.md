@@ -30,6 +30,7 @@ Retrieves an aggregated signal projection, category weights, contribution scores
 - `401 Unauthorized`: Missing or invalid authentication credentials.
 - `403 Forbidden`: Authenticated user is not the registered owner of the supplier (prevents owner impersonation and cross-tenant leakage).
 - `404 Not Found`: Supplier ID does not exist.
+- `429 Too Many Requests`: Rate limit exceeded for the requesting principal or IP.
 - `500 Internal Server Error`: Unexpected server error.
 
 ---
