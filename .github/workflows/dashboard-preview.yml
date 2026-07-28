@@ -1,0 +1,63 @@
+name: Dashboard Preview
+
+on:
+  pull_request:
+    paths:
+      - "ops/dashboards/*.json"
+
+jobs:
+  preview:
+    # Suppress for fork PRs to avoid leaking internal dashboards
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate dashboard preview
+        id: preview
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DASHBOARD_DIR: ops/dashboards
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          npx tsx scripts/dashboard-preview-bot.ts > /tmp/preview_output.txt
+          cat /tmp/preview_output.txt
+
+      - name: Extract comment body
+        id: extract_comment
+        run: |
+          sed -n '/^---COMMENT_BODY_START---$/,/^---COMMENT_BODY_END---$/p' /tmp/preview_output.txt \
+            | tail -n +2 | head -n -1 > /tmp/comment_body.md
+          echo "Preview comment extracted."
+
+      - name: Find existing bot comment
+        id: find_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "Dashboard Preview"
+
+      - name: Create or update comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: /tmp/comment_body.md
+          edit-mode: replace
