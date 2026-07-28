@@ -40,9 +40,16 @@ export interface CursorData {
 export class MarketplaceSearchService {
   constructor(
     private pool: Pool,
-    private reranker?: LtrReranker,
-    private eventEmitter?: LtrEventEmitter,
+    private queryTracker?: SearchQueryTracker
   ) {}
+
+  /**
+   * Set or update query tracker for recording search queries.
+   */
+  setQueryTracker(tracker: SearchQueryTracker): void {
+    this.queryTracker = tracker;
+  }
+
 
   /**
    * Encode cursor data into a base64url string.
