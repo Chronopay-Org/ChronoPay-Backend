@@ -29,8 +29,17 @@ export const migrations: Migration[] = [
   migration005,
   migration006,
   migration007,
+  migration008,
+  migration009,
+  migration010,
   migration011,
   migration012,
+  migration013,
+  migration014,
+  migration015,
+  migration016,
+  migration017,
+  migration018,
 ];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────

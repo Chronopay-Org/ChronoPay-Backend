@@ -237,6 +237,14 @@ export class HorizonContractClient implements IContractClient {
     };
   }
 
+  private isFeeBumpTransaction(xdrBase64: string): boolean {
+    try {
+      const buf = Buffer.from(xdrBase64, "base64");
+      if (buf.length < 4) return false;
+      return buf.readInt32BE(0) === 4;
+    } catch {
+      return false;
+    }
   /**
    * Opens an SSE stream to a Horizon resource and calls `onEvent` for every
    * received event.
