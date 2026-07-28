@@ -1,7 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
-import { capacityForecaster } from "../services/capacityForecaster.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { _settlements } from "../services/settlementReconciler.js";
@@ -256,7 +255,7 @@ router.get(
   requireAdminToken,
   async (req: Request, res: Response) => {
     try {
-      const opts: SessionListOptions = {};
+      const _opts: SessionListOptions = {};
       return res.status(200).json({ success: true, sessions: [] });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
@@ -724,10 +723,10 @@ router.get(
 // ─── Payout DLQ Inspection API ──────────────────────────────────────────────
 
 // In-memory dispute state for testing (kept for backward compatibility)
-let disputesState: Map<string, any> = new Map();
+let _disputesState: Map<string, any> = new Map();
 
 export function resetDisputesState(): void {
-  disputesState = new Map();
+  _disputesState = new Map();
 }
 
 /**

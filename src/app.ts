@@ -49,7 +49,7 @@ import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 
 // Import modules
 import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
-import { registerWebhookRoutes } from "./routes/webhooks.js";
+
 
 export interface AppFactoryOptions {
   apiKey?: string;
