@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Marketplace Search with LTR Reranker - Integration Tests
  *

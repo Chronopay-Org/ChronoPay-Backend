@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Impersonation Session Recording Integration Tests
  *

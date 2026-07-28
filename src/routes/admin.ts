@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";

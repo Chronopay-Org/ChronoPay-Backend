@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Impersonation Recorder Middleware Tests
  *

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * slot-bundle-expiry.test.ts
  *

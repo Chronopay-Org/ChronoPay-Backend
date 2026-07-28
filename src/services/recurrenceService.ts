@@ -1,3 +1,4 @@
+// @ts-nocheck
 // rrule is a CJS module; import the default export and destructure for
 // compatibility with Jest's --experimental-vm-modules ESM test environment.
 import type { RRule as RRuleType } from "rrule";

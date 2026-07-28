@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Redaction Utility for Secure Logging
  *

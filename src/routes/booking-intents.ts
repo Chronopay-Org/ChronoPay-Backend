@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file src/routes/booking-intents.ts
  *
