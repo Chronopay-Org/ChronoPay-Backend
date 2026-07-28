@@ -64,6 +64,7 @@ export const MarketplaceSearchSchema = z.object({
     .min(MIN_RESULTS, `limit must be >= ${MIN_RESULTS}`)
     .max(MAX_RESULTS, `limit must be <= ${MAX_RESULTS}`)
     .default(10),
+  cursor: z.string().trim().optional(),
 
   // Filters
   categories: z.array(

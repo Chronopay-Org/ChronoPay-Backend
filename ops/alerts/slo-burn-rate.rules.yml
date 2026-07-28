@@ -1,0 +1,24 @@
+groups:
+  - name: slo_burn_rate_alerts
+    rules:
+      - alert: FastBurn
+        expr: |
+          slo_burn_rate{window="5m"} > 14.4
+          and
+          slo_burn_rate{window="1h"} > 14.4
+        labels:
+          severity: page
+        annotations:
+          summary: "Fast SLO burn rate for {{ $labels.route }}"
+          description: "{{ $labels.route }} error budget is burning rapidly (>14.4x) over 5m and 1h windows."
+          
+      - alert: SlowBurn
+        expr: |
+          slo_burn_rate{window="1h"} > 6
+          and
+          slo_burn_rate{window="6h"} > 6
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Slow SLO burn rate for {{ $labels.route }}"
+          description: "{{ $labels.route }} error budget is burning (>6x) over 1h and 6h windows."
