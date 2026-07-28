@@ -220,8 +220,18 @@ jobs:
     name: Container Image Security Scan
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
       - name: Cache Trivy DB
         uses: actions/cache@v4
         with:
@@ -235,23 +245,34 @@ jobs:
         run: docker build -t app:${{ github.sha }} .
       - name: Run Trivy scan (high/critical)
         run: trivy image --exit-code 1 --severity HIGH,CRITICAL --format json -o trivy-report.json app:${{ github.sha }}
-      - name: Generate SBOM
-        run: trivy image --format spdx-json -o sbom.spdx.json app:${{ github.sha }}
+      - name: Generate application SBOM (CycloneDX)
+        run: npm run sbom -- --output sbom.app.cyclonedx.json
+      - name: Generate container SBOM (CycloneDX, includes OS packages)
+        run: trivy image --format cyclonedx -o sbom.container.cyclonedx.json app:${{ github.sha }}
       - name: Upload Trivy report
         uses: actions/upload-artifact@v4
         with:
           name: trivy-report
           path: trivy-report.json
-      - name: Upload SBOM
+      - name: Upload SBOMs (workflow artifacts)
         uses: actions/upload-artifact@v4
         with:
           name: sbom
-          path: sbom.spdx.json
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@v3.5.0
-      - name: Sign Docker Image
+          path: |
+            sbom.app.cyclonedx.json
+            sbom.container.cyclonedx.json
+      - name: Upload SBOMs to supply-chain security portal
+        continue-on-error: true
         env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
-        run: cosign sign --key env://COSIGN_PRIVATE_KEY -y app:${{ github.sha }}
-
+          SBOM_PORTAL_URL: ${{ secrets.SBOM_PORTAL_URL }}
+          SBOM_PORTAL_API_KEY: ${{ secrets.SBOM_PORTAL_API_KEY }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          npm run sbom:upload -- --file sbom.app.cyclonedx.json
+          npm run sbom:upload -- --file sbom.container.cyclonedx.json
+      - name: Attach SBOMs to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sbom.app.cyclonedx.json
+            sbom.container.cyclonedx.json
