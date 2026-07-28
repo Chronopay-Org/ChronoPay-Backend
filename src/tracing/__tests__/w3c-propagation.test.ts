@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { parseTraceparent, formatTraceparent, createChildContext, getTraceContext } from "../context.js";
-import type { TraceContext } from "../context.js";
+import { describe, it, expect } from "@jest/globals";
+import { parseTraceparent, formatTraceparent, createChildContext, type TraceContext } from "../context.js";
 import { tracingMiddleware, getPropagationHeaders, TRACE_HEADERS } from "../middleware.js";
 import { createInstrumentedRedisClient } from "../redisInstrumentation.js";
 import { createNoOpExporter } from "../spanExporter.js";
@@ -214,6 +213,8 @@ describe("W3C Traceparent and Instrumentation", () => {
         traceFlags: "01",
         startTime: Date.now(),
       };
+
+      void context;
 
       // Note: We can't directly test this without being inside a tracing context
       // This is more of a documentation test

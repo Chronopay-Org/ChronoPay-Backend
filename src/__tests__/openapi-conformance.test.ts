@@ -1,4 +1,3 @@
-import { jest } from "@jest/globals";
 import swaggerJsdoc from "swagger-jsdoc";
 import { createApp } from "../app.js";
 

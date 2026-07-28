@@ -149,6 +149,14 @@ export class SlotService {
     if (!Number.isFinite(data.startTime) || !Number.isFinite(data.endTime)) {
         throw new SlotValidationError("startTime and endTime must be finite numbers");
     }
+    if (data.validUntil !== undefined && data.validUntil !== null) {
+        if (!Number.isFinite(data.validUntil)) {
+            throw new SlotValidationError("validUntil must be a finite number");
+        }
+        if (data.validUntil <= data.endTime) {
+            throw new SlotValidationError("validUntil must be after endTime");
+        }
+    }
 
     const slot = { id: this.nextId++, ...data };
     this._slots.push(slot);
@@ -176,6 +184,19 @@ export class SlotService {
         (data.endTime !== undefined && !Number.isFinite(data.endTime))) {
         throw new SlotValidationError("startTime and endTime must be finite numbers");
     }
+
+    if (data.validUntil !== undefined && data.validUntil !== null) {
+        if (!Number.isFinite(data.validUntil)) {
+            throw new SlotValidationError("validUntil must be a finite number");
+        }
+    }
+
+    if (data.validUntil !== undefined && data.validUntil !== null) {
+        const resolvedEnd = data.endTime !== undefined ? data.endTime : this._slots[index].endTime;
+        if (data.validUntil <= resolvedEnd) {
+            throw new SlotValidationError("validUntil must be after endTime");
+        }
+    }
     
     this._slots[index] = { ...this._slots[index], ...data };
 
@@ -198,6 +219,14 @@ export class SlotService {
     const slot = this._slots.find(s => String(s.id) === String(id));
     if (!slot) throw new SlotNotFoundError(id);
     return { ...slot };
+  }
+
+  async findByIds(ids: readonly (number | string)[]): Promise<(Slot | Error)[]> {
+    const idStrings = ids.map(id => String(id));
+    return idStrings.map(idStr => {
+      const slot = this._slots.find(s => String(s.id) === idStr);
+      return slot ? { ...slot } : new Error(`Slot with ID ${idStr} not found`);
+    });
   }
 
   async deleteSlot(id: number | string): Promise<number | string> {

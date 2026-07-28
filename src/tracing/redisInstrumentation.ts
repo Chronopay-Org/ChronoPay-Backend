@@ -2,14 +2,6 @@ import type { RedisClient } from "../cache/redisClient.js";
 import { withSpan } from "./hooks.js";
 
 /**
- * Strip sensitive information from Redis commands for safe logging.
- */
-function stripRedisCommand(cmd: string, args: unknown[]): string {
-  // Show command and argument count but not values
-  return `${cmd.toUpperCase()} (${args.length} args)`.substring(0, 100);
-}
-
-/**
  * Wrap a Redis client to automatically wrap commands in spans.
  * Returns a wrapped client that instruments all operations.
  */

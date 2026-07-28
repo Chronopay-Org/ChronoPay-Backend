@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { configService } from "../config/config.service.js";
 
 /**
  * OAuth2 provider configuration

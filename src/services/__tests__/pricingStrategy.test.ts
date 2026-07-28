@@ -4,8 +4,10 @@ import {
   demandBasedStrategy,
   resolvePrice,
   listStrategies,
+  resolveBundlePrice,
   type PricingInput,
 } from "../pricingStrategy.js";
+import { createDiscountCurve, resetStore } from "../discountCurveService.js";
 
 // ─── Shared base input ────────────────────────────────────────────────────────
 
@@ -242,5 +244,101 @@ describe("listStrategies", () => {
     expect(ids).toContain("time_decay");
     expect(ids).toContain("demand_based");
     expect(ids).toHaveLength(3);
+  });
+});
+
+// ─── resolveBundlePrice ───────────────────────────────────────────────────────
+
+describe("resolveBundlePrice", () => {
+  beforeEach(() => {
+    resetStore();
+  });
+
+  it("returns strategy result without discount when no curves exist", () => {
+    const input: PricingInput = {
+      ...BASE,
+      config: { strategy: "fixed" },
+    };
+
+    const result = resolveBundlePrice("fixed", input, {
+      bundleId: "bundle-1",
+      supplierId: "supplier-1",
+      quantity: 10,
+    });
+
+    expect(result.strategyResult.price).toBe(1000);
+    expect(result.discount.discountAmount).toBe(0);
+    expect(result.finalPrice).toBe(10000);
+    expect(result.savings).toBe(0);
+  });
+
+  it("applies discount curve to bundle pricing", () => {
+    createDiscountCurve({
+      id: "curve-1",
+      name: "Test Discount",
+      bundleId: "bundle-1",
+      supplierId: "supplier-1",
+      tiers: [
+        { minQuantity: 1, discountRate: 0 },
+        { minQuantity: 5, discountRate: 0.1 },
+        { minQuantity: 10, discountRate: 0.2 },
+      ],
+      stackability: {
+        stackable: false,
+        stackableWith: [],
+        maxStackCount: 1,
+      },
+      active: true,
+    });
+
+    const input: PricingInput = {
+      ...BASE,
+      basePrice: 1000,
+      config: { strategy: "fixed" },
+    };
+
+    const result = resolveBundlePrice("fixed", input, {
+      bundleId: "bundle-1",
+      supplierId: "supplier-1",
+      quantity: 10,
+    });
+
+    expect(result.strategyResult.price).toBe(1000);
+    expect(result.discount.discountCurveId).toBe("curve-1");
+    expect(result.discount.appliedTier.discountRate).toBe(0.2);
+    expect(result.finalPrice).toBe(8000); // 10000 * 0.8
+    expect(result.savings).toBe(2000);
+  });
+
+  it("uses strategy result as base for discount", () => {
+    createDiscountCurve({
+      id: "curve-1",
+      name: "Test Discount",
+      bundleId: "bundle-1",
+      supplierId: "supplier-1",
+      tiers: [{ minQuantity: 1, discountRate: 0.5 }],
+      stackability: {
+        stackable: false,
+        stackableWith: [],
+        maxStackCount: 1,
+      },
+      active: true,
+    });
+
+    const input: PricingInput = {
+      ...BASE,
+      basePrice: 2000,
+      config: { strategy: "fixed" },
+    };
+
+    const result = resolveBundlePrice("fixed", input, {
+      bundleId: "bundle-1",
+      supplierId: "supplier-1",
+      quantity: 1,
+    });
+
+    expect(result.strategyResult.price).toBe(2000);
+    expect(result.finalPrice).toBe(1000); // 2000 * 0.5
+    expect(result.savings).toBe(1000);
   });
 });

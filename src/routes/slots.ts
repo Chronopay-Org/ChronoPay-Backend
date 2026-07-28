@@ -1,11 +1,12 @@
 import { Router, Request, Response } from "express";
 import { slotService, SlotNotFoundError, SlotValidationError } from "../services/slotService.js";
 import { requireApiKey } from "../middleware/apiKeyAuth.js";
-import { validateRequiredFields } from "../middleware/validation.js";
 import { requireFeatureFlag, featureFlagContextMiddleware } from "../middleware/featureFlags.js";
 import { requireRole } from "../middleware/rbac.js";
 import { parseSlotIdParam } from "../middleware/slotIdParam.js";
 import { authorizeSlotDelete, assertSlotDeleteAllowed } from "../middleware/slotAuthorization.js";
+import { resolveBuyerTimezone } from "../middleware/timezone.js";
+import { normalizeSlots, normalizeSlotTimes } from "../services/timezoneService.js";
 
 const router = Router();
 const SLOT_NOT_FOUND = "Slot not found";
@@ -22,44 +23,59 @@ export function resetSlotStore(): void {
 /**
  * GET /api/v1/slots
  */
-router.get("/", async (req: Request, res: Response) => {
-  try {
-    const pageStr = req.query.page as string;
-    const limitStr = req.query.limit as string;
+router.get(
+  "/",
+  resolveBuyerTimezone(),
+  async (req: Request, res: Response) => {
+    try {
+      const pageStr = req.query.page as string;
+      const limitStr = req.query.limit as string;
 
-    const page = pageStr !== undefined ? parseInt(pageStr) : 1;
-    const limit = limitStr !== undefined ? parseInt(limitStr) : 10;
+      const page = pageStr !== undefined ? parseInt(pageStr) : 1;
+      const limit = limitStr !== undefined ? parseInt(limitStr) : 10;
 
-    const result = await slotService.list({ page, limit });
+      const result = await slotService.list({ page, limit });
+      const timezone = req.buyerTimezone || "UTC";
+      const normalized = normalizeSlots(result.slots as any, timezone);
 
-    res.set("X-Cache", "MISS");
-    res.json({
-      success: true,
-      data: result.data,
-      slots: result.slots,
-      page: result.page,
-      limit: result.limit,
-      total: result.total,
-      meta: {
-        cache: "miss",
-      },
-    });
-  } catch (error: any) {
-    res.status(400).json({
-      success: false,
-      error: error.message,
-    });
-  }
-});
+      res.set("X-Cache", "MISS");
+      res.json({
+        success: true,
+        data: normalized,
+        slots: normalized,
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        timezone,
+        timezoneSource: req.buyerTimezoneSource || "default",
+        meta: {
+          cache: "miss",
+        },
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        error: error.message,
+      });
+    }
+  },
+);
 
 /**
  * GET /api/v1/slots/:id
  */
-router.get("/:id", parseSlotIdParam, async (req: Request, res: Response) => {
+router.get("/:id", parseSlotIdParam, resolveBuyerTimezone(), async (req: Request, res: Response) => {
   try {
     const slot = await slotService.findById(req.params.id);
+    const timezone = req.buyerTimezone || "UTC";
+    const normalized = normalizeSlotTimes(slot as any, timezone);
+
     res.set("X-Cache", "MISS");
-    res.json({ slot });
+    res.json({
+      slot: normalized,
+      timezone,
+      timezoneSource: req.buyerTimezoneSource || "default",
+    });
   } catch (error) {
     if (error instanceof SlotNotFoundError) {
       res.status(404).json({ success: false, error: SLOT_NOT_FOUND });

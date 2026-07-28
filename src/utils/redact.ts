@@ -10,6 +10,7 @@
  * - Non-mutating: creates a new object
  * - Circular reference detection
  * - Preserves original data structure and types
+ * - Hot-reloadable policy via redactionPolicy.ts
  */
 
 /**
@@ -60,6 +61,25 @@ const SENSITIVE_FIELDS = new Set([
   "card_token",
   "tracking_token",
   "trackingtoken",
+  // PII fields
+  "email",
+  "phone",
+  "ssn",
+  "social_security",
+  "socialsecurity",
+  "dob",
+  "date_of_birth",
+  "dateofbirth",
+  "passport",
+  "passport_number",
+  "passportnumber",
+  "driver_license",
+  "driverslicense",
+  "driverlicense",
+  "tax_id",
+  "taxid",
+  "national_id",
+  "nationalid",
 ]);
 
 /**
@@ -75,9 +95,10 @@ const DEFAULT_MASK_PATTERN = (value: string): string => {
 
 /**
  * Checks if a field name should be redacted (case-insensitive)
+ * Reads from the current hot-reloadable policy.
  */
 const isSensitiveField = (fieldName: string): boolean => {
-  return SENSITIVE_FIELDS.has(fieldName.toLowerCase());
+  return policyIsFieldRedacted(fieldName);
 };
 
 /**
@@ -130,7 +151,10 @@ export const redact = (
   }
 
   // Handle plain objects
-  if (obj.constructor === Object) {
+  // Use toString instead of constructor check to avoid cross-realm issues
+  // (e.g., structuredClone in Jest's VM sandbox creates objects with a
+  // different Object constructor)
+  if (Object.prototype.toString.call(obj) === "[object Object]") {
     const redacted: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(obj)) {
@@ -155,7 +179,8 @@ export const redact = (
 
 /**
  * Checks if a value would be redacted
- * Useful for testing and validation
+ * Useful for testing and validation.
+ * Reads from the current hot-reloadable policy.
  */
 export const wouldBeRedacted = (fieldName: string): boolean => {
   return isSensitiveField(fieldName);
@@ -163,9 +188,10 @@ export const wouldBeRedacted = (fieldName: string): boolean => {
 
 /**
  * Gets the list of all recognized sensitive field names
+ * from the current hot-reloadable policy.
  */
 export const getSensitiveFields = (): string[] => {
-  return Array.from(SENSITIVE_FIELDS);
+  return policyGetPolicyFields();
 };
 
 /**

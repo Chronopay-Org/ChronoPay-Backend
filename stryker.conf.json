@@ -1,0 +1,29 @@
+{
+  "$schema": "https://stryker-mutator.io/schema/config.json",
+  "mutator": {
+    "name": "typescript",
+    "excludedMutations": ["BooleanLiteral", "StringLiteral"]
+  },
+  "testRunner": "jest",
+  "testRunnerNodeArgs": ["--experimental-vm-modules", "node_modules/jest/bin/jest.js", "--runInBand", "--config", "jest.config.cjs"],
+  "cleanTempDir": false,
+  "jest": {
+    "configFile": "jest.config.cjs",
+    "enableFindRelatedTests": false,
+    "projectType": "custom"
+  },
+  "reporters": ["progress", "json", "html"],
+  "coverageAnalysis": "perTest",
+  "tempDirName": "stryker-tmp",
+  "timeoutMS": 20000,
+  "concurrency": 2,
+  "maxTestRunnerReuse": 0,
+  "ignorePatterns": [
+    "**/*.test.ts",
+    "**/__tests__/**"
+  ],
+  "mutate": [
+    "src/utils/logValidator.ts",
+    "src/scripts/run-mutation-tests.ts"
+  ]
+}

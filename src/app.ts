@@ -16,11 +16,7 @@ import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
-import { createCORSMiddleware } from "./middleware/cors.js";
-import { getCORSConfig } from "./config/cors.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
-import { createCORSMiddleware } from "./middleware/cors.js";
-import { getCORSConfig } from "./config/cors.js";
 import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
@@ -47,6 +43,10 @@ import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
+import { legalHoldRouter } from "./routes/legalHold.js";
+import graphqlRouter from "./routes/graphql.js";
+import webhookRouter, { registerWebhookRoutes } from "./routes/webhooks.js";
+import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 
 // Import modules
 import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
@@ -257,6 +257,11 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(metricsMiddleware);
   app.use(createRequestLogger());
 
+  // ── Impersonation session recorder ────────────────────────────────────────
+  // Must be registered AFTER any auth middleware that populates req.impersonation.
+  // It is a transparent no-op for requests without an impersonation context.
+  app.use(impersonationRecorder());
+
   // ── Feature flag context middleware (makes flags available to routes) ──────
   app.use(featureFlagContextMiddleware);
 
@@ -396,6 +401,16 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3b. Admin Routes
   app.use("/api/v1/admin", adminRouter);
+  app.use("/api/v1/admin", redactionPolicyRouter);
+
+  // 3c. GDPR Export Routes
+  app.use("/api/v1/gdpr/export", gdprExportRouter);
+  
+  // 3c. Legal Holds Routes
+  app.use("/api/v1/admin", legalHoldRouter);
+
+  // 3d. Reputation Transparency Routes
+  app.use("/api/v1/suppliers", reputationRouter);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
@@ -424,16 +439,8 @@ export function createApp(options: AppFactoryOptions = {}) {
   );
 
   // 5. Webhooks Routes
-  app.post("/api/v1/webhooks/settlements", (req, res) => {
-    const { eventType, transactionId, amount, timestamp } = req.body;
-    if (!eventType) return res.status(400).json({ success: false, error: "eventType is required" });
-    if (eventType === "invalid_event") return res.status(400).json({ success: false, error: "Invalid eventType" });
-    if (!transactionId) return res.status(400).json({ success: false, error: "transactionId is required" });
-    if (typeof amount !== "number" || amount <= 0) return res.status(400).json({ success: false, error: "Invalid amount" });
-    if (typeof timestamp !== "number" || timestamp <= 0) return res.status(400).json({ success: false, error: "Invalid timestamp" });
-    
-    res.status(200).json({ success: true, received: req.body });
-  });
+  registerWebhookRoutes(app);
+  app.use("/api/v1", webhookRoutes);
 
   // 6. SMS Routes
   app.post("/api/v1/notifications/sms", validateRequiredFields(["to", "message"]), (req, res) => {
