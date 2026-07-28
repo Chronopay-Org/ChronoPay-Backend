@@ -94,6 +94,23 @@ export function makeMemoId(id: bigint): Uint8Array {
   return concatBuffers(uint32BE(2), int64BE(id));
 }
 
+export function makeMemoReturnHash(hashHex: string): Uint8Array {
+  return concatBuffers(uint32BE(4), hexToBytes(hashHex));
+}
+
+export function makeGenericOp(
+  opType: number,
+  bodyBytes: Uint8Array,
+  hasSource = false,
+  sourceKey = TEST_INNER_SOURCE_KEY,
+): Uint8Array {
+  const sourcePart = hasSource
+    ? concatBuffers(uint32BE(1), paddedKey(sourceKey))
+    : uint32BE(0);
+  const typePart = uint32BE(opType);
+  return concatBuffers(sourcePart, typePart, bodyBytes);
+}
+
 export function makeTimeBounds(minTime: bigint, maxTime: bigint): Uint8Array {
   return concatBuffers(int64BE(minTime), int64BE(maxTime));
 }

@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import {
   ENVELOPE_TYPE_FEE_BUMP,
   ENVELOPE_TYPE_TX,
@@ -23,10 +24,17 @@ import {
   defaultRegularEnvelope,
   hexToBytes,
   int64BE,
+  makeCreateAccountOperation,
+  makeGenericOp,
+  makeMemoHash,
+  makeMemoId,
+  makeMemoReturnHash,
   makeMemoText,
   makePaymentOperation,
   makeTestSig,
   makeTimeBounds,
+  makeTransaction,
+  makeTransactionV1Envelope,
   paddedKey,
   toBase64Xdr,
   uint32BE,
@@ -54,6 +62,13 @@ describe("getEnvelopeType()", () => {
     // Pass a string that decodes to 3 bytes (one short of the 4-byte envelope tag)
     const threeBytesB64 = Buffer.from([0x00, 0x00, 0x00]).toString("base64");
     expect(getEnvelopeType(threeBytesB64)).toBeNull();
+  });
+
+  it("returns null when decodeBase64 catches an exception", () => {
+    jest.spyOn(Buffer, "from").mockImplementationOnce(() => {
+      throw new Error("Decode exception");
+    });
+    expect(getEnvelopeType("some-string")).toBeNull();
   });
 });
 
@@ -399,6 +414,248 @@ describe("validateFeeBumpTransaction()", () => {
       );
       expect(parseFeeBumpTransactionEnvelope(envelope)).not.toBeNull();
       expect(validateFeeBumpTransaction(envelope)).toBeUndefined();
+    });
+
+    it("accepts a fee-bump whose inner tx carries memoId (memo type 2)", () => {
+      const op = makePaymentOperation(TEST_DEST_KEY, BigInt(50));
+      const envelope = buildFeeBumpEnvelope(
+        TEST_FEE_SOURCE_KEY,
+        BigInt(2000),
+        TEST_INNER_SOURCE_KEY,
+        TX_FEE,
+        TX_SEQ_NUM,
+        op,
+        [makeTestSig()],
+        [makeTestSig()],
+        undefined,
+        makeMemoId(BigInt(12345)),
+      );
+      expect(parseFeeBumpTransactionEnvelope(envelope)).not.toBeNull();
+    });
+
+    it("accepts a fee-bump whose inner tx carries memoHash (memo type 3)", () => {
+      const op = makePaymentOperation(TEST_DEST_KEY, BigInt(50));
+      const hash = "11".repeat(32);
+      const envelope = buildFeeBumpEnvelope(
+        TEST_FEE_SOURCE_KEY,
+        BigInt(2000),
+        TEST_INNER_SOURCE_KEY,
+        TX_FEE,
+        TX_SEQ_NUM,
+        op,
+        [makeTestSig()],
+        [makeTestSig()],
+        undefined,
+        makeMemoHash(hash),
+      );
+      expect(parseFeeBumpTransactionEnvelope(envelope)).not.toBeNull();
+    });
+
+    it("accepts a fee-bump whose inner tx carries memoReturnHash (memo type 4)", () => {
+      const op = makePaymentOperation(TEST_DEST_KEY, BigInt(50));
+      const hash = "22".repeat(32);
+      const envelope = buildFeeBumpEnvelope(
+        TEST_FEE_SOURCE_KEY,
+        BigInt(2000),
+        TEST_INNER_SOURCE_KEY,
+        TX_FEE,
+        TX_SEQ_NUM,
+        op,
+        [makeTestSig()],
+        [makeTestSig()],
+        undefined,
+        makeMemoReturnHash(hash),
+      );
+      expect(parseFeeBumpTransactionEnvelope(envelope)).not.toBeNull();
+    });
+
+    it("parses operations with explicit source account (hasSource !== 0)", () => {
+      const op = makeGenericOp(1, new Uint8Array(48), true, TEST_DEST_KEY);
+      const envelope = buildFeeBumpEnvelope(
+        TEST_FEE_SOURCE_KEY,
+        BigInt(2000),
+        TEST_INNER_SOURCE_KEY,
+        TX_FEE,
+        TX_SEQ_NUM,
+        op,
+        [makeTestSig()],
+        [makeTestSig()],
+      );
+      expect(parseFeeBumpTransactionEnvelope(envelope)).not.toBeNull();
+    });
+
+    it("parses operation body types 0 through 21", () => {
+      const opSizes: [number, number][] = [
+        [0, 44],
+        [1, 48],
+        [2, 84],
+        [3, 60],
+        [4, 56],
+        [5, 64],
+        [6, 25],
+        [7, 40],
+        [8, 16],
+        [9, 29],
+        [10, 96],
+        [11, 8],
+        [12, 56],
+        [13, 80],
+        [14, 8],
+        [15, 4],
+        [16, 192],
+        [17, 84],
+        [18, 8],
+        [19, 36],
+        [20, 5],
+        [21, 4],
+      ];
+
+      for (const [opType, size] of opSizes) {
+        const body = new Uint8Array(size);
+        const op = makeGenericOp(opType, body);
+        const envelope = buildFeeBumpEnvelope(
+          TEST_FEE_SOURCE_KEY,
+          BigInt(2000),
+          TEST_INNER_SOURCE_KEY,
+          TX_FEE,
+          TX_SEQ_NUM,
+          op,
+          [makeTestSig()],
+          [makeTestSig()],
+        );
+        const parsed = parseFeeBumpTransactionEnvelope(envelope);
+        expect(parsed).not.toBeNull();
+      }
+    });
+
+    it("returns null for unknown operation body type", () => {
+      const op = makeGenericOp(99, new Uint8Array(10));
+      const envelope = buildFeeBumpEnvelope(
+        TEST_FEE_SOURCE_KEY,
+        BigInt(2000),
+        TEST_INNER_SOURCE_KEY,
+        TX_FEE,
+        TX_SEQ_NUM,
+        op,
+        [makeTestSig()],
+        [makeTestSig()],
+      );
+      expect(parseFeeBumpTransactionEnvelope(envelope)).toBeNull();
+    });
+
+    it("returns null for truncated memo or op structures in skipTransactionRaw", () => {
+      // Truncated memoType === 1 without length
+      const buf1 = concatBuffers(
+        uint32BE(ENVELOPE_TYPE_FEE_BUMP),
+        paddedKey(TEST_FEE_SOURCE_KEY),
+        int64BE(BigInt(1000)),
+        uint32BE(ENVELOPE_TYPE_TX),
+        paddedKey(TEST_INNER_SOURCE_KEY),
+        uint32BE(100), // fee
+        int64BE(TX_SEQ_NUM), // seq
+        uint32BE(0), // timebounds present = false
+        uint32BE(1), // memo type = 1, but missing length field
+      );
+      expect(parseFeeBumpTransactionEnvelope(toBase64Xdr(Array.from(buf1)))).toBeNull();
+
+      // Truncated memoType === 4 without 32 bytes payload
+      const buf2 = concatBuffers(
+        uint32BE(ENVELOPE_TYPE_FEE_BUMP),
+        paddedKey(TEST_FEE_SOURCE_KEY),
+        int64BE(BigInt(1000)),
+        uint32BE(ENVELOPE_TYPE_TX),
+        paddedKey(TEST_INNER_SOURCE_KEY),
+        uint32BE(100),
+        int64BE(TX_SEQ_NUM),
+        uint32BE(0),
+        uint32BE(4), // memo type = 4, but missing 32 bytes payload
+      );
+      expect(parseFeeBumpTransactionEnvelope(toBase64Xdr(Array.from(buf2)))).toBeNull();
+
+      // Truncated hasSource key
+      const buf3 = concatBuffers(
+        uint32BE(ENVELOPE_TYPE_FEE_BUMP),
+        paddedKey(TEST_FEE_SOURCE_KEY),
+        int64BE(BigInt(1000)),
+        uint32BE(ENVELOPE_TYPE_TX),
+        paddedKey(TEST_INNER_SOURCE_KEY),
+        uint32BE(100),
+        int64BE(TX_SEQ_NUM),
+        uint32BE(0),
+        uint32BE(0), // memo none
+        uint32BE(1), // ops count = 1
+        uint32BE(1), // hasSource = 1, but missing source key
+      );
+      expect(parseFeeBumpTransactionEnvelope(toBase64Xdr(Array.from(buf3)))).toBeNull();
+    });
+
+    it("parses inner fee-bump envelope in parseFeeBumpEnvelope", () => {
+      const nested = buildNestedFeeBumpEnvelope(
+        TEST_FEE_SOURCE_KEY,
+        BigInt(2000),
+        TEST_INNER_SOURCE_KEY,
+        BigInt(1500),
+        TEST_DEST_KEY,
+        TX_FEE,
+        TX_SEQ_NUM,
+        makePaymentOperation(TEST_DEST_KEY, BigInt(100)),
+        [makeTestSig()],
+        [makeTestSig()],
+        [makeTestSig()],
+      );
+      const details = parseFeeBumpTransactionEnvelope(nested);
+      expect(details).not.toBeNull();
+      expect(details!.fee).toBe(BigInt(2000));
+    });
+
+    it("returns null for nested fee-bump with invalid inner envelope type", () => {
+      // Build a nested fee-bump envelope where the innermost envelope type is 99 (invalid)
+      const outerEnvelopeType = uint32BE(ENVELOPE_TYPE_FEE_BUMP);
+      const outerFeeSource = paddedKey(TEST_FEE_SOURCE_KEY);
+      const outerFeeAmt = int64BE(BigInt(2000));
+      const middleEnvelopeType = uint32BE(ENVELOPE_TYPE_FEE_BUMP);
+      const middleFeeSource = paddedKey(TEST_INNER_SOURCE_KEY);
+      const middleFeeAmt = int64BE(BigInt(1500));
+      const invalidInnerType = uint32BE(99);
+
+      const buf = concatBuffers(
+        outerEnvelopeType,
+        outerFeeSource,
+        outerFeeAmt,
+        middleEnvelopeType,
+        middleFeeSource,
+        middleFeeAmt,
+        invalidInnerType,
+      );
+
+      expect(parseFeeBumpTransactionEnvelope(toBase64Xdr(Array.from(buf)))).toBeNull();
+    });
+
+    it("parses triple-nested fee-bump envelope (recursive skipFeeBumpTransaction)", () => {
+      const middleEnvelopeXdr = buildNestedFeeBumpEnvelope(
+        TEST_INNER_SOURCE_KEY,
+        BigInt(1500),
+        TEST_DEST_KEY,
+        BigInt(1000),
+        TEST_DEST_KEY,
+        TX_FEE,
+        TX_SEQ_NUM,
+        makePaymentOperation(TEST_DEST_KEY, BigInt(100)),
+        [makeTestSig()],
+        [makeTestSig()],
+        [makeTestSig()],
+      );
+      const middleBuf = Buffer.from(middleEnvelopeXdr, "base64");
+      const outerHeader = concatBuffers(
+        uint32BE(ENVELOPE_TYPE_FEE_BUMP),
+        paddedKey(TEST_FEE_SOURCE_KEY),
+        int64BE(BigInt(2000)),
+      );
+      const outerEnvelope = concatBuffers(outerHeader, middleBuf, uint32BE(1), makeTestSig());
+
+      const details = parseFeeBumpTransactionEnvelope(toBase64Xdr(Array.from(outerEnvelope)));
+      expect(details).not.toBeNull();
+      expect(details!.fee).toBe(BigInt(2000));
     });
   });
 });

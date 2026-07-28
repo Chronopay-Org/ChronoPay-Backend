@@ -76,13 +76,16 @@ function skipTransactionRaw(buf: Buffer, offset: number): number | null {
   if (buf.length < pos + 4 + 4 + 4) return null;
   const memoType = readInt32BE(buf, pos);
   pos += 4;
-  if (memoType === 1 || memoType === 2 || memoType === 3) {
+  if (memoType === 1) {
     if (buf.length < pos + 4) return null;
     const memoLen = readInt32BE(buf, pos);
     pos += 4;
     if (buf.length < pos + memoLen) return null;
     pos += memoLen;
-  } else if (memoType === 4) {
+  } else if (memoType === 2) {
+    if (buf.length < pos + 8) return null;
+    pos += 8;
+  } else if (memoType === 3 || memoType === 4) {
     if (buf.length < pos + 32) return null;
     pos += 32;
   }

@@ -224,6 +224,18 @@ describe("HorizonContractClient.call()", () => {
       expect.anything(),
     );
   });
+
+  it("getLatestLedger fetches /ledgers?limit=1&order=desc", async () => {
+    const ledger = { _embedded: { records: [{ sequence: 100 }] } };
+    mockOk(ledger);
+    const client = makeClient();
+    const result = await client.call(args("getLatestLedger", ""));
+    expect(result.data).toEqual(ledger);
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/ledgers?limit=1&order=desc`,
+      expect.anything(),
+    );
+  });
 });
 
 // ─── sendTransaction() ────────────────────────────────────────────────────────
@@ -432,6 +444,19 @@ describe("HorizonContractClient.sendTransaction() — fee-bump validation (issue
 
     const client = makeClient();
     await expect(client.sendTransaction(args("submitTransaction", shortB64))).rejects.toBeInstanceOf(
+      ContractInvalidRequestError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("isFeeBumpTransaction returns false if Buffer.from throws an exception", async () => {
+    jest.spyOn(Buffer, "from").mockImplementationOnce(() => {
+      throw new Error("Buffer conversion error");
+    });
+    mockHttpError(400, "bad request");
+
+    const client = makeClient();
+    await expect(client.sendTransaction(args("submitTransaction", "trigger-error"))).rejects.toBeInstanceOf(
       ContractInvalidRequestError,
     );
     expect(mockFetch).toHaveBeenCalledTimes(1);
