@@ -477,6 +477,10 @@
     "src/utils/logValidator.test.ts"
   ],
 
+  "src/utils/eventSchemaRegistry.ts": [
+    "src/utils/eventSchemaRegistry.test.ts"
+  ],
+
   "src/utils/jwt.ts": [
     "src/__tests__/auth.test.ts",
     "src/services/__tests__/tokenService.test.ts"

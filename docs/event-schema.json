@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/event-schema.json",
+  "title": "Event Schema Registry",
+  "description": "A versioned registry of domain event payload schemas for ChronoPay backend.",
+  "events": {
+    "booking_intent.created": {
+      "title": "Booking intent created event",
+      "description": "Emitted when a booking intent is created so downstream consumers can reconcile availability.",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "description": "Initial schema for booking intent creation events.",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "bookingIntentId": { "type": "string" },
+              "userId": { "type": "string" },
+              "slotId": { "type": "string" },
+              "amountMinorUnits": { "type": "integer" },
+              "currency": { "type": "string" },
+              "createdAt": { "type": "string", "format": "date-time" }
+            },
+            "required": ["bookingIntentId", "userId", "slotId", "amountMinorUnits", "currency", "createdAt"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "version": "1.1.0",
+          "description": "Non-breaking extension with optional metadata and source tracking.",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "bookingIntentId": { "type": "string" },
+              "userId": { "type": "string" },
+              "slotId": { "type": "string" },
+              "amountMinorUnits": { "type": "integer" },
+              "currency": { "type": "string" },
+              "createdAt": { "type": "string", "format": "date-time" },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "source": { "type": "string" }
+            },
+            "required": ["bookingIntentId", "userId", "slotId", "amountMinorUnits", "currency", "createdAt"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    "checkout.session.completed": {
+      "title": "Checkout session completed event",
+      "description": "Emitted when checkout completes successfully for a session.",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "description": "Initial checkout session completion payload schema.",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "sessionId": { "type": "string" },
+              "customerId": { "type": "string" },
+              "amountMinorUnits": { "type": "integer" },
+              "currency": { "type": "string" },
+              "completedAt": { "type": "string", "format": "date-time" },
+              "paymentMethod": { "type": "string" }
+            },
+            "required": ["sessionId", "customerId", "amountMinorUnits", "currency", "completedAt", "paymentMethod"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "version": "1.1.0",
+          "deprecated": true,
+          "description": "Deprecated version kept for compatibility but no longer used for writes.",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "sessionId": { "type": "string" },
+              "customerId": { "type": "string" },
+              "amountMinorUnits": { "type": "integer" },
+              "currency": { "type": "string" },
+              "completedAt": { "type": "string", "format": "date-time" },
+              "paymentMethod": { "type": "string" },
+              "paymentProvider": { "type": "string" }
+            },
+            "required": ["sessionId", "customerId", "amountMinorUnits", "currency", "completedAt", "paymentMethod"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  }
+}

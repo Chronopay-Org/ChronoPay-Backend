@@ -26,6 +26,12 @@ jobs:
         run: docker run --rm -v ${{ github.workspace }}:/workspace prom/prometheus promtool check rules /workspace/ops/alerts/*.yml
       - name: Validate Grafana Dashboards
         run: npx tsx scripts/validate-dashboards.ts
+      - name: Fetch main branch for event schema comparison
+        run: git fetch origin main --depth=1
+      - name: Validate event schema registry
+        run: |
+          git show origin/main:docs/event-schema.json > /tmp/base-event-schema.json
+          npx tsx src/scripts/check-event-schemas.ts --base /tmp/base-event-schema.json --head docs/event-schema.json
 
   test-shards:
     needs: lint
