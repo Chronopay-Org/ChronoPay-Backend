@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
 import { capacityForecaster } from "../services/capacityForecaster.js";
+import { RefundService } from "../services/refund.js";
 
 const router = Router();
 
@@ -82,7 +83,64 @@ router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response)
   return res.status(200).json({ success: true });
 });
 
-// --- Mock Dispute Logic for E2E Tests ---
+// --- Refund Routes ---
+
+/**
+ * @route POST /api/v1/admin/refunds
+ * @desc Create a partial refund against a completed payment session.
+ *       Enforces the invariant that sum of refunds <= captured amount.
+ * @access Private (admin token only)
+ */
+router.post("/refunds", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { paymentId, amountCents, currency, reason, refundedBy } = req.body;
+
+    if (!paymentId) {
+      return res.status(400).json({ success: false, error: "paymentId is required" });
+    }
+    if (!amountCents || typeof amountCents !== "number" || amountCents <= 0) {
+      return res.status(400).json({ success: false, error: "amountCents must be a positive integer" });
+    }
+
+    const refund = await RefundService.createRefundTraced({
+      paymentId,
+      amountCents,
+      currency,
+      reason,
+      refundedBy,
+    });
+
+    return res.status(201).json({ success: true, refund });
+  } catch (error: any) {
+    const status = error.status ?? 500;
+    return res.status(status).json({
+      success: false,
+      error: error.message ?? "Refund creation failed",
+      code: error.code,
+      details: error.details,
+    });
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/payments/:id/trace
+ * @desc Retrieve a payment trace including the original payment and all linked refund entries.
+ * @access Private (admin token only)
+ */
+router.get("/payments/:id/trace", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const trace = await RefundService.getPaymentTraceTraced(req.params.id);
+    return res.json({ success: true, trace });
+  } catch (error: any) {
+    const status = error.status ?? 500;
+    return res.status(status).json({
+      success: false,
+      error: error.message ?? "Trace retrieval failed",
+    });
+  }
+});
+
+// ----------------------------------------
 type Dispute = {
   id: string;
   status: "OPEN" | "EVIDENCED" | "ADJUDICATED" | "APPEALED" | "CLOSED" | "TIMEOUT";
