@@ -7,8 +7,7 @@ import { getImpersonationSessionStore } from "../services/impersonationSessionSt
 import type { SessionListOptions } from "../types/impersonation.types.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { IMPERSONATION_AUDIT_ACTIONS } from "../types/auditEvent.js";
-import { getTzDriftMetricsSnapshot } from "../metrics/tzDriftMetrics.js";
-import { getLastScanFindings } from "../scheduler/tzDriftMonitor.js";
+import type { LocalIntentStatus } from "../services/escrowDriftReconciler.js";
 
 const router = Router();
 
@@ -669,6 +668,324 @@ router.get(
       return res.status(500).json({
         success: false,
         error: err.message ?? "Failed to retrieve TZ drift offenders",
+      });
+    }
+  },
+);
+
+// ─── Payout DLQ Inspection API ──────────────────────────────────────────────
+
+// In-memory dispute state for testing (kept for backward compatibility)
+let disputesState: Map<string, any> = new Map();
+
+export function resetDisputesState(): void {
+  disputesState = new Map();
+}
+
+/**
+ * Validated PayoutDlqStatus values.
+ */
+const VALID_DLQ_STATUSES: PayoutDlqStatus[] = ["pending", "reprocessed", "inspected"];
+
+function isValidDlqStatus(value: string): value is PayoutDlqStatus {
+  return VALID_DLQ_STATUSES.includes(value as PayoutDlqStatus);
+}
+
+/**
+ * @route GET /api/v1/admin/payout-dlq
+ * @desc List payout DLQ entries with optional filtering by supplierId, errorClass,
+ *       status, and full-text search. All payloads are masked server-side.
+ *   Query params:
+ *     supplierId  – filter by supplier ID
+ *     errorClass  – filter by error class (case-insensitive)
+ *     status      – filter by status (pending, reprocessed, inspected)
+ *     search      – full-text search across supplierId, errorClass, errorMessage, id
+ *     limit       – max results (default 50, max 200)
+ *     offset      – pagination offset (default 0)
+ * @access Private (admin token only)
+ */
+router.get(
+  "/payout-dlq",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const store = getPayoutDlqStore();
+
+      // Validate status filter if provided
+      if (req.query.status !== undefined) {
+        const statusVal = String(req.query.status);
+        if (!isValidDlqStatus(statusVal)) {
+          return res.status(400).json({
+            success: false,
+            error: `Invalid status. Must be one of: ${VALID_DLQ_STATUSES.join(", ")}`,
+          });
+        }
+      }
+
+      // Validate limit
+      if (req.query.limit !== undefined) {
+        const lim = parseInt(String(req.query.limit), 10);
+        if (isNaN(lim) || lim < 1 || lim > 200) {
+          return res.status(400).json({
+            success: false,
+            error: "limit must be between 1 and 200",
+          });
+        }
+      }
+
+      // Validate offset
+      if (req.query.offset !== undefined) {
+        const off = parseInt(String(req.query.offset), 10);
+        if (isNaN(off) || off < 0) {
+          return res.status(400).json({
+            success: false,
+            error: "offset must be a non-negative integer",
+          });
+        }
+      }
+
+      const result = store.list({
+        supplierId:
+          typeof req.query.supplierId === "string"
+            ? req.query.supplierId
+            : undefined,
+        errorClass:
+          typeof req.query.errorClass === "string"
+            ? req.query.errorClass
+            : undefined,
+        status:
+          typeof req.query.status === "string" &&
+          isValidDlqStatus(req.query.status)
+            ? req.query.status
+            : undefined,
+        search:
+          typeof req.query.search === "string"
+            ? req.query.search
+            : undefined,
+        limit: req.query.limit !== undefined
+          ? parseInt(String(req.query.limit), 10)
+          : undefined,
+        offset: req.query.offset !== undefined
+          ? parseInt(String(req.query.offset), 10)
+          : undefined,
+      });
+
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list payout DLQ entries",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/payout-dlq/:entryId
+ * @desc Retrieve a single payout DLQ entry with masked payload.
+ *       Logs an audit event for each inspection.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/payout-dlq/:entryId",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const { entryId } = req.params;
+
+      if (
+        !entryId ||
+        typeof entryId !== "string" ||
+        entryId.trim() === ""
+      ) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Missing entryId" });
+      }
+
+      const store = getPayoutDlqStore();
+
+      // Check existence first
+      const raw = store.getByIdRaw(entryId.trim());
+      if (!raw) {
+        return res.status(404).json({
+          success: false,
+          error: `Payout DLQ entry '${entryId}' not found`,
+        });
+      }
+
+      // Mark as inspected, then read the updated masked entry
+      store.markInspected(entryId.trim());
+      const entry = store.getById(entryId.trim())!;
+
+      void defaultAuditLogger.log(
+        "payout.dlq.inspected",
+        {
+          body: {
+            dlqEntryId: entry.id,
+            supplierId: entry.supplierId,
+            errorClass: entry.errorClass,
+          },
+          context: {
+            inspectorIp: req.ip ?? "unknown",
+          },
+        },
+        {
+          resource: `/api/v1/admin/payout-dlq/${entry.id}`,
+          status: 200,
+        },
+      );
+
+      return res.status(200).json({ success: true, entry });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to retrieve payout DLQ entry",
+      });
+    }
+  },
+);
+
+// ─── Escrow Drift Override API ───────────────────────────────────────────────
+
+/**
+ * In-memory reference to the escrow drift reconciler, set by the app
+ * bootstrap when a reconciler is active. Tests can replace this with
+ * a mock reconciler.
+ */
+let _driftReconciler: {
+  manualOverride(
+    slotId: string,
+    targetStatus: LocalIntentStatus,
+    reason: string,
+    actorIp: string,
+  ): Promise<{ previousState: unknown; newState: unknown }>;
+} | null = null;
+
+export function setDriftReconciler(
+  reconciler: NonNullable<typeof _driftReconciler>,
+): void {
+  _driftReconciler = reconciler;
+}
+
+function getDriftReconciler() {
+  return _driftReconciler;
+}
+
+const VALID_INTENT_STATUSES: ReadonlySet<LocalIntentStatus> = new Set([
+  "pending",
+  "confirmed",
+  "cancelled",
+  "expired",
+]);
+
+/**
+ * @route POST /api/v1/admin/escrow/drift/override
+ * @desc Manually override a booking intent's escrow state to resolve drift.
+ *   This is a privileged operation that must only be used after careful
+ *   forensic investigation. Every override is audited.
+ *
+ *   Body:
+ *     slotId       – the slot to override (required)
+ *     targetStatus – new intent status (pending|confirmed|cancelled|expired)
+ *     reason       – forensic justification (required, min 20 chars)
+ *
+ * @access Private (admin token only)
+ */
+router.post(
+  "/escrow/drift/override",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const reconciler = getDriftReconciler();
+      if (!reconciler) {
+        return res.status(503).json({
+          success: false,
+          error: "Escrow drift reconciler is not running",
+        });
+      }
+
+      const { slotId, targetStatus, reason } = req.body as {
+        slotId?: string;
+        targetStatus?: string;
+        reason?: string;
+      };
+
+      // Validate slotId
+      if (!slotId || typeof slotId !== "string" || slotId.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: "slotId is required and must be a non-empty string",
+        });
+      }
+
+      // Validate targetStatus
+      if (!targetStatus || typeof targetStatus !== "string") {
+        return res.status(400).json({
+          success: false,
+          error: `targetStatus is required and must be one of: ${Array.from(VALID_INTENT_STATUSES).join(", ")}`,
+        });
+      }
+
+      if (!VALID_INTENT_STATUSES.has(targetStatus as LocalIntentStatus)) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid targetStatus "${targetStatus}". Must be one of: ${Array.from(VALID_INTENT_STATUSES).join(", ")}`,
+        });
+      }
+
+      // Validate reason (min 20 chars for forensic justification, max 2000 for abuse prevention)
+      if (!reason || typeof reason !== "string" || reason.trim().length < 20) {
+        return res.status(400).json({
+          success: false,
+          error: "reason is required and must be at least 20 characters (forensic justification)",
+        });
+      }
+
+      if (reason.trim().length > 2000) {
+        return res.status(400).json({
+          success: false,
+          error: "reason must be at most 2000 characters",
+        });
+      }
+
+      const actorIp = req.ip ?? "unknown";
+      const result = await reconciler.manualOverride(
+        slotId.trim(),
+        targetStatus as LocalIntentStatus,
+        reason.trim(),
+        actorIp,
+      );
+
+      // Audit the override
+      void defaultAuditLogger.log(
+        "escrow.drift.override.applied",
+        {
+          context: {
+            slotId: slotId.trim(),
+            targetStatus,
+            reason: reason.trim(),
+            previousStatus: (result.previousState as any)?.intentStatus ?? "unknown",
+            actorIp,
+          },
+          method: req.method,
+        },
+        { actorIp, resource: `slot:${slotId.trim()}`, status: 200 },
+      );
+
+      return res.status(200).json({
+        success: true,
+        slotId: slotId.trim(),
+        previousState: result.previousState,
+        newState: result.newState,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Manual override failed",
       });
     }
   },
