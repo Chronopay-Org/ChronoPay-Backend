@@ -17,6 +17,11 @@ import { defaultAuditLogger } from "./auditLogger.js";
 import { withSpan } from "../tracing/hooks.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
 import { query } from "../db/pool.js";
+import {
+  HorizonContractClient,
+  StellarAsset,
+  ExecutedPathPaymentQuote,
+} from "../clients/horizon-contract-client.js";
 
 const SESSION_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 
@@ -239,6 +244,133 @@ export class CheckoutSessionService {
     }
   }
 
+  // ── Per-tenant slippage configuration ──────────────────────────────────────────
+
+  private static tenantSlippageConfig: Map<string, number> = new Map();
+  private static defaultSlippageTolerancePercent: number = 0.5;
+
+  static setTenantSlippageTolerance(tenantId: string, tolerancePercent: number): void {
+    if (typeof tolerancePercent !== "number" || tolerancePercent < 0 || tolerancePercent > 50) {
+      throw new CheckoutError(
+        "INVALID_SLIPPAGE_TOLERANCE",
+        "Slippage tolerance percent must be a number between 0 and 50",
+        400,
+      );
+    }
+    this.tenantSlippageConfig.set(tenantId, tolerancePercent);
+  }
+
+  static getTenantSlippageTolerance(tenantId?: string): number {
+    if (tenantId && this.tenantSlippageConfig.has(tenantId)) {
+      return this.tenantSlippageConfig.get(tenantId)!;
+    }
+    return this.defaultSlippageTolerancePercent;
+  }
+
+  static clearTenantSlippageConfig(): void {
+    this.tenantSlippageConfig.clear();
+  }
+
+  static async processPartialRefundPathPayment(
+    request: {
+      sessionId: string;
+      tenantId?: string;
+      refundAmount: number;
+      sourceAsset?: StellarAsset;
+      destinationAsset: StellarAsset;
+      slippageTolerancePercent?: number;
+      oracleRate?: number;
+      oracleTimestamp?: number;
+      oracleMaxAgeSeconds?: number;
+      dustThresholdStroops?: number;
+    },
+    horizonClient?: HorizonContractClient,
+  ): Promise<{ session: CheckoutSession; quote: ExecutedPathPaymentQuote }> {
+    const session = await this.getSession(request.sessionId);
+
+    if (session.status !== CheckoutSessionStatus.COMPLETED) {
+      this.emitAuditEvent("partial_refund_path_payment", "failed", `session:${request.sessionId}`, {
+        reason: `Cannot refund session in ${session.status} state`,
+        currentState: session.status,
+      });
+      throw new CheckoutError(
+        CheckoutErrorCode.INVALID_SESSION_STATE,
+        `Cannot refund session in ${session.status} state`,
+        409,
+        { currentState: session.status },
+      );
+    }
+
+    const tenantId = request.tenantId ?? (session.metadata?.tenantId as string) ?? "default";
+    const tenantTolerance = this.getTenantSlippageTolerance(tenantId);
+    const maxSlippageTolerancePercent =
+      request.slippageTolerancePercent !== undefined
+        ? Math.min(request.slippageTolerancePercent, tenantTolerance)
+        : tenantTolerance;
+
+    const sourceAsset: StellarAsset = request.sourceAsset ?? { asset_type: "native" };
+
+    if (!horizonClient) {
+      throw new CheckoutError(
+        CheckoutErrorCode.INTERNAL_ERROR,
+        "Horizon contract client is required for path payment refund",
+        500,
+      );
+    }
+
+    try {
+      const quote = await horizonClient.findPathPaymentQuote({
+        sourceAsset,
+        sourceAmount: request.refundAmount,
+        destinationAsset: request.destinationAsset,
+        tenantId,
+        maxSlippageTolerancePercent,
+        oracleRate: request.oracleRate,
+        oracleTimestamp: request.oracleTimestamp,
+        oracleMaxAgeSeconds: request.oracleMaxAgeSeconds,
+        dustThresholdStroops: request.dustThresholdStroops,
+      });
+
+      // Audit log the executed path payment quote for audit persistence
+      this.emitAuditEvent("partial_refund_path_payment.executed", "success", `session:${request.sessionId}`, {
+        sessionId: request.sessionId,
+        tenantId,
+        quoteId: quote.quoteId,
+        sourceAmount: quote.sourceAmount,
+        destinationAmount: quote.destinationAmount,
+        minDestinationAmount: quote.minDestinationAmount,
+        effectiveSlippagePercent: quote.effectiveSlippagePercent,
+        maxSlippageTolerancePercent: quote.maxSlippageTolerancePercent,
+        path: quote.path,
+        quotedAt: quote.quotedAt,
+      });
+
+      // Update session metadata with audit quote
+      const updatedMetadata = {
+        ...(session.metadata ?? {}),
+        lastPartialRefundQuote: quote as unknown as Record<string, unknown>,
+      };
+
+      const updatedSession = await _repo.updateSession(request.sessionId, {
+        status: session.status,
+        updatedAt: Math.floor(Date.now() / 1000),
+        metadata: updatedMetadata,
+      });
+
+      return { session: updatedSession, quote };
+    } catch (err: any) {
+      this.emitAuditEvent("partial_refund_path_payment", "failed", `session:${request.sessionId}`, {
+        reason: err.message ?? "Path payment quote execution failed",
+      });
+      if (err instanceof CheckoutError) {
+        throw err;
+      }
+      throw new CheckoutError("PATH_PAYMENT_FAILED", err.message ?? "Path payment failed", 400, {
+        originalError: err.name,
+      });
+    }
+  }
+
   // ── Traced wrappers ──────────────────────────────────────────────────────────
 
   static createSessionTraced(
@@ -281,6 +413,17 @@ export class CheckoutSessionService {
       "checkout.paySession",
       { route: "POST /api/v1/checkout/sessions/:sessionId/pay" },
       () => this.paySession(sessionId),
+    );
+  }
+
+  static processPartialRefundPathPaymentTraced(
+    request: Parameters<typeof CheckoutSessionService.processPartialRefundPathPayment>[0],
+    horizonClient?: HorizonContractClient,
+  ): Promise<{ session: CheckoutSession; quote: ExecutedPathPaymentQuote }> {
+    return withSpan(
+      "checkout.processPartialRefundPathPayment",
+      { sessionId: request.sessionId, tenantId: request.tenantId },
+      () => this.processPartialRefundPathPayment(request, horizonClient),
     );
   }
 }

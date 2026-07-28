@@ -566,3 +566,20 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
   next();
 };
 
+export const queryBudgetBreaches = createBudgetedCounter({
+  name: "query_budget_breaches_total",
+  help: "Total number of query budget breaches observed",
+  labels: ["route"],
+  budget: 32,
+  registers: [register],
+});
+
+export const queryBudgetSqlTimeMs = createBudgetedHistogram({
+  name: "query_budget_sql_time_ms",
+  help: "Total SQL duration per query budget context in ms",
+  labels: ["route"],
+  budget: 32,
+  buckets: [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
+  registers: [register],
+});
+
