@@ -2,8 +2,20 @@ import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
 import { capacityForecaster } from "../services/capacityForecaster.js";
+import { requireAuthenticatedActor } from "../middleware/auth.js";
+import { defaultAuditLogger } from "../services/auditLogger.js";
+import { _settlements } from "../services/settlementReconciler.js";
 
 const router = Router();
+
+// --- Pending Payout Replays State ---
+export type PendingReplay = {
+  transactionId: string;
+  initiatorId: string;
+  reason: string;
+  expiresAt: number;
+};
+export const pendingReplays = new Map<string, PendingReplay>();
 
 function buildBaseUrl(req: Request): string {
   const scheme = req.protocol;
@@ -81,6 +93,140 @@ router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response)
 
   return res.status(200).json({ success: true });
 });
+
+/**
+ * @route POST /api/v1/admin/payouts/:transactionId/replay
+ * @desc Initiate a replay of a failed supplier payout. Requires a reason and subsequent approval from a different admin.
+ * @access Private (admin role required)
+ */
+router.post(
+  "/payouts/:transactionId/replay",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    const { transactionId } = req.params;
+    const { reason } = req.body;
+    const initiatorId = req.auth?.userId;
+
+    if (!initiatorId) {
+      return res.status(401).json({ success: false, error: "Missing admin identity" });
+    }
+
+    if (!reason || typeof reason !== "string" || reason.trim() === "") {
+      return res.status(400).json({ success: false, error: "A valid reason must be provided for the replay" });
+    }
+
+    const settlement = _settlements.get(transactionId);
+    if (!settlement) {
+      return res.status(404).json({ success: false, error: "Settlement not found" });
+    }
+
+    if (settlement.status !== "failed") {
+      return res.status(400).json({ success: false, error: "Only failed settlements can be replayed" });
+    }
+
+    const TTL_MS = 15 * 60 * 1000; // 15 minutes
+    const expiresAt = Date.now() + TTL_MS;
+
+    const pendingRequest: PendingReplay = {
+      transactionId,
+      initiatorId,
+      reason,
+      expiresAt,
+    };
+
+    pendingReplays.set(transactionId, pendingRequest);
+
+    defaultAuditLogger.log(
+      "payout.replay_initiated",
+      {
+        context: { transactionId, initiatorId, reason, expiresAt },
+      },
+      {
+        actorIp: req.ip?.replace("::ffff:", "") || req.socket?.remoteAddress?.replace("::ffff:", "") || "127.0.0.1",
+        resource: req.originalUrl,
+        status: 202,
+      }
+    );
+
+    return res.status(202).json({
+      success: true,
+      message: "Replay initiated. Awaiting approval from a different admin.",
+      pendingRequest,
+    });
+  }
+);
+
+/**
+ * @route POST /api/v1/admin/payouts/:transactionId/replay/approve
+ * @desc Approve a pending replay request for a failed supplier payout. Must be a different admin.
+ * @access Private (admin role required)
+ */
+router.post(
+  "/payouts/:transactionId/replay/approve",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    const { transactionId } = req.params;
+    const approverId = req.auth?.userId;
+
+    if (!approverId) {
+      return res.status(401).json({ success: false, error: "Missing admin identity" });
+    }
+
+    const pendingRequest = pendingReplays.get(transactionId);
+    if (!pendingRequest) {
+      return res.status(404).json({ success: false, error: "No pending replay request found for this transaction" });
+    }
+
+    // TTL check
+    if (Date.now() > pendingRequest.expiresAt) {
+      pendingReplays.delete(transactionId);
+      return res.status(400).json({ success: false, error: "Pending replay request has expired" });
+    }
+
+    // Dual-admin check
+    if (approverId === pendingRequest.initiatorId) {
+      return res.status(403).json({ success: false, error: "Approver must be a different admin from the initiator" });
+    }
+
+    const settlement = _settlements.get(transactionId);
+    if (!settlement) {
+      // Very unlikely edge case, but check anyway
+      return res.status(404).json({ success: false, error: "Settlement not found" });
+    }
+
+    // Reset settlement state to allow reconciler to retry
+    settlement.status = "pending_finality";
+    settlement.attempts = 0;
+    settlement.lastPolledAt = undefined;
+    
+    // Clear pending request
+    pendingReplays.delete(transactionId);
+
+    // Audit dual-admin action
+    defaultAuditLogger.log(
+      "payout.replay_approved",
+      {
+        context: {
+          transactionId,
+          initiatorId: pendingRequest.initiatorId,
+          approverId,
+          reason: pendingRequest.reason,
+        },
+      },
+      {
+        actorIp: req.ip?.replace("::ffff:", "") || req.socket?.remoteAddress?.replace("::ffff:", "") || "127.0.0.1",
+        resource: req.originalUrl,
+        status: 200,
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Replay approved. Settlement reset to pending_finality.",
+      settlement,
+    });
+  }
+);
 
 // --- Mock Dispute Logic for E2E Tests ---
 type Dispute = {
