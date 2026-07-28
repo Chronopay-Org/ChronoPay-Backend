@@ -384,6 +384,32 @@ export const slowQueryDuration = createBudgetedHistogram({
   registers: [register],
 });
 
+// ─── Reputation Transparency Metrics ─────────────────────────────────────────
+
+export const reputationTransparencyRequestsTotal = createBudgetedCounter({
+  name: "reputation_transparency_requests_total",
+  help: "Total number of supplier reputation signal projection requests",
+  labels: ["tenant", "status"],
+  budget: 100,
+  registers: [register],
+});
+
+export const reputationSmallCellSuppressionsTotal = createBudgetedCounter({
+  name: "reputation_small_cell_suppressions_total",
+  help: "Total number of small-cell count suppressions applied to protect counterparty privacy",
+  labels: ["tenant", "category"],
+  budget: 100,
+  registers: [register],
+});
+
+export function recordReputationQuery(tenant: string, status: string): void {
+  reputationTransparencyRequestsTotal.labels(tenant || "unknown", status).inc();
+}
+
+export function recordSmallCellSuppression(tenant: string, category: string): void {
+  reputationSmallCellSuppressionsTotal.labels(tenant || "unknown", category).inc();
+}
+
 /**
  * Express middleware to track HTTP request duration.
  */
@@ -404,3 +430,4 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
 
   next();
 };
+
