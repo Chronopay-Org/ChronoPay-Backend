@@ -11,9 +11,6 @@
  *   npx tsx scripts/slo-weekly-report.ts
  */
 
-import fs from "fs";
-import path from "path";
-
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface SloData {
