@@ -27,6 +27,15 @@ export class SlotExpiredError extends Error {
   readonly validUntil: number;
 }
 
+export class EscrowPausedError extends Error {
+  constructor() {
+    super(`Escrow contract migration in progress: new holds are temporarily paused`);
+    this.name = "EscrowPausedError";
+  }
+}
+
+import { escrowMigrationState } from "./escrowMigrationState.js";
+
 /**
  * Coordinates slot reservation with booking intent state transitions.
  *
@@ -47,6 +56,9 @@ export class SchedulingService {
   ) {}
 
   reserveSlot(slotId: string, now?: number): void {
+    if (escrowMigrationState.isPaused()) {
+      throw new EscrowPausedError();
+    }
     const slot = this.slotRepository.findById(slotId);
     if (!slot) {
       throw new SlotNotFoundError(slotId);
