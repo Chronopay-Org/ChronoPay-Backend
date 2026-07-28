@@ -22,6 +22,7 @@ import {
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
+import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
 
 export function createBookingIntentsRouter() {
   const router = Router();
@@ -63,6 +64,14 @@ export function createBookingIntentsRouter() {
         const fraudScorer = new FraudScorer();
         const fraudResult = fraudScorer.evaluate(input.id ?? 'temp-intent-id', req);
         const threshold = fraudScorer.getThreshold();
+        // Feed the live score into the fraud drift detector. The metrics
+        // module is import-side-effect-free so a missing baseline is a no-op
+        // rather than a request blocker. `FRAUD_MODEL_VERSION` threads the
+        // histogram label through the deployment env (e.g. "2025-q1-r3").
+        recordFraudScore(
+          `v${process.env.FRAUD_MODEL_VERSION || 'default'}`,
+          fraudResult.score,
+        );
         if (fraudResult.score >= threshold) {
           if (fraudScorer.getStepUpMode() === 'challenge') {
             // Return challenge token response
