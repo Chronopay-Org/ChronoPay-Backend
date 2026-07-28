@@ -1,7 +1,11 @@
 {
   "name": "chronopay-backend",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -14,7 +18,8 @@
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --coverage",
     "migrate": "tsx src/scripts/migrate.ts",
     "canary": "tsx scripts/canary.ts",
-    "generate-openapi": "tsx src/scripts/generate-openapi.ts"
+    "generate-openapi": "tsx src/scripts/generate-openapi.ts",
+    "release:sdk": "node scripts/release-sdk.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

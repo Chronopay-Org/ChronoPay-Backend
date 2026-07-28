@@ -139,7 +139,7 @@ jobs:
   openapi-breaking-check:
     name: OpenAPI Breaking‑Change Check
     runs-on: ubuntu-latest
-    needs: build-test
+    needs: [lint, test-shards]
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -191,6 +191,30 @@ jobs:
             $(cat diff.txt)
             \`\`\`
             ${{ steps.diff.outputs.breaking == 'yes' && '⚠️ Breaking changes detected. Add `breaking-change-approved` label to override.' || '✅ No breaking changes.' }}
+
+  sdk-release:
+    name: Publish SDK to npm
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [lint, test-shards]
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Publish SDK
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node scripts/release-sdk.js --tag "${GITHUB_REF_NAME}"
 
   container-scan:
     name: Container Image Security Scan
