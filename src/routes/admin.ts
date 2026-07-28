@@ -2,8 +2,17 @@ import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
 import { capacityForecaster } from "../services/capacityForecaster.js";
+import fraudModelsRouter from "./fraudModels.js";
 
 const router = Router();
+
+/**
+ * Mount the fraud model registry surface under `/api/v1/admin/fraud-models`.
+ * The sub-router exposes relative paths (`/promote`, `/list`) so the final
+ * URLs become `/api/v1/admin/fraud-models/promote` and
+ * `/api/v1/admin/fraud-models/list`.
+ */
+router.use("/fraud-models", fraudModelsRouter);
 
 function buildBaseUrl(req: Request): string {
   const scheme = req.protocol;
@@ -120,7 +129,7 @@ router.post("/disputes/:id/evidence", requireAdminToken, (req, res) => {
   const dispute = disputes.get(req.params.id);
   if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
   if (req.body.failUpload) return res.status(500).json({ success: false, error: "Evidence upload failed" });
-  
+
   dispute.evidence.push(req.body.evidence);
   dispute.status = "EVIDENCED";
   return res.status(200).json({ success: true, dispute, evidenceAnchor: `anchor-${Date.now()}` });
@@ -129,7 +138,7 @@ router.post("/disputes/:id/evidence", requireAdminToken, (req, res) => {
 router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
   const dispute = disputes.get(req.params.id);
   if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
-  
+
   const { ruling, arbiter } = req.body;
   dispute.ruling = ruling;
   dispute.arbiter = arbiter;
@@ -142,12 +151,12 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
     ledgers.buyer -= dispute.amount;
     ledgers.supplier += dispute.amount;
   }
-  
-  return res.status(200).json({ 
-    success: true, 
-    dispute, 
+
+  return res.status(200).json({
+    success: true,
+    dispute,
     rulingAudit: `audit-${Date.now()}`,
-    ledgers 
+    ledgers
   });
 });
 
