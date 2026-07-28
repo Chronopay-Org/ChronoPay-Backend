@@ -18,7 +18,7 @@ import { Migration } from "../migrationRunner.js";
  *  - Index on `occurrence_date` supports horizon cleanup queries.
  */
 export const migration: Migration = {
-  id: "008",
+  id: "010",
   name: "create_recurrence_series",
 
   async up(client: PoolClient): Promise<void> {
