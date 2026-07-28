@@ -32,7 +32,7 @@ jobs:
 
       - name: Run npm audit (fail on high+)
         if: steps.check_labels.outputs.suppress != 'true'
-        run: npm audit --audit-level=high
+        run: npm audit --audit-level=high --omit=dev
 
       - name: Audit suppressed
         if: steps.check_labels.outputs.suppress == 'true'

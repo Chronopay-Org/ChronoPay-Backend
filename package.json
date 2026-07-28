@@ -37,8 +37,9 @@
     "zod": "^3.21.4"
   },
   "overrides": {
+    "ws": "^8.21.0",
     "ethers": {
-      "ws": "8.20.1"
+      "ws": "^8.21.0"
     }
   },
   "devDependencies": {
@@ -69,6 +70,7 @@
     "supertest": "^7.2.2",
     "ts-jest": "^29.2.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "ajv": "^8.12.0"
   }
 }
