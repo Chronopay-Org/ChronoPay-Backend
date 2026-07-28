@@ -369,6 +369,54 @@ export const slowQueryDuration = createBudgetedHistogram({
   registers: [register],
 });
 
+// ─── Escrow drift reconciler metrics ──────────────────────────────────────────
+
+/**
+ * Gauge set to 1 when drift is detected between chain escrow state and local DB.
+ */
+export const escrowDriftDetected = createBudgetedGauge({
+  name: "escrow_drift_detected",
+  help: "Whether escrow state drift has been detected (1 = drift, 0 = clean)",
+  labels: ["slot_id"],
+  budget: 128,
+  buckets: [],
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time an escrow reader returns a result that
+ * disagrees with the quorum majority for any slot.
+ */
+export const escrowReaderDisagreementTotal = createBudgetedCounter({
+  name: "escrow_reader_disagreement_total",
+  help: "Total number of reader disagreements observed during escrow drift reconciliation",
+  labels: ["reader_id"],
+  budget: 8,
+  registers: [register],
+});
+
+/**
+ * Counter incremented on each drift reconciliation tick.
+ */
+export const escrowDriftReconciliationTicks = createBudgetedCounter({
+  name: "escrow_drift_reconciliation_ticks_total",
+  help: "Total number of escrow drift reconciliation ticks performed",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time a drift override is applied.
+ */
+export const escrowDriftOverridesApplied = createBudgetedCounter({
+  name: "escrow_drift_overrides_applied_total",
+  help: "Total number of manual escrow drift overrides applied",
+  labels: ["slot_id"],
+  budget: 64,
+  registers: [register],
+});
+
 /**
  * Express middleware to track HTTP request duration.
  */
