@@ -4,7 +4,13 @@ import { auditExportService } from "../services/auditExportService.js";
 import { capacityForecaster } from "../services/capacityForecaster.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
+import {
+  getPayoutQuarantineService,
+  type PayoutQuarantineEntry,
+} from "../services/quarantineStore.js";
 import { _settlements } from "../services/settlementReconciler.js";
+import type { SessionListOptions } from "../types/impersonation.types.js";
 
 const router = Router();
 
@@ -21,6 +27,11 @@ function buildBaseUrl(req: Request): string {
   const scheme = req.protocol;
   const host = req.get("host") ?? "localhost";
   return `${scheme}://${host}`;
+}
+
+function getActorIp(req: Request): string {
+  const rawIp = req.ip?.replace("::ffff:", "") ?? req.socket?.remoteAddress?.replace("::ffff:", "") ?? "127.0.0.1";
+  return rawIp || "127.0.0.1";
 }
 
 /**
@@ -142,7 +153,7 @@ router.post(
         context: { transactionId, initiatorId, reason, expiresAt },
       },
       {
-        actorIp: req.ip?.replace("::ffff:", "") || req.socket?.remoteAddress?.replace("::ffff:", "") || "127.0.0.1",
+        actorIp: getActorIp(req),
         resource: req.originalUrl,
         status: 202,
       }
@@ -214,7 +225,7 @@ router.post(
         },
       },
       {
-        actorIp: req.ip?.replace("::ffff:", "") || req.socket?.remoteAddress?.replace("::ffff:", "") || "127.0.0.1",
+        actorIp: getActorIp(req),
         resource: req.originalUrl,
         status: 200,
       }
@@ -226,6 +237,81 @@ router.post(
       settlement,
     });
   }
+);
+
+// ─── Payout Quarantine Admin API ───────────────────────────────────────────
+
+router.get(
+  "/payouts/quarantine",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    try {
+      const service = getPayoutQuarantineService();
+      const entries = service.list();
+      return res.status(200).json({
+        success: true,
+        entries,
+        total: entries.length,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list quarantined payouts",
+      });
+    }
+  },
+);
+
+router.post(
+  "/payouts/:transactionId/quarantine/release",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    try {
+      const { transactionId } = req.params;
+      const initiatorId = req.auth?.userId;
+      const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+
+      if (!initiatorId) {
+        return res.status(401).json({ success: false, error: "Missing admin identity" });
+      }
+
+      const service = getPayoutQuarantineService();
+      const released = service.release(transactionId, {
+        releasedBy: initiatorId,
+        reason,
+      });
+
+      if (!released) {
+        return res.status(404).json({
+          success: false,
+          error: `No quarantine entry found for payout '${transactionId}'`,
+        });
+      }
+
+      void defaultAuditLogger.log(
+        "payout.quarantine.released",
+        {
+          body: { transactionId, releasedBy: initiatorId, reason },
+        },
+        {
+          actorIp: getActorIp(req),
+          resource: req.originalUrl,
+          status: 200,
+        },
+      );
+
+      return res.status(200).json({
+        success: true,
+        released: true,
+        payoutId: transactionId,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to release quarantined payout",
+      });
+    }
+  },
 );
 
 // --- Mock Dispute Logic for E2E Tests ---
@@ -251,6 +337,8 @@ type Dispute = {
  *     offset        – pagination offset (default 0)
  * @access Private (admin token only)
  */
+const impersonationSessionStore = new InMemoryImpersonationSessionStore();
+
 router.get(
   "/impersonation/sessions",
   requireAdminToken,
@@ -258,11 +346,38 @@ router.get(
     try {
       const opts: SessionListOptions = {};
 
-export const resetDisputesState = () => {
-  disputes.clear();
-  ledgers = { buyer: 1000, supplier: 1000 };
-  resetSeniorPool();
-};
+      if (typeof req.query.targetUserId === "string") {
+        opts.targetUserId = req.query.targetUserId;
+      }
+      if (typeof req.query.adminId === "string") {
+        opts.adminId = req.query.adminId;
+      }
+      if (typeof req.query.since === "string") {
+        opts.since = req.query.since;
+      }
+      if (typeof req.query.limit === "string") {
+        const parsed = Number.parseInt(req.query.limit, 10);
+        if (Number.isFinite(parsed)) {
+          opts.limit = parsed;
+        }
+      }
+      if (typeof req.query.offset === "string") {
+        const parsed = Number.parseInt(req.query.offset, 10);
+        if (Number.isFinite(parsed)) {
+          opts.offset = parsed;
+        }
+      }
+
+      const sessions = await impersonationSessionStore.listSessions(opts);
+      return res.status(200).json({ success: true, sessions });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list impersonation sessions",
+      });
+    }
+  },
+);
 
 function readStringField(body: any, key: string, fallback: unknown): string {
   if (!body || typeof body !== "object") {
