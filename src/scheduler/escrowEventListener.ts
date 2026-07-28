@@ -120,7 +120,7 @@ export async function runEscrowListenerTick(
   const freshnessSloSeconds =
     options.freshnessSloSeconds ?? ESCROW_LISTENER_FRESHNESS_SLO_SECONDS;
   const allowList = options.contractAddressAllowList ?? [];
-  const sleep = options.sleep ?? defaultSleep;
+  const _sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? (() => Date.now());
 
   if (!Number.isInteger(pageLimit) || pageLimit <= 0) {

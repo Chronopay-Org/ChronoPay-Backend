@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
-import path from 'path';
+
 
 /**
  * Verify a container image using Cosign.

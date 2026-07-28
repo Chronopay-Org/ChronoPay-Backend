@@ -42,7 +42,7 @@ function setup(opts: { allowList?: string[]; withIntent?: "yes" | "no" }) {
     slots,
     opts.allowList ?? [CONTRACT],
   );
-  let intentId: string | undefined;
+  let _intentId: string | undefined;
   if (opts.withIntent === "yes") {
     intents
       .create({
