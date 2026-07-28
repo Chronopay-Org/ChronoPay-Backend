@@ -200,6 +200,14 @@ export class SlotService {
     return { ...slot };
   }
 
+  async findByIds(ids: readonly (number | string)[]): Promise<(Slot | Error)[]> {
+    const idStrings = ids.map(id => String(id));
+    return idStrings.map(idStr => {
+      const slot = this._slots.find(s => String(s.id) === idStr);
+      return slot ? { ...slot } : new Error(`Slot with ID ${idStr} not found`);
+    });
+  }
+
   async deleteSlot(id: number | string): Promise<number | string> {
     const index = this._slots.findIndex(s => String(s.id) === String(id));
     if (index === -1) throw new SlotNotFoundError(id);

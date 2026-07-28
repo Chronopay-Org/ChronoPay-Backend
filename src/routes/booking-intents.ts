@@ -24,6 +24,7 @@ import {
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
+import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
 
 import { QuarantineStore } from '../services/quarantineStore.js';
 import { FraudScorer } from '../services/fraudScorer.js';
@@ -69,6 +70,14 @@ export function createBookingIntentsRouter() {
         const input = req.body;
         const fraudResult = fraudScorer.evaluate(input.id ?? 'temp-intent-id', req);
         const threshold = fraudScorer.getThreshold();
+        // Feed the live score into the fraud drift detector. The metrics
+        // module is import-side-effect-free so a missing baseline is a no-op
+        // rather than a request blocker. `FRAUD_MODEL_VERSION` threads the
+        // histogram label through the deployment env (e.g. "2025-q1-r3").
+        recordFraudScore(
+          `v${process.env.FRAUD_MODEL_VERSION || 'default'}`,
+          fraudResult.score,
+        );
         if (fraudResult.score >= threshold) {
           const locale = (req.headers["accept-language"]?.split(",")[0].split("-")[0]) || "en";
           

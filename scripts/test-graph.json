@@ -1,0 +1,661 @@
+{
+  "__comment__": [
+    "Static file-to-test dependency graph for ChronoPay-Backend CI test selection.",
+    "Keys are POSIX-style paths relative to the repo root.",
+    "Values are arrays of test file paths to run when the key file changes.",
+    "",
+    "Special values:",
+    "  []  — empty list is the full-run sentinel: any change to this file",
+    "        triggers a full test suite run (used for CI/config/shared files).",
+    "",
+    "Maintain this file when you add, rename, or remove source or test files.",
+    "See docs/ci-test-selection.md for the update protocol."
+  ],
+
+  "__ci_files__": [],
+
+  "src/app.ts": [
+    "src/__tests__/app.test.ts",
+    "src/__tests__/cors.test.ts",
+    "src/__tests__/smoke.test.ts",
+    "src/__tests__/health-readiness.test.ts",
+    "src/__tests__/graceful-shutdown.test.ts",
+    "src/__tests__/payload-limit.test.ts",
+    "src/__tests__/request-id.test.ts",
+    "src/__tests__/chaos-dependency-faults.test.ts"
+  ],
+
+  "src/index.ts": [],
+
+  "src/metrics.ts": [
+    "src/__tests__/appMetrics.test.ts",
+    "src/__tests__/metrics-cardinality.test.ts"
+  ],
+
+  "src/types.ts": [],
+
+  "src/utils.ts": [
+    "src/__tests__/app.test.ts"
+  ],
+
+  "src/services/checkout.ts": [
+    "src/__tests__/checkout-pay.test.ts",
+    "src/routes/__tests__/checkout.test.ts"
+  ],
+
+  "src/services/slotService.ts": [
+    "src/__tests__/slotService.test.ts",
+    "src/__tests__/slot-service.test.ts",
+    "src/services/__tests__/slotService.test.ts",
+    "src/__tests__/slots.validation.test.ts",
+    "src/__tests__/slots.rbac.test.ts",
+    "src/__tests__/slots-cache.test.ts",
+    "src/__tests__/slot-id-format.test.ts",
+    "src/__tests__/slot-exclusion-constraint.test.ts",
+    "src/__tests__/slot-delete.test.ts"
+  ],
+
+  "src/services/schedulingService.ts": [
+    "src/__tests__/scheduling.test.ts",
+    "src/__tests__/scheduler-job-runner.test.ts"
+  ],
+
+  "src/services/reminderService.ts": [
+    "src/__tests__/reminderService.test.ts",
+    "src/__tests__/reminderWorker.test.ts",
+    "src/services/__tests__/recurrenceService.test.ts"
+  ],
+
+  "src/services/recurrenceService.ts": [
+    "src/services/__tests__/recurrenceService.test.ts",
+    "src/__tests__/scheduling.test.ts"
+  ],
+
+  "src/services/pricingStrategy.ts": [
+    "src/services/__tests__/pricingStrategy.test.ts"
+  ],
+
+  "src/services/oauth2.service.ts": [
+    "src/services/__tests__/oauth2.service.test.ts",
+    "src/routes/__tests__/oauth2.test.ts"
+  ],
+
+  "src/services/tokenService.ts": [
+    "src/services/__tests__/tokenService.test.ts",
+    "src/__tests__/auth.test.ts"
+  ],
+
+  "src/services/auditLogger.ts": [
+    "src/middleware/__tests__/audit.test.ts",
+    "src/routes/__tests__/admin.audit-export.test.ts"
+  ],
+
+  "src/services/auditExportService.ts": [
+    "src/services/__tests__/auditExportService.test.ts",
+    "src/routes/__tests__/admin.audit-export.test.ts"
+  ],
+
+  "src/services/smsNotification.ts": [
+    "src/services/__tests__/smsNotification.test.ts",
+    "src/__tests__/notifications.test.ts",
+    "src/routes/__tests__/notifications.test.ts"
+  ],
+
+  "src/services/settlementReconciler.ts": [
+    "src/services/__tests__/settlementReconciler.test.ts"
+  ],
+
+  "src/services/contract.service.ts": [
+    "src/services/__tests__/contract.service.test.ts"
+  ],
+
+  "src/services/fraudScorer.ts": [
+    "src/__tests__/checkout-pay.test.ts"
+  ],
+
+  "src/services/kycService.ts": [
+    "src/routes/__tests__/kycWebhooks.test.ts"
+  ],
+
+  "src/services/kycProvider.ts": [
+    "src/routes/__tests__/kycWebhooks.test.ts"
+  ],
+
+  "src/services/mockKycProvider.ts": [
+    "src/routes/__tests__/kycWebhooks.test.ts"
+  ],
+
+  "src/services/quarantineStore.ts": [
+    "src/routes/__tests__/kycWebhooks.test.ts"
+  ],
+
+  "src/services/ephemeralStore.ts": [
+    "src/__tests__/booking-intents.test.ts",
+    "src/__tests__/booking-intents-idempotency.test.ts",
+    "src/__tests__/booking-intent-service.test.ts"
+  ],
+
+  "src/services/jobQueue.ts": [
+    "src/__tests__/scheduler-job-runner.test.ts"
+  ],
+
+  "src/routes/checkout.ts": [
+    "src/routes/__tests__/checkout.test.ts",
+    "src/__tests__/checkout-pay.test.ts"
+  ],
+
+  "src/routes/slots.ts": [
+    "src/__tests__/slots.validation.test.ts",
+    "src/__tests__/slots.rbac.test.ts",
+    "src/__tests__/slot-exclusion-constraint.test.ts",
+    "src/__tests__/slot-delete.test.ts",
+    "src/__tests__/slots-cache.test.ts",
+    "src/__tests__/slot-id-format.test.ts"
+  ],
+
+  "src/routes/booking-intents.ts": [
+    "src/__tests__/booking-intents.test.ts",
+    "src/__tests__/booking-intents-idempotency.test.ts",
+    "src/__tests__/booking-intent-service.test.ts",
+    "src/routes/__tests__/booking-intents.test.ts"
+  ],
+
+  "src/routes/webhooks.ts": [
+    "src/__tests__/webhooks.test.ts",
+    "src/routes/__tests__/webhooks.test.ts",
+    "src/routes/__tests__/webhooks.rotation.test.ts"
+  ],
+
+  "src/routes/notifications.ts": [
+    "src/__tests__/notifications.test.ts",
+    "src/routes/__tests__/notifications.test.ts"
+  ],
+
+  "src/routes/oauth2.ts": [
+    "src/routes/__tests__/oauth2.test.ts"
+  ],
+
+  "src/routes/auth.ts": [
+    "src/__tests__/auth.test.ts",
+    "src/routes/__tests__/auth.test.ts"
+  ],
+
+  "src/routes/admin.ts": [
+    "src/routes/__tests__/admin.audit-export.test.ts"
+  ],
+
+  "src/middleware/auth.ts": [
+    "src/__tests__/auth.test.ts",
+    "src/routes/__tests__/auth.test.ts"
+  ],
+
+  "src/middleware/auth.middleware.ts": [
+    "src/__tests__/auth.test.ts",
+    "src/routes/__tests__/auth.test.ts"
+  ],
+
+  "src/middleware/rbac.ts": [
+    "src/__tests__/rbac-hierarchy.test.ts",
+    "src/__tests__/slots.rbac.test.ts"
+  ],
+
+  "src/middleware/rateLimiter.ts": [
+    "src/middleware/__tests__/rateLimiter.test.ts"
+  ],
+
+  "src/middleware/rateLimitStore.ts": [
+    "src/middleware/__tests__/rateLimitStore.test.ts"
+  ],
+
+  "src/middleware/idempotency.ts": [
+    "src/middleware/__tests__/idempotency.test.ts",
+    "src/__tests__/booking-intents-idempotency.test.ts"
+  ],
+
+  "src/middleware/payloadLimit.ts": [
+    "src/middleware/__tests__/payloadLimit.test.ts",
+    "src/__tests__/payload-limit.test.ts"
+  ],
+
+  "src/middleware/headerValidation.ts": [
+    "src/middleware/__tests__/headerValidation.test.ts"
+  ],
+
+  "src/middleware/securityHeaders.ts": [
+    "src/middleware/__tests__/securityHeaders.test.ts"
+  ],
+
+  "src/middleware/contentNegotiation.ts": [
+    "src/middleware/__tests__/contentNegotiation.test.ts"
+  ],
+
+  "src/middleware/requireDependency.ts": [
+    "src/middleware/__tests__/requireDependency.test.ts",
+    "src/__tests__/chaos-dependency-faults.test.ts"
+  ],
+
+  "src/middleware/validation.ts": [
+    "src/__tests__/validation.test.ts",
+    "src/__tests__/zod-validation.test.ts"
+  ],
+
+  "src/middleware/checkout-validation.ts": [
+    "src/__tests__/checkout-pay.test.ts",
+    "src/routes/__tests__/checkout.test.ts"
+  ],
+
+  "src/middleware/errorHandler.ts": [
+    "src/__tests__/unified-error-envelope.test.ts",
+    "src/__tests__/app.test.ts"
+  ],
+
+  "src/middleware/errorHandling.ts": [
+    "src/__tests__/unified-error-envelope.test.ts"
+  ],
+
+  "src/middleware/cors.ts": [
+    "src/__tests__/cors.test.ts"
+  ],
+
+  "src/middleware/requestId.ts": [
+    "src/__tests__/request-id.test.ts"
+  ],
+
+  "src/middleware/requestLogger.ts": [
+    "src/__tests__/app.test.ts"
+  ],
+
+  "src/middleware/audit.ts": [
+    "src/middleware/__tests__/audit.test.ts"
+  ],
+
+  "src/middleware/authorization.ts": [
+    "src/__tests__/auth.test.ts"
+  ],
+
+  "src/middleware/apiKeyAuth.ts": [
+    "src/__tests__/auth.test.ts"
+  ],
+
+  "src/middleware/dependencyStatus.ts": [
+    "src/__tests__/health-readiness.test.ts",
+    "src/__tests__/chaos-dependency-faults.test.ts"
+  ],
+
+  "src/middleware/featureFlags.ts": [
+    "src/flags/__tests__/featureFlags.test.ts"
+  ],
+
+  "src/middleware/internalHmacAuth.ts": [
+    "src/__tests__/auth.test.ts"
+  ],
+
+  "src/middleware/slotAuthorization.ts": [
+    "src/__tests__/slots.rbac.test.ts"
+  ],
+
+  "src/middleware/slotIdParam.ts": [
+    "src/__tests__/slot-id-format.test.ts"
+  ],
+
+  "src/middleware/timeout.ts": [
+    "src/__tests__/chaos-dependency-faults.test.ts"
+  ],
+
+  "src/middleware/schemas.ts": [
+    "src/__tests__/validation.test.ts"
+  ],
+
+  "src/middleware/errorHandler/index.ts": [
+    "src/__tests__/unified-error-envelope.test.ts"
+  ],
+
+  "src/errors/AppError.ts": [
+    "src/errors/__tests__/typeSafeError.test.ts",
+    "src/errors/__tests__/errorTaxonomy.test.ts",
+    "src/__tests__/unified-error-envelope.test.ts"
+  ],
+
+  "src/errors/errorTaxonomy.ts": [
+    "src/errors/__tests__/errorTaxonomy.test.ts"
+  ],
+
+  "src/errors/typeSafeError.ts": [
+    "src/errors/__tests__/typeSafeError.test.ts"
+  ],
+
+  "src/errors/errorCodes.ts": [
+    "src/errors/__tests__/errorTaxonomy.test.ts",
+    "src/__tests__/unified-error-envelope.test.ts"
+  ],
+
+  "src/errors/sendError.ts": [
+    "src/__tests__/unified-error-envelope.test.ts"
+  ],
+
+  "src/errors/OutboundErrors.ts": [
+    "src/errors/__tests__/errorTaxonomy.test.ts"
+  ],
+
+  "src/errors/contractErrors.ts": [
+    "src/services/__tests__/contract.service.test.ts"
+  ],
+
+  "src/cache/slotCache.ts": [
+    "src/cache/__tests__/slotCache.test.ts",
+    "src/__tests__/slots-cache.test.ts"
+  ],
+
+  "src/cache/redisClient.ts": [
+    "src/cache/__tests__/slotCache.test.ts",
+    "src/cache/__tests__/inMemoryCache.test.ts"
+  ],
+
+  "src/cache/inMemoryCache.ts": [
+    "src/cache/__tests__/inMemoryCache.test.ts"
+  ],
+
+  "src/config/env.ts": [
+    "src/config/__tests__/env.test.ts",
+    "src/__tests__/docker-env.test.ts"
+  ],
+
+  "src/config/cors.ts": [
+    "src/__tests__/cors.test.ts"
+  ],
+
+  "src/config/jwt.ts": [
+    "src/__tests__/auth.test.ts"
+  ],
+
+  "src/config/timeouts.ts": [
+    "src/__tests__/chaos-dependency-faults.test.ts"
+  ],
+
+  "src/config/roles.json": [
+    "src/__tests__/rbac-hierarchy.test.ts",
+    "src/__tests__/slots.rbac.test.ts"
+  ],
+
+  "src/config/config.service.ts": [
+    "src/config/__tests__/env.test.ts"
+  ],
+
+  "src/tracing/index.ts": [
+    "src/__tests__/tracing.test.ts"
+  ],
+
+  "src/tracing/middleware.ts": [
+    "src/__tests__/tracing.test.ts",
+    "src/tracing/__tests__/w3c-propagation.test.ts"
+  ],
+
+  "src/tracing/hooks.ts": [
+    "src/tracing/__tests__/hooks.test.ts"
+  ],
+
+  "src/tracing/context.ts": [
+    "src/tracing/__tests__/hooks.test.ts",
+    "src/tracing/__tests__/db-instrumentation.test.ts"
+  ],
+
+  "src/tracing/dbInstrumentation.ts": [
+    "src/tracing/__tests__/db-instrumentation.test.ts"
+  ],
+
+  "src/tracing/redisInstrumentation.ts": [
+    "src/tracing/__tests__/hooks.test.ts"
+  ],
+
+  "src/tracing/spanExporter.ts": [
+    "src/__tests__/tracing.test.ts"
+  ],
+
+  "src/flags/registry.ts": [
+    "src/flags/__tests__/featureFlags.test.ts"
+  ],
+
+  "src/flags/service.ts": [
+    "src/flags/__tests__/featureFlags.test.ts"
+  ],
+
+  "src/flags/index.ts": [
+    "src/flags/__tests__/featureFlags.test.ts"
+  ],
+
+  "src/flags/types.ts": [
+    "src/flags/__tests__/featureFlags.test.ts"
+  ],
+
+  "src/db/connection.ts": [
+    "src/__tests__/db/connection.test.ts",
+    "src/__tests__/app.test.ts"
+  ],
+
+  "src/db/pool.ts": [
+    "src/__tests__/db/connection.test.ts"
+  ],
+
+  "src/db/migrationRunner.ts": [
+    "src/__tests__/db/connection.test.ts"
+  ],
+
+  "src/db/migrationRepository.ts": [
+    "src/__tests__/db/connection.test.ts"
+  ],
+
+  "src/db/driftDetector.ts": [
+    "src/__tests__/db/connection.test.ts"
+  ],
+
+  "src/health/readiness.ts": [
+    "src/__tests__/health-readiness.test.ts"
+  ],
+
+  "src/utils/redact.ts": [
+    "src/__tests__/redact.test.ts",
+    "src/utils/__tests__/redact.test.ts"
+  ],
+
+  "src/utils/amount.ts": [
+    "src/utils/__tests__/amount.test.ts"
+  ],
+
+  "src/utils/logger.ts": [
+    "src/__tests__/app.test.ts"
+  ],
+
+  "src/utils/logUtils.ts": [
+    "src/__tests__/app.test.ts"
+  ],
+
+  "src/utils/logContext.ts": [
+    "src/__tests__/app.test.ts"
+  ],
+
+  "src/utils/logValidator.ts": [
+    "src/utils/logValidator.test.ts"
+  ],
+
+  "src/utils/jwt.ts": [
+    "src/__tests__/auth.test.ts",
+    "src/services/__tests__/tokenService.test.ts"
+  ],
+
+  "src/utils/hash.ts": [
+    "src/__tests__/crypto-uuid.test.ts"
+  ],
+
+  "src/utils/redis.ts": [
+    "src/cache/__tests__/slotCache.test.ts"
+  ],
+
+  "src/utils/retry-policy.ts": [
+    "src/__tests__/chaos-dependency-faults.test.ts"
+  ],
+
+  "src/utils/idempotencyPayloadCodec.ts": [
+    "src/middleware/__tests__/idempotency.test.ts"
+  ],
+
+  "src/utils/pseudonymizer.ts": [
+    "src/__tests__/redact.test.ts"
+  ],
+
+  "src/utils/outbound-helper.ts": [
+    "src/__tests__/chaos-dependency-faults.test.ts"
+  ],
+
+  "src/utils/auditEventValidator.ts": [
+    "src/middleware/__tests__/audit.test.ts"
+  ],
+
+  "src/utils/factories.ts": [
+    "src/__tests__/app.test.ts"
+  ],
+
+  "src/utils/test-helpers.ts": [],
+
+  "src/i18n/messageLoader.ts": [
+    "src/i18n/__tests__/messageLoader.test.ts"
+  ],
+
+  "src/i18n/locales.en.ts": [
+    "src/i18n/__tests__/messageLoader.test.ts"
+  ],
+
+  "src/i18n/locales.es.ts": [
+    "src/i18n/__tests__/messageLoader.test.ts"
+  ],
+
+  "src/validation/reminderValidation.ts": [
+    "src/validation/__tests__/reminderValidation.test.ts"
+  ],
+
+  "src/validation/marketplaceSearchSchema.ts": [
+    "src/__tests__/marketplaceSearch.test.ts"
+  ],
+
+  "src/scheduler/reminderWorker.ts": [
+    "src/__tests__/reminderWorker.test.ts"
+  ],
+
+  "src/scheduler/reminderService.ts": [
+    "src/__tests__/reminderService.test.ts"
+  ],
+
+  "src/scheduler/reminderScheduler.ts": [
+    "src/__tests__/reminderWorker.test.ts"
+  ],
+
+  "src/scheduler/reminderConfig.ts": [
+    "src/__tests__/reminderWorker.test.ts"
+  ],
+
+  "src/scheduler/reminderDedup.ts": [
+    "src/__tests__/reminderWorker.test.ts"
+  ],
+
+  "src/scheduler/reminderMetrics.ts": [
+    "src/__tests__/reminderWorker.test.ts"
+  ],
+
+  "src/scheduler/reminderAutoscaler.ts": [
+    "src/__tests__/reminderWorker.test.ts"
+  ],
+
+  "src/scheduler/expiryCleanupWorker.ts": [
+    "src/__tests__/expiryCleanupWorker.test.ts"
+  ],
+
+  "src/repositories/slotRepository.ts": [
+    "src/__tests__/slotService.test.ts",
+    "src/services/__tests__/slotService.test.ts"
+  ],
+
+  "src/repositories/reminderRepository.ts": [
+    "src/__tests__/reminderWorker.test.ts",
+    "src/__tests__/reminderService.test.ts"
+  ],
+
+  "src/models/reminder.ts": [
+    "src/__tests__/reminderService.test.ts",
+    "src/__tests__/reminderWorker.test.ts",
+    "src/validation/__tests__/reminderValidation.test.ts"
+  ],
+
+  "src/types/checkout.ts": [
+    "src/__tests__/checkout-pay.test.ts",
+    "src/routes/__tests__/checkout.test.ts"
+  ],
+
+  "src/types/reminder.ts": [
+    "src/__tests__/reminderService.test.ts",
+    "src/validation/__tests__/reminderValidation.test.ts"
+  ],
+
+  "src/types/auditEvent.ts": [
+    "src/middleware/__tests__/audit.test.ts"
+  ],
+
+  "src/clients/horizon-contract-client.ts": [
+    "src/services/__tests__/contract.service.test.ts"
+  ],
+
+  "src/clients/ethers-contract-client.ts": [
+    "src/services/__tests__/contract.service.test.ts"
+  ],
+
+  "src/clients/contract-client.interface.ts": [
+    "src/services/__tests__/contract.service.test.ts"
+  ],
+
+  "src/clients/types.ts": [
+    "src/services/__tests__/contract.service.test.ts"
+  ],
+
+  "src/buyer-profile/buyer-profile.service.ts": [
+    "src/__tests__/marketplaceSearch.test.ts"
+  ],
+
+  "src/buyer-profile/buyer-profile.controller.ts": [
+    "src/__tests__/marketplaceSearch.test.ts"
+  ],
+
+  "src/buyer-profile/buyer-profile.routes.ts": [
+    "src/__tests__/marketplaceSearch.test.ts"
+  ],
+
+  "src/metrics/slotMetrics.ts": [
+    "src/__tests__/metrics-cardinality.test.ts",
+    "src/__tests__/appMetrics.test.ts"
+  ],
+
+  "src/docs/update-slot-endpoint.md": [],
+  "src/docs/contract-mock-server.md": [],
+  "src/docs/cache-invalidation.md": [],
+  "src/docs/audit-export.md": [],
+
+  "scripts/select-tests.ts": [
+    "src/__tests__/select-tests.test.ts"
+  ],
+
+  "scripts/test-graph.json": [
+    "src/__tests__/select-tests.test.ts"
+  ],
+
+  "jest.config.cjs": [],
+  "jest.setup.ts": [],
+  "tsconfig.json": [],
+  "package.json": [],
+  "package-lock.json": [],
+  ".github/workflows/ci.yml": [],
+  ".github/workflows/audit.yml": [],
+  ".github/workflows/codeql.yml": [],
+  "eslint.config.js": [],
+  ".prettierrc": [],
+  "Dockerfile": [],
+  "docker-compose.yml": [],
+  "docker-compose.prod.yml": [],
+  "docker-compose.override.yml": []
+}
