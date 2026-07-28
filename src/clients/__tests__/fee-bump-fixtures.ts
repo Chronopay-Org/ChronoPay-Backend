@@ -130,7 +130,11 @@ export function makeTransactionV1Envelope(
   tx: Uint8Array,
   signatures: Uint8Array[],
 ): Uint8Array {
-  let sigData = new Uint8Array(0);
+  // TS 5.7 narrows the type of `new Uint8Array(0)` to `Uint8Array<ArrayBuffer>`, but
+  // `concatBuffers` returns the wider generic `Uint8Array` (i.e. `Uint8Array<ArrayBufferLike>`),
+  // so without the explicit `: Uint8Array` annotation the loop reassignment would be
+  // rejected with TS2322. Do not tighten back to `new Uint8Array<ArrayBuffer>(0)`.
+  let sigData: Uint8Array = new Uint8Array(0);
   for (const sig of signatures) {
     sigData = concatBuffers(sigData, sig);
   }
