@@ -94,6 +94,76 @@ export interface StreamEventsOptions {
   backoffMaxMs?: number;
 }
 
+export interface StellarPayoutBalanceOptions {
+  amount?: string | number;
+  baseReserve?: number;
+  subentries?: number;
+  trustlines?: number;
+  offers?: number;
+}
+
+interface HorizonAccountResponse {
+  id?: string;
+  subentry_count?: number;
+  balances?: Array<{
+    asset_type: string;
+    balance: string;
+  }>;
+}
+
+export function computeMinBalance(subentries: number, baseReserve = 5_000_000): number {
+  if (!Number.isInteger(subentries) || subentries < 0) {
+    throw new ContractInvalidRequestError("Subentry count must be a non-negative integer");
+  }
+
+  if (!Number.isFinite(baseReserve) || baseReserve <= 0) {
+    throw new ContractInvalidRequestError("Base reserve must be a positive number");
+  }
+
+  return (2 + subentries) * baseReserve;
+}
+
+function parseStellarAmount(amount: string | number | undefined): number {
+  if (amount === undefined || amount === null) {
+    return 0;
+  }
+
+  if (typeof amount === "number") {
+    return Math.trunc(amount);
+  }
+
+  const trimmed = amount.trim();
+  if (trimmed === "") {
+    return 0;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return Number.parseInt(trimmed, 10);
+  }
+
+  const match = trimmed.match(/^(\d+)(?:\.(\d{1,7}))?$/);
+  if (!match) {
+    throw new ContractInvalidRequestError(`Invalid Stellar amount: ${amount}`);
+  }
+
+  const whole = Number.parseInt(match[1], 10);
+  const fractional = match[2] ?? "";
+  return whole * 10_000_000 + Number.parseInt(fractional.padEnd(7, "0"), 10);
+}
+
+export class HorizonInsufficientBalanceError extends Error {
+  constructor(
+    public readonly accountId: string,
+    public readonly balance: number,
+    public readonly minimumBalance: number,
+  ) {
+    super(
+      `Account ${accountId} does not have enough balance to cover the Stellar reserve minimum: ${balance} < ${minimumBalance}`,
+    );
+    this.name = "HorizonInsufficientBalanceError";
+  }
+}
+
 /**
  * Options for paginated Horizon endpoint queries.
  */
@@ -246,233 +316,38 @@ export class HorizonContractClient implements IContractClient {
       return false;
     }
   /**
-   * Opens an SSE stream to a Horizon resource and calls `onEvent` for every
-   * received event.
-   *
-   * Key behaviours
-   * ──────────────
-   * • **Cursor resumption** — On each (re)connect the last known cursor is
-   *   appended as `?cursor=<value>` (or `?cursor=now` for a fresh stream).
-   *   After `onEvent` resolves successfully the cursor is persisted so that
-   *   the next reconnect resumes exactly from the following event.
-   *
-   * • **Jittered exponential backoff** — Connection failures are retried with
-   *   a delay that starts at `backoffBaseMs` (default 1 s), doubles on each
-   *   failure up to `backoffMaxMs` (default 30 s), and has a random jitter of
-   *   ±{@link SSE_JITTER_FACTOR} × base applied to avoid thundering-herd.
-   *
-   * • **Graceful cancellation** — Passing an `AbortSignal` lets the caller
-   *   stop the stream without the method throwing.
-   *
-   * • **Edge-case cursors**
-   *   - `"now"` — subscribe to only new events (no historical replay).
-   *   - A very stale cursor that Horizon no longer recognises causes a 400
-   *     error; the stream is terminated (not retried) and the error is
-   *     rethrown so the caller can clear the cursor and restart fresh.
-   *   - Any 4xx response (401, 404, etc.) is treated as a non-retryable
-   *     client error and propagated immediately.
-   *   - A cursor equal to or beyond the latest ledger sequence behaves like
-   *     `"now"` — Horizon streams future events as they arrive.
-   *
-   * @param options  See {@link StreamEventsOptions}.
+   * Checks the account balance against the Stellar minimum reserve before submitting a payout.
+   * The reserve is derived from the effective subentry count, including trustlines and offers.
    */
-  async streamEvents(options: StreamEventsOptions): Promise<void> {
-    const {
-      path,
-      streamKey = path,
-      onEvent,
-      onReconnect,
-      signal,
-      backoffBaseMs = SSE_BACKOFF_BASE_MS,
-      backoffMaxMs = SSE_BACKOFF_MAX_MS,
-    } = options;
-
-    const cursorStore: CursorStore = options.cursorStore ?? new InMemoryCursorStore();
-
-    // Seed the store with the caller-supplied resumeAfter cursor if provided.
-    if (options.resumeAfter !== undefined) {
-      await cursorStore.set(streamKey, options.resumeAfter);
-    }
-
-    let backoff = backoffBaseMs;
-    let attempt = 0;
-
-    while (true) {
-      // Honour cancellation before each connection attempt.
-      if (signal?.aborted) return;
-
-      const cursor = await cursorStore.get(streamKey);
-
-      if (attempt > 0) {
-        const jitter = Math.floor(Math.random() * backoff * SSE_JITTER_FACTOR);
-        const delay = backoff + jitter;
-        onReconnect?.(attempt, delay, cursor);
-        await this.sleep(delay, signal);
-        if (signal?.aborted) return;
-      }
-
-      attempt++;
-
-      try {
-        await this.connectAndStream({ path, streamKey, cursor, onEvent, signal, cursorStore });
-        // connectAndStream returned normally (signal aborted or server closed).
-        return;
-      } catch (err: any) {
-        // Any 4xx from Horizon is a client error — not retryable.
-        // 400 = stale/invalid cursor; 401 = auth; 404 = unknown resource; etc.
-        // Propagate so the caller can react (e.g. clear cursor, re-auth).
-        if (err instanceof HorizonHttpError && err.statusCode >= 400 && err.statusCode < 500) {
-          throw err;
-        }
-
-        // 5xx / network errors: back off and retry.
-        backoff = Math.min(backoff * SSE_BACKOFF_FACTOR, backoffMaxMs);
-
-        // If aborted during a connection attempt, exit cleanly.
-        if (signal?.aborted) return;
-      }
-    }
-  }
-
-  /**
-   * Opens a single SSE connection and processes events until the connection
-   * closes, an error is thrown, or the AbortSignal fires.
-   *
-   * @internal
-   */
-  private async connectAndStream(params: {
-    path: string;
-    streamKey: string;
-    cursor: string | undefined;
-    onEvent: StreamEventsOptions["onEvent"];
-    signal: AbortSignal | undefined;
-    cursorStore: CursorStore;
-  }): Promise<void> {
-    const { path, streamKey, cursor, onEvent, signal, cursorStore } = params;
-
-    const cursorParam = cursor ?? "now";
-    const url = `${this.horizonUrl}${path}?cursor=${encodeURIComponent(cursorParam)}`;
-
-    const response = await fetch(url, {
-      headers: { Accept: "text/event-stream" },
-      signal,
+  async submitPayout(accountId: string, xdr: string, options: StellarPayoutBalanceOptions = {}): Promise<TransactionResult> {
+    const accountResponse = await this.call<HorizonAccountResponse>({
+      address: accountId,
+      abi: null,
+      method: "getAccount",
+      args: [accountId],
     });
 
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw new HorizonHttpError(response.status, body);
+    const account = accountResponse.data;
+    const baseReserve = options.baseReserve ?? 5_000_000;
+    const effectiveSubentries = (options.subentries ?? account.subentry_count ?? 0) + (options.trustlines ?? 0) + (options.offers ?? 0);
+    const minimumBalance = computeMinBalance(effectiveSubentries, baseReserve);
+    const payoutAmount = parseStellarAmount(options.amount);
+    const nativeBalance = account.balances?.find((balance) => balance.asset_type === "native")?.balance;
+    const balanceInStroops = nativeBalance === undefined ? 0 : parseStellarAmount(nativeBalance);
+
+    if (balanceInStroops < minimumBalance + payoutAmount) {
+      throw new HorizonInsufficientBalanceError(accountId, balanceInStroops, minimumBalance + payoutAmount);
     }
 
-    if (!response.body) {
-      // Should not happen with a real SSE endpoint, but guard for tests.
-      return;
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    try {
-      while (true) {
-        if (signal?.aborted) return;
-
-        const { done, value } = await reader.read();
-        if (done) return;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // SSE frames are separated by double newlines.
-        const frames = buffer.split(/\r?\n\r?\n/);
-        // The last element is either empty or a partial frame — keep it.
-        buffer = frames.pop() ?? "";
-
-        for (const frame of frames) {
-          if (!frame.trim()) continue;
-
-          const parsed = this.parseSseFrame(frame);
-          if (!parsed) continue;
-
-          // Deliver the event to the caller and only then persist the cursor.
-          await onEvent(parsed);
-          await cursorStore.set(streamKey, parsed.cursor);
-        }
-      }
-    } finally {
-      reader.cancel().catch(() => {
-        // Ignore cancel errors during cleanup.
-      });
-    }
-  }
-
-  /**
-   * Parses a single SSE frame (multi-line block between double newlines).
-   *
-   * Horizon SSE frames look like:
-   * ```
-   * event: payment
-   * data: {"id":"cursor-value","..."}
-   * ```
-   *
-   * The `id` field inside the JSON `data` object is used as the cursor.
-   *
-   * @returns Parsed event, or `null` if the frame is not a data-bearing event.
-   * @internal
-   */
-  private parseSseFrame(frame: string): HorizonSseEvent | null {
-    let eventType = "message";
-    let dataLine = "";
-
-    for (const line of frame.split(/\r?\n/)) {
-      if (line.startsWith("event:")) {
-        eventType = line.slice("event:".length).trim();
-      } else if (line.startsWith("data:")) {
-        dataLine = line.slice("data:".length).trim();
-      }
-    }
-
-    if (!dataLine) return null;
-
-    let parsed: any;
-    try {
-      parsed = JSON.parse(dataLine);
-    } catch {
-      return null;
-    }
-
-    // Horizon returns the paging token as `id` in the data JSON.
-    const cursor: string =
-      typeof parsed?.paging_token === "string"
-        ? parsed.paging_token
-        : typeof parsed?.id === "string"
-          ? parsed.id
-          : "";
-
-    return { cursor, eventType, data: parsed };
-  }
-
-  /**
-   * Resolves after `ms` milliseconds, or immediately if the signal fires first.
-   * @internal
-   */
-  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
-    return new Promise((resolve) => {
-      if (signal?.aborted) return resolve();
-      const id = setTimeout(resolve, ms);
-      signal?.addEventListener("abort", () => {
-        clearTimeout(id);
-        resolve();
-      });
+    return this.sendTransaction({
+      address: accountId,
+      abi: null,
+      method: "submitTransaction",
+      args: [xdr],
     });
   }
 
-  private isFeeBumpTransaction(xdrBase64: string): boolean {
-    try {
-      const buf = Buffer.from(xdrBase64, "base64");
-      if (buf.length < 4) return false;
-      return buf.readInt32BE(0) === 4;
-    } catch {
-      return false;
-    }
+  /**
    * Submits a low-cost memo transaction anchoring a 32-byte (64 hex characters) hash on Stellar.
    */
   async submitMemoTransaction(memoHashHex: string): Promise<TransactionResult> {
