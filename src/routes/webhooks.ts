@@ -2,6 +2,8 @@ import { Router, Express, Request, Response } from "express";
 import { validateRequiredFields } from "../middleware/validation.js";
 import { internalHmacAuth } from "../middleware/internalHmacAuth.js";
 import { _settlements } from "../services/settlementReconciler.js";
+import { WebhookIdempotencyStore } from "../services/webhookIdempotencyStore.js";
+import { defaultAuditLogger } from "../services/auditLogger.js";
 
 const allowedEventTypes = new Set([
   "settlement_completed",
@@ -11,30 +13,16 @@ const allowedEventTypes = new Set([
 
 const CLOCK_SKEW_MS = 60 * 1000; // 1 minute
 
-interface ProcessedEvent {
-  eventType: string;
-  processedAt: number;
-  response: { success: boolean; received: unknown };
-}
-
-let _processedTransactions: Map<string, ProcessedEvent> = new Map();
-
-export function _setProcessedTransactions(store: Map<string, ProcessedEvent>): void {
-  _processedTransactions = store;
-}
-
-export function _resetProcessedTransactions(): void {
-  _processedTransactions = new Map();
-}
-
 export interface WebhookRouteOptions {
   signingSecret?: string;
   kycSigningSecret?: string;
-  kycProvider?: KycProvider;
+  kycProvider?: any;
 }
 
-const handleSettlementWebhook = (req: Request, res: Response) => {
+const handleSettlementWebhook = async (req: Request, res: Response) => {
   const { eventType, amount, timestamp } = req.body;
+  const idempotencyKey = String(req.body.transactionId);
+  const tenantId = req.headers["x-tenant-id"] ? String(req.headers["x-tenant-id"]) : "default";
 
   if (!allowedEventTypes.has(eventType)) {
     return res.status(400).json({
@@ -48,11 +36,6 @@ const handleSettlementWebhook = (req: Request, res: Response) => {
       success: false,
       error: "Invalid amount. Amount must be a positive number.",
     });
-  }
-
-  const existing = _processedTransactions.get(String(req.body.transactionId));
-  if (existing) {
-    return res.status(200).json(existing.response);
   }
 
   if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) {
@@ -73,17 +56,24 @@ const handleSettlementWebhook = (req: Request, res: Response) => {
     }
   }
 
+  const existingResponse = await WebhookIdempotencyStore.getExistingResponse(tenantId, idempotencyKey);
+  if (existingResponse) {
+    return res.status(200).json(existingResponse);
+  }
+
   const responseBody = { success: true, received: req.body };
-  _processedTransactions.set(String(req.body.transactionId), {
-    eventType: String(eventType),
-    processedAt: Date.now(),
-    response: responseBody,
-  });
+  const saved = await WebhookIdempotencyStore.saveKey(tenantId, idempotencyKey, responseBody);
+  
+  if (!saved) {
+    // If it wasn't saved, someone else just saved it concurrently.
+    const concurrentResponse = await WebhookIdempotencyStore.getExistingResponse(tenantId, idempotencyKey);
+    return res.status(200).json(concurrentResponse || responseBody);
+  }
 
   if (eventType === "settlement_completed") {
-    if (!_settlements.has(String(req.body.transactionId))) {
-      _settlements.set(String(req.body.transactionId), {
-        transactionId: String(req.body.transactionId),
+    if (!_settlements.has(idempotencyKey)) {
+      _settlements.set(idempotencyKey, {
+        transactionId: idempotencyKey,
         eventType: String(eventType),
         amount: Number(amount),
         timestamp: Number(timestamp),
@@ -101,8 +91,34 @@ const router = Router();
 router.post(
   "/settlements",
   validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
-  handleSettlementWebhook,
+  (req, res, next) => handleSettlementWebhook(req, res).catch(next),
 );
+
+// Admin inspection endpoint
+router.get("/admin/idempotency/:tenantId/:idempotencyKey", async (req, res, next) => {
+  try {
+    const { tenantId, idempotencyKey } = req.params;
+    const result = await WebhookIdempotencyStore.inspect(tenantId, idempotencyKey);
+    if (!result) {
+      return res.status(404).json({ success: false, error: "Key not found" });
+    }
+    await defaultAuditLogger.log({ action: 'webhook_idempotency.inspect', status: 'success', resource: `idempotencyKey:${idempotencyKey}`, metadata: { tenantId } });
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin sweep endpoint
+router.post("/admin/idempotency/sweep", async (req, res, next) => {
+  try {
+    const deletedCount = await WebhookIdempotencyStore.sweep();
+    await defaultAuditLogger.log({ action: 'webhook_idempotency.sweep', status: 'success', resource: 'system', metadata: { deletedCount } });
+    return res.json({ success: true, deletedCount });
+  } catch (err) {
+    next(err);
+  }
+});
 
 export default router;
 
@@ -111,6 +127,6 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
     "/api/v1/webhooks/settlements",
     internalHmacAuth(options.signingSecret),
     validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
-    handleSettlementWebhook,
+    (req, res, next) => handleSettlementWebhook(req, res).catch(next),
   );
 }
