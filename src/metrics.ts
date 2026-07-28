@@ -362,6 +362,43 @@ export const expiryCleanupSafetyBrakeTriggers = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Outbox compaction metrics ────────────────────────────────────────────────
+
+/**
+ * Counter incremented for each row compacted (deleted) from the outbox table.
+ */
+export const outboxCompactionRowsDeleted = createBudgetedCounter({
+  name: "outbox_compaction_rows_deleted_total",
+  help: "Total number of acked outbox rows compacted (deleted) after retention window",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time the compaction worker triggers the safety
+ * brake (skips the run because candidate row count exceeds the threshold).
+ */
+export const outboxCompactionSafetyBrakeTriggers = createBudgetedCounter({
+  name: "outbox_compaction_safety_brake_triggers_total",
+  help: "Total number of outbox compaction runs skipped due to safety threshold",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Histogram tracking the duration (in milliseconds) of a single compaction sweep.
+ */
+export const outboxCompactionDurationMs = createBudgetedHistogram({
+  name: "outbox_compaction_duration_ms",
+  help: "Duration in milliseconds of an outbox compaction sweep",
+  labels: [],
+  budget: 0,
+  buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000],
+  registers: [register],
+});
+
 /**
  * Counter tracking which webhook HMAC key successfully verified a request.
  * Label `key_id` is cardinality-bounded via the budget mechanism.
