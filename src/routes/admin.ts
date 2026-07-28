@@ -12,6 +12,7 @@ import {
 } from "../services/quarantineStore.js";
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import { strikeService } from "../services/strikeService.js";
 
 const router = Router();
 
@@ -1182,5 +1183,195 @@ router.post(
     }
   },
 );
+
+// ─── Buyer No-Show Strike & Suspension API ─────────────────────────────────
+
+/**
+ * @route POST /api/v1/admin/buyers/:buyerId/reinstate
+ * @desc Admin endpoint to reinstate a suspended buyer account and optionally clear active strikes.
+ * @access Private (admin authorization required)
+ */
+router.post(
+  "/buyers/:buyerId/reinstate",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { buyerId } = req.params;
+      const { reason, clearActiveStrikes } = req.body ?? {};
+
+      if (!buyerId || buyerId.trim() === "") {
+        return res.status(400).json({ success: false, error: "buyerId parameter is required" });
+      }
+
+      const adminId = (req as any).auth?.userId ?? "admin";
+      const result = await strikeService.reinstateBuyer(
+        buyerId.trim(),
+        {
+          adminId,
+          reason,
+          clearActiveStrikes,
+        }
+      );
+
+      return res.status(200).json({
+        success: true,
+        buyerId: buyerId.trim(),
+        suspension: result.buyerSuspension,
+        rescindedStrikesCount: result.rescindedStrikesCount,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to reinstate buyer",
+      });
+    }
+  }
+);
+
+/**
+ * @route GET /api/v1/admin/buyers/:buyerId/strikes
+ * @desc Get all strikes and suspension status for a buyer.
+ * @access Private (admin authorization required)
+ */
+router.get(
+  "/buyers/:buyerId/strikes",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { buyerId } = req.params;
+      if (!buyerId || buyerId.trim() === "") {
+        return res.status(400).json({ success: false, error: "buyerId parameter is required" });
+      }
+
+      const strikes = strikeService.getBuyerStrikes(buyerId.trim());
+      const suspension = strikeService.getBuyerSuspensionStatus(buyerId.trim());
+
+      return res.status(200).json({
+        success: true,
+        buyerId: buyerId.trim(),
+        activeStrikesCount: suspension.activeStrikesCount,
+        suspension,
+        strikes,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to retrieve buyer strikes",
+      });
+    }
+  }
+);
+
+/**
+ * @route POST /api/v1/admin/buyers/:buyerId/strikes
+ * @desc Manually issue a strike against a buyer (triggers auto-suspension if threshold met).
+ * @access Private (admin authorization required)
+ */
+router.post(
+  "/buyers/:buyerId/strikes",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { buyerId } = req.params;
+      const { intentId, slotId, reason } = req.body ?? {};
+
+      if (!buyerId || buyerId.trim() === "") {
+        return res.status(400).json({ success: false, error: "buyerId parameter is required" });
+      }
+
+      const result = await strikeService.issueStrike({
+        buyerId: buyerId.trim(),
+        intentId,
+        slotId,
+        reason,
+      });
+
+      return res.status(201).json({
+        success: true,
+        strike: result.strike,
+        suspension: result.buyerSuspension,
+        autoSuspended: result.autoSuspended,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to issue buyer strike",
+      });
+    }
+  }
+);
+
+/**
+ * @route POST /api/v1/admin/buyers/:buyerId/strikes/:strikeId/appeal
+ * @desc Submit or grant an appeal for a specific strike.
+ * @access Private (admin authorization required)
+ */
+router.post(
+  "/buyers/:buyerId/strikes/:strikeId/appeal",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { strikeId } = req.params;
+      const { reason } = req.body ?? {};
+
+      if (!reason || typeof reason !== "string" || reason.trim() === "") {
+        return res.status(400).json({ success: false, error: "Appeal reason is required" });
+      }
+
+      const result = await strikeService.appealStrike(strikeId, reason.trim());
+
+      return res.status(200).json({
+        success: true,
+        strike: result.strike,
+        suspension: result.buyerSuspension,
+        suspensionLifted: result.suspensionLifted,
+      });
+    } catch (err: any) {
+      const message = err.message ?? "Appeal failed";
+      if (message.includes("not found")) {
+        return res.status(404).json({ success: false, error: message });
+      }
+      if (message.includes("not active")) {
+        return res.status(400).json({ success: false, error: message });
+      }
+      return res.status(500).json({
+        success: false,
+        error: message,
+      });
+    }
+  }
+);
+
+/**
+ * @route GET /api/v1/admin/strikes/config
+ * @desc Retrieve current strike threshold and decay config.
+ * @access Private (admin authorization required)
+ */
+router.get("/strikes/config", requireAdminToken, (_req: Request, res: Response) => {
+  return res.status(200).json({
+    success: true,
+    config: strikeService.getConfig(),
+  });
+});
+
+/**
+ * @route PUT /api/v1/admin/strikes/config
+ * @desc Update strike threshold and decay config.
+ * @access Private (admin authorization required)
+ */
+router.put("/strikes/config", requireAdminToken, (req: Request, res: Response) => {
+  try {
+    const updated = strikeService.updateConfig(req.body ?? {});
+    return res.status(200).json({
+      success: true,
+      config: updated,
+    });
+  } catch (err: any) {
+    return res.status(400).json({
+      success: false,
+      error: err.message ?? "Invalid config",
+    });
+  }
+});
 
 export default router;
