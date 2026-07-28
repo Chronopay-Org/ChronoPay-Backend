@@ -15,6 +15,7 @@ import { authenticateToken as requireAuth } from "./middleware/auth.js";
 import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
+import { installQueryBudgetAnalyzer, getQueryBudgetReport } from "./tracing/queryBudgetAnalyzer.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { getCORSConfig } from "./config/cors.js";
@@ -310,6 +311,11 @@ export function createApp(options: AppFactoryOptions = {}) {
     }
   });
 
+  // Query budget analyzer — top-offender leaderboard
+  app.get("/debug/query-budget", (_req, res) => {
+    res.json(getQueryBudgetReport());
+  });
+
   // RBAC Middleware for tests
   const rbacMiddleware = (req: Request, res: Response, next: any) => {
       const role = req.header("x-user-role") || req.header("x-role");
@@ -477,6 +483,14 @@ export function createApp(options: AppFactoryOptions = {}) {
     } catch {
       return null;
     }
+  }
+
+  // Install query-budget analyzer (non-blocking, only in non-test envs)
+  const isTestRun =
+    process.env.NODE_ENV === "test" ||
+    typeof process.env.JEST_WORKER_ID !== "undefined";
+  if (!isTestRun) {
+    installQueryBudgetAnalyzer();
   }
 
   // Error Handlers
