@@ -7,6 +7,13 @@ import {
   AuditEventV1,
   LegacyAuditLogEntry,
 } from "../utils/auditEventValidator.js";
+import type {
+  ImpersonationAuditContext,
+} from "../types/impersonation.types.js";
+import {
+  IMPERSONATION_AUDIT_ACTIONS,
+  ImpersonationAuditAction,
+} from "../types/auditEvent.js";
 
 /**
  * Legacy audit log entry (for backward compatibility)
@@ -132,6 +139,38 @@ export class AuditLogger {
 
   public getLogFilePath(): string {
     return this.logFilePath;
+  }
+
+  /**
+   * Convenience helper for emitting impersonation lifecycle events.
+   *
+   * Wraps the standard `log` method with a pre-built payload structure that
+   * includes the impersonation context in `data.context` so review tooling
+   * can filter events by session ID without knowing the internal envelope.
+   *
+   * @param action  - One of IMPERSONATION_AUDIT_ACTIONS
+   * @param context - Impersonation correlation fields
+   * @param extra   - Optional extra payload fields merged into `data`
+   * @param status  - HTTP status or logical status (default 200)
+   */
+  public async logImpersonationEvent(
+    action: ImpersonationAuditAction | string,
+    context: ImpersonationAuditContext,
+    extra?: Record<string, unknown>,
+    status: number | string = 200,
+  ): Promise<void> {
+    return this.log(
+      action,
+      {
+        context: {
+          impersonationSessionId: context.impersonationSessionId,
+          adminId: context.adminId,
+          targetUserId: context.targetUserId,
+          ...extra,
+        },
+      },
+      { status },
+    );
   }
 }
 
