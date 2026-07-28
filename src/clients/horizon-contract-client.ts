@@ -93,6 +93,38 @@ export class HorizonContractClient implements IContractClient {
     };
   }
 
+  /**
+   * Submits a low-cost memo transaction anchoring a 32-byte (64 hex characters) hash on Stellar.
+   */
+  async submitMemoTransaction(memoHashHex: string): Promise<TransactionResult> {
+    const cleanHash = memoHashHex.trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(cleanHash)) {
+      throw new ContractInvalidRequestError("Memo hash must be a 32-byte hex string (64 characters)");
+    }
+
+    // Simple envelope payload containing memo hash
+    const memoPayload = `tx_memo_hash=${cleanHash}`;
+    return this.sendTransaction({
+      address: "",
+      abi: null,
+      method: "submitTransaction",
+      args: [memoPayload],
+    });
+  }
+
+  /**
+   * Fetches transaction details including memo from Horizon by transaction hash.
+   */
+  async getTransactionMemo(txHash: string): Promise<{ hash: string; memo?: string; memo_type?: string }> {
+    const res = await this.call<{ hash: string; memo?: string; memo_type?: string }>({
+      address: "",
+      abi: null,
+      method: "getTransaction",
+      args: [txHash],
+    });
+    return res.data;
+  }
+
   private buildReadUrl(method: string, methodArgs: any[]): string {
     const id = methodArgs[0] as string;
     switch (method) {

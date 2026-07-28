@@ -8,6 +8,14 @@ import { IMPERSONATION_AUDIT_ACTIONS } from "../types/auditEvent.js";
 
 const router = Router();
 
+/**
+ * Mount the fraud model registry surface under `/api/v1/admin/fraud-models`.
+ * The sub-router exposes relative paths (`/promote`, `/list`) so the final
+ * URLs become `/api/v1/admin/fraud-models/promote` and
+ * `/api/v1/admin/fraud-models/list`.
+ */
+router.use("/fraud-models", fraudModelsRouter);
+
 function buildBaseUrl(req: Request): string {
   const scheme = req.protocol;
   const host = req.get("host") ?? "localhost";
