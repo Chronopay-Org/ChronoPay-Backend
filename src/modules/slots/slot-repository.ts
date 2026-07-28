@@ -11,6 +11,70 @@ export interface SlotPricingStrategy {
   config: StrategyConfig;
 }
 
+export interface TimezoneOverride {
+  /** IANA timezone identifier (e.g. "America/New_York", "Europe/London") */
+  timezone: string;
+  /** When this override was set (ISO string) */
+  setAt: string;
+  /** Who set this override (actor ID) */
+  setBy: string;
+  /** Optional reason/note for the override */
+  reason?: string;
+}
+
+export interface StoreTimezoneConfig {
+  /** Store identifier */
+  storeId: string;
+  /** Store-level timezone override */
+  timezoneOverride?: TimezoneOverride;
+  /** Regions this store operates in (for holiday observance scoping) */
+  regionCodes?: string[];
+}
+
+export interface SupplierTimezoneContext {
+  /** Supplier identifier */
+  supplierId: string;
+  /** Supplier-level default timezone */
+  supplierDefaultTimezone?: TimezoneOverride;
+  /** Per-store timezone configurations */
+  stores: Record<string, StoreTimezoneConfig>;
+}
+
+export interface TenantTimezoneContext {
+  /** Tenant identifier */
+  tenantId: string;
+  /** Tenant-level default timezone (lowest priority fallback) */
+  tenantDefaultTimezone: string;
+}
+
+export interface TimezoneResolutionResult {
+  /** Resolved IANA timezone */
+  timezone: string;
+  /** Which level the timezone came from: store > supplier > tenant */
+  source: "store" | "supplier" | "tenant";
+  /** Store ID if resolved from store level */
+  storeId?: string;
+  /** Audit fields from the override */
+  setAt?: string;
+  setBy?: string;
+  reason?: string;
+}
+
+export interface TimezoneResolutionAuditEvent {
+  supplierId: string;
+  tenantId: string;
+  storeId?: string;
+  resolvedTimezone: string;
+  source: "store" | "supplier" | "tenant";
+  candidates: {
+    storeTimezone?: string;
+    supplierTimezone?: string;
+    tenantTimezone: string;
+  };
+  resolvedAt: string;
+  actorId?: string;
+}
+
 export interface SlotRecord {
   id: string;
   professional: string;
@@ -24,6 +88,12 @@ export interface SlotRecord {
    * must occur before this deadline; attempts after it fail with SlotExpiredError.
    */
   validUntil?: number;
+  /** Supplier who owns this slot (needed for timezone resolution) */
+  supplierId?: string;
+  /** Store this slot belongs to (needed for timezone resolution) */
+  storeId?: string;
+  /** Tenant context */
+  tenantId?: string;
 }
 
 export interface SlotRepository {

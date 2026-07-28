@@ -67,6 +67,88 @@ describe("SchedulingService", () => {
       expect(() => scheduler.releaseSlot("slot-unknown")).toThrow("not found");
     });
   });
+
+  describe("Slot Bundle Reservations", () => {
+    beforeEach(() => {
+      // Add more slots for bundle tests
+      slotRepo = new InMemorySlotRepository([
+        makeSlot({ id: "slot-1" }),
+        makeSlot({ id: "slot-2" }),
+        makeSlot({ id: "slot-3" }),
+        makeSlot({ id: "slot-4", bookable: false }),
+      ]);
+      scheduler = new SchedulingService(slotRepo, intentRepo);
+    });
+
+    it("reserves all slots in a bundle atomically", () => {
+      scheduler.reserveBundle("bundle-1", ["slot-1", "slot-2"]);
+      expect(slotRepo.findById("slot-1")!.bookable).toBe(false);
+      expect(slotRepo.findById("slot-2")!.bookable).toBe(false);
+    });
+
+    it("rolls back reservation if any slot leg fails (not bookable)", () => {
+      expect(() =>
+        scheduler.reserveBundle("bundle-1", ["slot-1", "slot-4"])
+      ).toThrow(/Failed to reserve bundle bundle-1/);
+
+      // slot-1 should have been rolled back to bookable
+      expect(slotRepo.findById("slot-1")!.bookable).toBe(true);
+      expect(slotRepo.findById("slot-4")!.bookable).toBe(false); // remained not bookable
+    });
+
+    it("rolls back reservation if any slot leg fails (not found)", () => {
+      expect(() =>
+        scheduler.reserveBundle("bundle-1", ["slot-1", "slot-unknown"])
+      ).toThrow(/Failed to reserve bundle bundle-1/);
+
+      expect(slotRepo.findById("slot-1")!.bookable).toBe(true);
+    });
+
+    it("releases a previously reserved bundle", () => {
+      scheduler.reserveBundle("bundle-1", ["slot-1", "slot-2"]);
+      scheduler.releaseBundle("bundle-1");
+
+      expect(slotRepo.findById("slot-1")!.bookable).toBe(true);
+      expect(slotRepo.findById("slot-2")!.bookable).toBe(true);
+    });
+
+    it("throws error when releasing an unknown bundle", () => {
+      expect(() => scheduler.releaseBundle("bundle-unknown")).toThrow(
+        /Bundle bundle-unknown not found/
+      );
+    });
+
+    it("prevents concurrent/duplicate reservations of the same bundle", () => {
+      scheduler.reserveBundle("bundle-1", ["slot-1", "slot-2"]);
+      expect(() =>
+        scheduler.reserveBundle("bundle-1", ["slot-3"])
+      ).toThrow(/Bundle bundle-1 is already reserved/);
+    });
+
+    it("handles over-count by deduplicating slotIds", () => {
+      // should not fail or double-reserve (which would throw if not deduplicated)
+      scheduler.reserveBundle("bundle-1", ["slot-1", "slot-1", "slot-2"]);
+      expect(slotRepo.findById("slot-1")!.bookable).toBe(false);
+      expect(slotRepo.findById("slot-2")!.bookable).toBe(false);
+      
+      // Release should also work without throwing
+      scheduler.releaseBundle("bundle-1");
+      expect(slotRepo.findById("slot-1")!.bookable).toBe(true);
+      expect(slotRepo.findById("slot-2")!.bookable).toBe(true);
+    });
+
+    it("prevents reservation if tenant is paused", () => {
+      scheduler.pausedTenants.add("tenant-bad");
+
+      expect(() =>
+        scheduler.reserveBundle("bundle-1", ["slot-1", "slot-2"], "tenant-bad")
+      ).toThrow(/Tenant tenant-bad is paused/);
+
+      // Should still be bookable
+      expect(slotRepo.findById("slot-1")!.bookable).toBe(true);
+      expect(slotRepo.findById("slot-2")!.bookable).toBe(true);
+    });
+  });
 });
 
 // ─── BookingIntentService + scheduling integration ──────────────────────────
