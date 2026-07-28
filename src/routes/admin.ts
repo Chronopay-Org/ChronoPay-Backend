@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
+import { capacityForecaster } from "../services/capacityForecaster.js";
 
 const router = Router();
 
@@ -79,6 +80,25 @@ router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response)
   delete process.env.SETTLEMENTS_WEBHOOK_SECRET_NEXT;
 
   return res.status(200).json({ success: true });
+});
+
+/**
+ * @route GET /api/v1/admin/capacity/forecast
+ * @desc Get capacity forecast for next 8 weeks and backtest error
+ * @access Private (admin token only)
+ */
+router.get("/capacity/forecast", requireAdminToken, (req: Request, res: Response) => {
+  try {
+    const rawHistory = req.query.history as string;
+    const history = rawHistory ? rawHistory.split(',').map(Number).filter(n => !isNaN(n)) : [];
+    
+    const onboardWeek = req.query.onboardWeek ? parseInt(req.query.onboardWeek as string, 10) : 0;
+    
+    const result = capacityForecaster.forecast(history, onboardWeek);
+    return res.status(200).json({ success: true, ...result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message || "Forecast failed" });
+  }
 });
 
 export default router;
