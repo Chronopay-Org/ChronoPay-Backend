@@ -3,7 +3,7 @@
  *
  * Implements deterministic ranking and filtering for slots with optional caching.
  * Uses parameterized queries to prevent SQL injection.
- * Implements stable pagination via tiebreaker by id.
+ * Implements stable cursor-based pagination via sort key + id tiebreaker.
  */
 
 import { Pool } from "pg";
@@ -17,10 +17,17 @@ export interface SearchResult {
   limit: number;
   total: number;
   ranking: string;
+  nextCursor?: string | null;
   cacheSource?: "hit" | "miss";
 }
 
 import { SearchQueryTracker } from "../cache/searchCacheWarmup.js";
+export interface CursorData {
+  sortBy: "rating" | "price" | "relevance";
+  rating?: number;
+  price?: number;
+  id: number;
+}
 
 export class MarketplaceSearchService {
   constructor(
@@ -35,6 +42,84 @@ export class MarketplaceSearchService {
     this.queryTracker = tracker;
   }
 
+
+  /**
+   * Encode cursor data into a base64url string.
+   *
+   * @param slot Last slot in current page
+   * @param sortBy Active sort mode
+   * @returns Base64url encoded cursor string
+   */
+  public encodeCursor(slot: Slot, sortBy: "rating" | "price" | "relevance"): string {
+    const data: CursorData = {
+      sortBy,
+      id: slot.id,
+    };
+    if (sortBy === "rating" || sortBy === "relevance") {
+      data.rating = Number(slot.supplier_rating ?? 0);
+    }
+    if (sortBy === "price" || sortBy === "relevance") {
+      data.price = Number(slot.price_cents ?? 0);
+    }
+    return Buffer.from(JSON.stringify(data)).toString("base64url");
+  }
+
+  /**
+   * Decode and strictly validate base64 cursor token.
+   *
+   * @param cursorStr Base64 encoded cursor token
+   * @param expectedSortBy Expected sort mode for current search query
+   * @returns Validated CursorData
+   * @throws MarketplaceSearchError (400) if invalid or malformed
+   */
+  public decodeCursor(cursorStr: string, expectedSortBy: "rating" | "price" | "relevance"): CursorData {
+    if (!cursorStr || typeof cursorStr !== "string") {
+      throw new MarketplaceSearchError("Invalid cursor format", 400);
+    }
+
+    try {
+      // Support base64 and base64url encoding formats
+      const normalizedBase64 = cursorStr.replace(/-/g, "+").replace(/_/g, "/");
+      const raw = Buffer.from(normalizedBase64, "base64").toString("utf-8");
+      const data = JSON.parse(raw);
+
+      if (typeof data !== "object" || data === null) {
+        throw new Error("Cursor payload must be an object");
+      }
+
+      if (typeof data.id !== "number" || !Number.isInteger(data.id) || data.id < 0) {
+        throw new Error("Cursor id must be a non-negative integer");
+      }
+
+      if (data.sortBy !== expectedSortBy) {
+        throw new Error(`Cursor sortBy mismatch (expected ${expectedSortBy}, got ${data.sortBy})`);
+      }
+
+      if (expectedSortBy === "rating" || expectedSortBy === "relevance") {
+        if (typeof data.rating !== "number" || isNaN(data.rating)) {
+          throw new Error("Cursor rating must be a valid number");
+        }
+      }
+
+      if (expectedSortBy === "price" || expectedSortBy === "relevance") {
+        if (typeof data.price !== "number" || isNaN(data.price)) {
+          throw new Error("Cursor price must be a valid number");
+        }
+      }
+
+      return {
+        sortBy: data.sortBy,
+        id: data.id,
+        rating: data.rating,
+        price: data.price,
+      };
+    } catch (error: any) {
+      if (error instanceof MarketplaceSearchError) {
+        throw error;
+      }
+      throw new MarketplaceSearchError("Invalid or malformed cursor", 400, error.message);
+    }
+  }
 
   /**
    * Build SQL WHERE clause and parameters for search filters.
@@ -127,6 +212,55 @@ export class MarketplaceSearchService {
   }
 
   /**
+   * Build cursor comparison predicate for deterministic pagination.
+   *
+   * @param cursorData Decoded cursor values
+   * @param startParamIndex Starting SQL parameter index ($N)
+   * @returns { conditionSql, cursorParams, nextParamIndex }
+   */
+  private buildCursorPredicate(
+    cursorData: CursorData,
+    startParamIndex: number
+  ): { conditionSql: string; cursorParams: any[]; nextParamIndex: number } {
+    let p = startParamIndex;
+    const cursorParams: any[] = [];
+
+    switch (cursorData.sortBy) {
+      case "rating": {
+        // supplier_rating DESC, id ASC
+        // (supplier_rating < $p) OR (supplier_rating = $p AND id > $p+1)
+        const pRating = `$${p++}`;
+        const pId = `$${p++}`;
+        cursorParams.push(cursorData.rating, cursorData.id);
+        const conditionSql = `(supplier_rating < ${pRating} OR (supplier_rating = ${pRating} AND id > ${pId}))`;
+        return { conditionSql, cursorParams, nextParamIndex: p };
+      }
+      case "price": {
+        // price_cents ASC, id ASC
+        // (price_cents > $p) OR (price_cents = $p AND id > $p+1)
+        const pPrice = `$${p++}`;
+        const pId = `$${p++}`;
+        cursorParams.push(cursorData.price, cursorData.id);
+        const conditionSql = `(price_cents > ${pPrice} OR (price_cents = ${pPrice} AND id > ${pId}))`;
+        return { conditionSql, cursorParams, nextParamIndex: p };
+      }
+      case "relevance":
+      default: {
+        // supplier_rating DESC, price_cents ASC, id ASC
+        // (supplier_rating < $p1)
+        // OR (supplier_rating = $p1 AND price_cents > $p2)
+        // OR (supplier_rating = $p1 AND price_cents = $p2 AND id > $p3)
+        const pRating = `$${p++}`;
+        const pPrice = `$${p++}`;
+        const pId = `$${p++}`;
+        cursorParams.push(cursorData.rating, cursorData.price, cursorData.id);
+        const conditionSql = `(supplier_rating < ${pRating} OR (supplier_rating = ${pRating} AND price_cents > ${pPrice}) OR (supplier_rating = ${pRating} AND price_cents = ${pPrice} AND id > ${pId}))`;
+        return { conditionSql, cursorParams, nextParamIndex: p };
+      }
+    }
+  }
+
+  /**
    * Search for slots with filters and pagination.
    * Returns deterministic results with optional caching.
    *
@@ -159,19 +293,49 @@ export class MarketplaceSearchService {
     }
 
     try {
-      // Build query components
-      const { whereClause, params: filterParams } = this.buildFilterClause(query);
+      // Build filter clauses (excluding cursor)
+      const { whereClause: baseWhereClause, params: filterParams, paramCount } = this.buildFilterClause(query);
       const orderByClause = this.buildOrderByClause(query);
 
-      // Get total count of matching slots (without pagination)
-      const countQuery = `SELECT COUNT(*) as total FROM slots ${whereClause}`;
+      // Get total count of matching slots (without pagination / cursor filtering)
+      const countQuery = `SELECT COUNT(*) as total FROM slots ${baseWhereClause}`;
       const countResult = await this.pool.query(countQuery, filterParams);
       const total = parseInt(countResult.rows[0].total, 10);
 
-      // Calculate pagination
-      const offset = (query.page - 1) * query.limit;
+      let mainWhereClause = baseWhereClause;
+      const mainQueryParams = [...filterParams];
+      let currentParamIndex = paramCount;
+
+      // Append cursor predicate if cursor is specified
+      if (query.cursor) {
+        const cursorData = this.decodeCursor(query.cursor, query.sortBy);
+        const { conditionSql, cursorParams, nextParamIndex } = this.buildCursorPredicate(
+          cursorData,
+          currentParamIndex
+        );
+
+        if (mainWhereClause.length > 0) {
+          mainWhereClause += ` AND ${conditionSql}`;
+        } else {
+          mainWhereClause = `WHERE ${conditionSql}`;
+        }
+        mainQueryParams.push(...cursorParams);
+        currentParamIndex = nextParamIndex;
+      }
 
       // Build main query with pagination
+      let paginationClause: string;
+      if (query.cursor) {
+        // Cursor pagination does not use OFFSET
+        paginationClause = `LIMIT $${currentParamIndex}`;
+        mainQueryParams.push(query.limit);
+      } else {
+        // Standard offset pagination
+        const offset = (query.page - 1) * query.limit;
+        paginationClause = `LIMIT $${currentParamIndex} OFFSET $${currentParamIndex + 1}`;
+        mainQueryParams.push(query.limit, offset);
+      }
+
       const mainQuery = `
         SELECT 
           id, 
@@ -184,14 +348,12 @@ export class MarketplaceSearchService {
           status,
           created_at
         FROM slots
-        ${whereClause}
+        ${mainWhereClause}
         ${orderByClause}
-        LIMIT $${filterParams.length + 1}
-        OFFSET $${filterParams.length + 2}
+        ${paginationClause}
       `;
 
-      const mainParams = [...filterParams, query.limit, offset];
-      const result = await this.pool.query(mainQuery, mainParams);
+      const result = await this.pool.query(mainQuery, mainQueryParams);
 
       // Transform database rows to Slot interface
       const slots: Slot[] = result.rows.map((row) => ({
@@ -204,6 +366,13 @@ export class MarketplaceSearchService {
         supplier_rating: row.supplier_rating,
       }));
 
+      // Compute nextCursor if page returned full limit
+      let nextCursor: string | null = null;
+      if (slots.length === query.limit) {
+        const lastSlot = slots[slots.length - 1];
+        nextCursor = this.encodeCursor(lastSlot, query.sortBy);
+      }
+
       const searchResult: SearchResult = {
         slots,
         data: slots,
@@ -211,6 +380,7 @@ export class MarketplaceSearchService {
         limit: query.limit,
         total,
         ranking: query.sortBy,
+        nextCursor,
         cacheSource: "miss",
       };
 
@@ -225,9 +395,11 @@ export class MarketplaceSearchService {
 
       return searchResult;
     } catch (error) {
+      if (error instanceof MarketplaceSearchError) {
+        throw error;
+      }
       // Map database errors to appropriate HTTP status
       if (error instanceof Error) {
-        // Check for constraint violations or validation errors
         if (error.message.includes("invalid") || error.message.includes("constraint")) {
           throw new MarketplaceSearchError(
             "Invalid search parameters",
@@ -251,6 +423,7 @@ export class MarketplaceSearchService {
     const key = {
       page: query.page,
       limit: query.limit,
+      cursor: query.cursor ?? null,
       sortBy: query.sortBy,
       categories: query.categories ? [...query.categories].sort() : [],
       priceRange: query.priceRange ? JSON.stringify(query.priceRange) : null,
