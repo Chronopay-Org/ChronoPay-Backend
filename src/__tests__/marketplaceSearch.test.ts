@@ -76,6 +76,11 @@ describe("Marketplace Search Validation", () => {
       const query3 = validateSearchQuery({ sortBy: "relevance" });
       expect(query3.sortBy).toBe("relevance");
     });
+
+    it("should parse cursor parameter", () => {
+      const query = validateSearchQuery({ cursor: "  eyJzb3J0QnkiOiJyZWxldmFuY2UiLCJpZCI6MTB9  " });
+      expect(query.cursor).toBe("eyJzb3J0QnkiOiJyZWxldmFuY2UiLCJpZCI6MTB9");
+    });
   });
 
   describe("Pagination Constraints", () => {
