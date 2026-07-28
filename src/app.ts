@@ -47,6 +47,7 @@ import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
+import graphqlRouter from "./routes/graphql.js";
 
 // Import modules
 import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
@@ -396,6 +397,12 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3b. Admin Routes
   app.use("/api/v1/admin", adminRouter);
+  
+  // 3c. Legal Holds Routes
+  app.use("/api/v1/admin", legalHoldRouter);
+
+  // 3c. GraphQL Route
+  app.use("/api/v1/graphql", graphqlRouter);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
@@ -424,16 +431,8 @@ export function createApp(options: AppFactoryOptions = {}) {
   );
 
   // 5. Webhooks Routes
-  app.post("/api/v1/webhooks/settlements", (req, res) => {
-    const { eventType, transactionId, amount, timestamp } = req.body;
-    if (!eventType) return res.status(400).json({ success: false, error: "eventType is required" });
-    if (eventType === "invalid_event") return res.status(400).json({ success: false, error: "Invalid eventType" });
-    if (!transactionId) return res.status(400).json({ success: false, error: "transactionId is required" });
-    if (typeof amount !== "number" || amount <= 0) return res.status(400).json({ success: false, error: "Invalid amount" });
-    if (typeof timestamp !== "number" || timestamp <= 0) return res.status(400).json({ success: false, error: "Invalid timestamp" });
-    
-    res.status(200).json({ success: true, received: req.body });
-  });
+  registerWebhookRoutes(app);
+  app.use("/api/v1", webhookRouter);
 
   // 6. SMS Routes
   app.post("/api/v1/notifications/sms", validateRequiredFields(["to", "message"]), (req, res) => {
