@@ -60,6 +60,25 @@ const SENSITIVE_FIELDS = new Set([
   "card_token",
   "tracking_token",
   "trackingtoken",
+  // PII fields
+  "email",
+  "phone",
+  "ssn",
+  "social_security",
+  "socialsecurity",
+  "dob",
+  "date_of_birth",
+  "dateofbirth",
+  "passport",
+  "passport_number",
+  "passportnumber",
+  "driver_license",
+  "driverslicense",
+  "driverlicense",
+  "tax_id",
+  "taxid",
+  "national_id",
+  "nationalid",
 ]);
 
 /**
@@ -130,7 +149,10 @@ export const redact = (
   }
 
   // Handle plain objects
-  if (obj.constructor === Object) {
+  // Use toString instead of constructor check to avoid cross-realm issues
+  // (e.g., structuredClone in Jest's VM sandbox creates objects with a
+  // different Object constructor)
+  if (Object.prototype.toString.call(obj) === "[object Object]") {
     const redacted: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(obj)) {
