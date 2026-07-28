@@ -12,6 +12,9 @@ import {
 } from "../services/quarantineStore.js";
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import {
+  defaultSupplierCancellationOverrideStore,
+} from "../services/supplierCancellationOverrideStore.js";
 
 const router = Router();
 
@@ -1178,6 +1181,174 @@ router.post(
       return res.status(500).json({
         success: false,
         error: err.message ?? "Manual override failed",
+      });
+    }
+  },
+);
+
+// ─── Supplier Cancellation Override CRUD API ─────────────────────────────────
+
+/**
+ * @route GET /api/v1/admin/cancellation-overrides
+ * @desc List all supplier cancellation overrides.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/cancellation-overrides",
+  requireAdminToken,
+  (_req: Request, res: Response) => {
+    try {
+      const overrides = defaultSupplierCancellationOverrideStore.listOverrides();
+      return res.status(200).json({ success: true, overrides });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list cancellation overrides",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/cancellation-overrides/:supplierId
+ * @desc Get a single supplier cancellation override.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/cancellation-overrides/:supplierId",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const override = defaultSupplierCancellationOverrideStore.getOverride(
+        req.params.supplierId,
+      );
+      if (!override) {
+        return res.status(404).json({
+          success: false,
+          error: `No cancellation override found for supplier "${req.params.supplierId}"`,
+        });
+      }
+      return res.status(200).json({ success: true, override });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to get cancellation override",
+      });
+    }
+  },
+);
+
+/**
+ * @route PUT /api/v1/admin/cancellation-overrides/:supplierId
+ * @desc Create or update a supplier cancellation override.
+ *
+ *   Body:
+ *     tiers       – array of cancellation tiers (required, min 1)
+ *     minRefundAmount – optional lower-bound on refund
+ *     maxRefundAmount – optional upper-bound on refund
+ *     description – optional reason for the override
+ *     changedBy   – actor identifier (defaults to req.auth?.userId or "admin")
+ *
+ *   Tier shape (inclusive-lower, exclusive-upper):
+ *     {
+ *       minHoursUntilStart: number,
+ *       maxHoursUntilStart?: number,
+ *       refundRatio: number (0-1),
+ *       flatFee?: number,
+ *       percentageFee?: number (0-1),
+ *       taxReversalRatio?: number (0-1)
+ *     }
+ *
+ * @access Private (admin token only)
+ */
+router.put(
+  "/cancellation-overrides/:supplierId",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { supplierId } = req.params;
+      const { tiers, minRefundAmount, maxRefundAmount, description } = req.body;
+      const changedBy = req.auth?.userId || "admin";
+
+      if (!supplierId || typeof supplierId !== "string" || supplierId.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: "supplierId path parameter is required",
+        });
+      }
+
+      if (!Array.isArray(tiers) || tiers.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "tiers must be a non-empty array",
+        });
+      }
+
+      const terms = {
+        tiers,
+        ...(minRefundAmount !== undefined ? { minRefundAmount } : {}),
+        ...(maxRefundAmount !== undefined ? { maxRefundAmount } : {}),
+      };
+
+      const override = await defaultSupplierCancellationOverrideStore.setOverride(
+        supplierId.trim(),
+        terms,
+        changedBy,
+        description,
+      );
+
+      return res.status(200).json({ success: true, override });
+    } catch (err: any) {
+      const isValidationError =
+        err.message?.includes("ProratedCancellationTerms must") ||
+        err.message?.includes("Tier ") ||
+        err.message?.includes("supplierId must");
+      const status = isValidationError ? 400 : 500;
+      return res.status(status).json({
+        success: false,
+        error: err.message ?? "Failed to set cancellation override",
+      });
+    }
+  },
+);
+
+/**
+ * @route DELETE /api/v1/admin/cancellation-overrides/:supplierId
+ * @desc Delete a supplier cancellation override.
+ * @access Private (admin token only)
+ */
+router.delete(
+  "/cancellation-overrides/:supplierId",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { supplierId } = req.params;
+      const changedBy = req.auth?.userId || "admin";
+
+      if (!supplierId || typeof supplierId !== "string" || supplierId.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: "supplierId path parameter is required",
+        });
+      }
+
+      const deleted = await defaultSupplierCancellationOverrideStore.deleteOverride(
+        supplierId.trim(),
+        changedBy,
+      );
+
+      if (!deleted) {
+        return res.status(404).json({
+          success: false,
+          error: `No cancellation override found for supplier "${supplierId}"`,
+        });
+      }
+
+      return res.status(200).json({ success: true, deleted: true });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to delete cancellation override",
       });
     }
   },
