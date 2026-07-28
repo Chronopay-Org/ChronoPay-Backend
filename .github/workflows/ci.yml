@@ -23,7 +23,7 @@ jobs:
       - name: Run ESLint
         run: npm run lint
       - name: Lint Prometheus Rules
-        run: docker run --rm -v ${{ github.workspace }}:/workspace prom/prometheus promtool check rules /workspace/ops/alerts/*.yml
+        run: docker run --rm --entrypoint promtool -v ${{ github.workspace }}:/workspace prom/prometheus check rules /workspace/ops/alerts/*.yml
       - name: Validate Grafana Dashboards
         run: npx tsx scripts/validate-dashboards.ts
 
