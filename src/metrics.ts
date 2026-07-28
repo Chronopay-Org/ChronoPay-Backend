@@ -322,6 +322,58 @@ export function recordStampedeBlocked(): void {
   slotCacheStampedeBlocked.inc();
 }
 
+// ─── Search cache warmup metrics ───────────────────────────────────────────────
+
+export const searchCacheWarmupCoverageRatio = createBudgetedGauge({
+  name: "search_cache_warmup_coverage_ratio",
+  help: "Ratio of successfully warmed search queries to target top-N queries after taxonomy edit",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+export const searchCacheWarmupTotal = createBudgetedCounter({
+  name: "search_cache_warmup_total",
+  help: "Total number of search cache warmup runs triggered by taxonomy updates",
+  labels: ["status"],
+  budget: 8,
+  registers: [register],
+});
+
+export const searchCacheWarmupQueriesTotal = createBudgetedCounter({
+  name: "search_cache_warmup_queries_total",
+  help: "Total number of search queries replayed during cache warmup",
+  labels: ["result"],
+  budget: 8,
+  registers: [register],
+});
+
+export const searchCacheWarmupDurationSeconds = createBudgetedHistogram({
+  name: "search_cache_warmup_duration_seconds",
+  help: "Duration in seconds of search cache warmup runs",
+  labels: [],
+  budget: 0,
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10],
+  registers: [register],
+});
+
+export function recordWarmupCoverage(ratio: number): void {
+  searchCacheWarmupCoverageRatio.set(ratio);
+}
+
+export function recordWarmupExecution(status: "success" | "partial" | "failed" | "cancelled"): void {
+  searchCacheWarmupTotal.labels(status).inc();
+}
+
+export function recordWarmupQueryReplayed(result: "success" | "failure"): void {
+  searchCacheWarmupQueriesTotal.labels(result).inc();
+}
+
+export function recordWarmupDuration(durationSeconds: number): void {
+  searchCacheWarmupDurationSeconds.observe(durationSeconds);
+}
+
+
 export const dependencyFaults = createBudgetedCounter({
   name: "dependency_faults_total",
   help: "Total number of dependency faults observed by graceful-degradation handlers",
