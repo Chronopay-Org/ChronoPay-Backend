@@ -18,7 +18,6 @@ import {
   type ErrorCode,
   type ErrorType,
   isPublicError,
-  type PublicErrorCode,
   type I18nMessageKey,
 } from "./errorTaxonomy.js";
 

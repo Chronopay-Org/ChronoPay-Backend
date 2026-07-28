@@ -16,7 +16,7 @@ for (const [routePath, pathItem] of Object.entries((merged as any).paths || {}))
   for (const [method, operation] of Object.entries(pathItem as Record<string, any>)) {
     if (!["get", "post", "put", "delete", "patch"].includes(method.toLowerCase())) continue;
     const responses = operation.responses || {};
-    const hasSuccessExample = Object.entries(responses).some(([statusCode, response]: [string, any]) => {
+    const hasSuccessExample = Object.entries(responses).some(([_statusCode, response]: [string, any]) => {
       if (typeof response !== "object" || !response.content?.["application/json"]) return false;
       return Boolean(response.content["application/json"].example);
     });

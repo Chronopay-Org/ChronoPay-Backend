@@ -55,6 +55,7 @@ export const ERROR_CODES = {
   NOT_FOUND: { status: 404, code: "NOT_FOUND" },
   CONFLICT: { status: 409, code: "CONFLICT" },
   UNPROCESSABLE_ENTITY: { status: 422, code: "UNPROCESSABLE_ENTITY" },
+  BUNDLE_EXPIRED: { status: 422, code: "BUNDLE_EXPIRED" },
 
   // --- Query budget (503) ---
   QUERY_BUDGET_EXCEEDED: { status: 503, code: "QUERY_BUDGET_EXCEEDED" },

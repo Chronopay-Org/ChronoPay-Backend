@@ -2,7 +2,6 @@ import { jest } from '@jest/globals';
 import { validateDashboards } from '../../scripts/validate-dashboards.js';
 import { uploadDashboards } from '../../scripts/upload-dashboards.js';
 import fs from 'fs';
-import path from 'path';
 
 global.fetch = jest.fn() as jest.Mock;
 
@@ -17,7 +16,7 @@ describe('Dashboards as Code', () => {
     readdirSyncSpy = jest.spyOn(fs, 'readdirSync');
     
     // Mock the config file reading
-    readFileSyncSpy.mockImplementation((filePath: any, encoding?: any): any => {
+    readFileSyncSpy.mockImplementation((filePath: any, _encoding?: any): any => {
       const normalizedPath = filePath.toString().replace(/\\/g, '/');
       if (normalizedPath.endsWith('ops/grafana-config.json')) {
         return JSON.stringify({

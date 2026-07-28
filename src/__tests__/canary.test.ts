@@ -1,6 +1,6 @@
 import { jest } from "@jest/globals";
 import { runCanary, canarySuccessCounter, canaryFailureCounter } from "../../scripts/canary.js";
-import { getRedisClient, setRedisClient } from "../cache/redisClient.js";
+import { setRedisClient } from "../cache/redisClient.js";
 
 // Mock the redis client
 const mockRedisClient = {
@@ -110,7 +110,7 @@ describe("Canary probe", () => {
     mockRedisClient.get.mockResolvedValueOnce(null);
     mockRedisClient.set.mockResolvedValueOnce("OK");
     
-    fetchSpy.mockImplementationOnce(async (input: RequestInfo) => {
+    fetchSpy.mockImplementationOnce(async (_input: RequestInfo) => {
       // create works
       return { ok: true, status: 201, json: async () => ({ intent: { id: "intent-123" } }) } as Response;
     }).mockImplementationOnce(async () => {
@@ -129,7 +129,7 @@ describe("Canary probe", () => {
     mockRedisClient.get.mockResolvedValueOnce(null);
     mockRedisClient.set.mockResolvedValueOnce("OK");
     
-    fetchSpy.mockImplementationOnce(async (input: RequestInfo) => {
+    fetchSpy.mockImplementationOnce(async (_input: RequestInfo) => {
       // create works
       return { ok: true, status: 201, json: async () => ({ intent: { id: "intent-123" } }) } as Response;
     }).mockImplementationOnce(async () => {
