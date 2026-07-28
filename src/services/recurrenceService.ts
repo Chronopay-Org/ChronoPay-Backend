@@ -38,6 +38,9 @@ export function expandRRule(rruleText: string, _dtstartIso?: string): Date[] {
   if ((options.count ?? 0) <= 0 && !options.until) {
     throw new RecurrenceError("Unbounded RRULE is not allowed; include COUNT or UNTIL");
   }
+  if (options.interval !== undefined && options.interval < 1 || /(?:^|[;\n])INTERVAL=-?[0]+(?:;|$)/i.test(rruleText)) {
+    throw new RecurrenceError("INTERVAL must be a positive integer");
+  }
 
   const occurrences: Date[] = rule.all((_occurrence: Date, i: number) => i < MAX_OCCURRENCES + 1);
   if (occurrences.length > MAX_OCCURRENCES) {
