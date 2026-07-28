@@ -16,7 +16,7 @@ import { Migration } from "../migrationRunner.js";
  *    common query "find slots expiring soon" used by the reminder worker.
  */
 export const migration: Migration = {
-  id: "011",
+  id: "013",
   name: "add_slot_valid_until",
 
   async up(client: PoolClient): Promise<void> {
