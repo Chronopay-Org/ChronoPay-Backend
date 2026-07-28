@@ -49,7 +49,8 @@ export type PublicErrorCode =
   | "NOT_ACCEPTABLE"
   | "NOT_FOUND"
   | "CONFLICT"
-  | "UNPROCESSABLE_ENTITY";
+  | "UNPROCESSABLE_ENTITY"
+  | "QUERY_BUDGET_EXCEEDED";
 
 /**
  * Internal error codes: implementation details, never exposed to public API.
@@ -105,7 +106,9 @@ export type PublicError =
   // State / lifecycle (404 / 409 / 422)
   | { readonly code: "NOT_FOUND"; readonly status: 404; readonly messageKey: I18nMessageKey }
   | { readonly code: "CONFLICT"; readonly status: 409; readonly messageKey: I18nMessageKey }
-  | { readonly code: "UNPROCESSABLE_ENTITY"; readonly status: 422; readonly messageKey: I18nMessageKey };
+  | { readonly code: "UNPROCESSABLE_ENTITY"; readonly status: 422; readonly messageKey: I18nMessageKey }
+  // Query budget (503)
+  | { readonly code: "QUERY_BUDGET_EXCEEDED"; readonly status: 503; readonly messageKey: I18nMessageKey };
 
 /**
  * Discriminated union for internal errors.
@@ -154,6 +157,7 @@ export function isPublicError(error: ErrorType): error is PublicError {
     "NOT_FOUND",
     "CONFLICT",
     "UNPROCESSABLE_ENTITY",
+    "QUERY_BUDGET_EXCEEDED",
   ];
   return publicCodes.includes(error.code as PublicErrorCode);
 }
@@ -211,6 +215,9 @@ export const ERROR_TAXONOMY: Record<ErrorCode, ErrorType> = {
   NOT_FOUND: { code: "NOT_FOUND", status: 404, messageKey: createMessageKey("errors.resource.not_found") },
   CONFLICT: { code: "CONFLICT", status: 409, messageKey: createMessageKey("errors.resource.conflict") },
   UNPROCESSABLE_ENTITY: { code: "UNPROCESSABLE_ENTITY", status: 422, messageKey: createMessageKey("errors.resource.unprocessable_entity") },
+
+  // --- Query budget (503) ---
+  QUERY_BUDGET_EXCEEDED: { code: "QUERY_BUDGET_EXCEEDED", status: 503, messageKey: createMessageKey("errors.budget.query_budget_exceeded") },
 
   // --- Infrastructure (500 / 503) ---
   DB_ERROR: { code: "DB_ERROR", status: 500, messageKey: createMessageKey("errors.internal.db_error") },
