@@ -1,4 +1,4 @@
-import { RouteMetrics, WINDOWS_MS, recordRouteTraffic, resetSloMetrics } from "../metrics/sloMetrics.js";
+import { RouteMetrics, resetSloMetrics } from "../metrics/sloMetrics.js";
 
 describe("sloMetrics", () => {
   beforeEach(() => {

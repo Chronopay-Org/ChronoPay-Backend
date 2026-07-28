@@ -37,7 +37,7 @@ async function fetchOSV(pkgName, version) {
       res.on('end', () => {
         try {
           resolve(JSON.parse(body));
-        } catch (e) {
+        } catch {
           resolve({});
         }
       });
@@ -65,21 +65,21 @@ async function run() {
   try {
     execSync(`git checkout ${BASE_SHA} -- package-lock.json`);
     baseLock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
-  } catch (e) {
+  } catch {
     baseLock = { packages: {} };
   }
 
   try {
     execSync(`git checkout ${HEAD_SHA} -- package-lock.json`);
     headLock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
-  } catch (e) {
+  } catch {
     headLock = { packages: {} };
   }
 
   // Restore working tree state
   try {
     execSync(`git checkout HEAD -- package-lock.json`);
-  } catch (e) {}
+  } catch {}
 
   const baseDeps = baseLock.packages || baseLock.dependencies || {};
   const headDeps = headLock.packages || headLock.dependencies || {};

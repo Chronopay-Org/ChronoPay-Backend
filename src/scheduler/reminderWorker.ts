@@ -67,7 +67,6 @@ export async function processReminders(
 
 /* Autoscaling worker loop */
 import { ReminderAutoscaler } from "./reminderAutoscaler.js";
-import { defaultAutoscaleConfig } from "./reminderConfig.js";
 
 export async function runReminderWorker(
   autoscalerConfig?: Partial<ReminderAutoscaleConfig>

@@ -16,7 +16,7 @@ export class RecurrenceError extends Error {
   }
 }
 
-export function expandRRule(rruleText: string, dtstartIso?: string): Date[] {
+export function expandRRule(rruleText: string, _dtstartIso?: string): Date[] {
   if (typeof rruleText !== "string" || rruleText.trim().length === 0) {
     throw new RecurrenceError("rrule must be a non-empty string");
   }
@@ -24,8 +24,8 @@ export function expandRRule(rruleText: string, dtstartIso?: string): Date[] {
   // rrulestr accepts DTSTART inline or we can supply it via options
   let rule: RRuleType;
   try {
-    rule = rrulestr(rruleText, { forceset: false }) as unknown as RRuleType;
-  } catch (_err) {
+    rule = rrulestr(rruleText, { forceset: false }) as unknown as RRule;
+  } catch {
     throw new RecurrenceError("Invalid RRULE format");
   }
 
