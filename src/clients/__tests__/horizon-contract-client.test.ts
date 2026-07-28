@@ -1,5 +1,10 @@
 import { jest } from "@jest/globals";
-import { HorizonContractClient, HorizonHttpError } from "../../clients/horizon-contract-client.js";
+import {
+  HorizonContractClient,
+  HorizonHttpError,
+  HorizonInsufficientBalanceError,
+  computeMinBalance,
+} from "../../clients/horizon-contract-client.js";
 import { ContractService } from "../../services/contract.service.js";
 import { RetryPolicy } from "../../utils/retry-policy.js";
 import {
@@ -81,6 +86,60 @@ describe("HorizonHttpError", () => {
     expect(err.statusCode).toBe(503);
     expect(err.message.length).toBeLessThan(300);
     expect(err.name).toBe("HorizonHttpError");
+  });
+
+  it("computes minimum balance for zero subentries and many trustlines", () => {
+    expect(computeMinBalance(0, 5_000_000)).toBe(10_000_000);
+    expect(computeMinBalance(42, 5_000_000)).toBe(220_000_000);
+  });
+
+  it("rejects payouts that would breach the minimum reserve by one stroop", async () => {
+    const client = makeClient();
+    mockOk({
+      id: ACCOUNT_ID,
+      subentry_count: 2,
+      balances: [{ asset_type: "native", balance: "1.0000000" }],
+    });
+
+    await expect(
+      client.submitPayout(ACCOUNT_ID, XDR, { baseReserve: 5_000_000, subentries: 2, amount: "1.0000000" }),
+    ).rejects.toBeInstanceOf(HorizonInsufficientBalanceError);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows payouts when the account balance is exactly at the minimum reserve", async () => {
+    const client = makeClient();
+    mockOk({
+      id: ACCOUNT_ID,
+      subentry_count: 2,
+      balances: [{ asset_type: "native", balance: "2.0000000" }],
+    });
+    mockOk({ hash: TX_HASH });
+
+    await expect(client.submitPayout(ACCOUNT_ID, XDR, { baseReserve: 5_000_000, subentries: 2 })).resolves.toEqual(
+      expect.objectContaining({ hash: TX_HASH }),
+    );
+  });
+
+  it("includes trustlines and offers in the effective reserve calculation", async () => {
+    const client = makeClient();
+    mockOk({
+      id: ACCOUNT_ID,
+      subentry_count: 2,
+      balances: [{ asset_type: "native", balance: "19.0000000" }],
+    });
+    mockOk({ hash: TX_HASH });
+
+    await expect(
+      client.submitPayout(ACCOUNT_ID, XDR, {
+        baseReserve: 5_000_000,
+        subentries: 2,
+        trustlines: 30,
+        offers: 4,
+        amount: "0",
+      }),
+    ).resolves.toEqual(expect.objectContaining({ hash: TX_HASH }));
   });
 
   it("5xx message contains 'service unavailable'", () => {
