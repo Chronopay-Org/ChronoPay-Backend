@@ -19,6 +19,11 @@ export interface SlotRecord {
   bookable: boolean;
   /** Optional dynamic pricing configuration set by the supplier. */
   pricingStrategy?: SlotPricingStrategy;
+  /**
+   * Optional bundle expiry timestamp (ms). When set, individual slot redemptions
+   * must occur before this deadline; attempts after it fail with SlotExpiredError.
+   */
+  validUntil?: number;
 }
 
 export interface SlotRepository {

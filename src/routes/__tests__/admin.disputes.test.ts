@@ -75,20 +75,51 @@ describe("E2E Dispute Smoke Suite", () => {
     expect(adjudicateRes.body.ledgers.supplier).toBe(1100);
   });
 
-  it("should handle appeal path", async () => {
+  it("should reject an appeal that didn't traverse OPEN→EVIDENCED→ADJUDICATED", async () => {
+    // The new appeal workflow enforces state-machine transitions; this
+    // smoke test confirms that appealing from OPEN is rejected with
+    // INVALID_STATE_TRANSITION.
     const openRes = await request(app)
       .post("/api/v1/admin/disputes")
       .set(adminHeaders)
       .send({ buyerId: "b1", supplierId: "s1", amount: 100 });
-    
     const disputeId = openRes.body.dispute.id;
 
     const appealRes = await request(app)
       .post(`/api/v1/admin/disputes/${disputeId}/appeal`)
-      .set(adminHeaders);
-    
-    expect(appealRes.status).toBe(200);
-    expect(appealRes.body.dispute.status).toBe("APPEALED");
+      .set(adminHeaders)
+      .send({});
+
+    expect(appealRes.status).toBe(409);
+    expect(appealRes.body.code).toBe("INVALID_STATE_TRANSITION");
+  });
+
+  it("should reject an appeal when the senior pool is empty after full adjudication", async () => {
+    // Even with a fully-adjudicated dispute, the appeal must find at
+    // least three eligible senior arbiters; with no pool, the endpoint
+    // returns 503 INSUFFICIENT_SENIOR_POOL.
+    const openRes = await request(app)
+      .post("/api/v1/admin/disputes")
+      .set(adminHeaders)
+      .send({ buyerId: "b1", supplierId: "s1", amount: 100 });
+    const disputeId = openRes.body.dispute.id;
+
+    await request(app)
+      .post(`/api/v1/admin/disputes/${disputeId}/evidence`)
+      .set(adminHeaders)
+      .send({ evidence: "receipt.png" });
+    await request(app)
+      .post(`/api/v1/admin/disputes/${disputeId}/adjudicate`)
+      .set(adminHeaders)
+      .send({ ruling: "BUYER_FAVOR", arbiter: "arbiter1" });
+
+    const appealRes = await request(app)
+      .post(`/api/v1/admin/disputes/${disputeId}/appeal`)
+      .set(adminHeaders)
+      .send({});
+
+    expect(appealRes.status).toBe(503);
+    expect(appealRes.body.code).toBe("INSUFFICIENT_SENIOR_POOL");
   });
 
   it("should handle timeout", async () => {
@@ -101,8 +132,9 @@ describe("E2E Dispute Smoke Suite", () => {
 
     const timeoutRes = await request(app)
       .post(`/api/v1/admin/disputes/${disputeId}/timeout`)
-      .set(adminHeaders);
-    
+      .set(adminHeaders)
+      .send({});
+
     expect(timeoutRes.status).toBe(200);
     expect(timeoutRes.body.dispute.status).toBe("TIMEOUT");
   });
