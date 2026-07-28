@@ -5,7 +5,7 @@ import type {
   BookingIntentRepository,
   PricingSnapshot,
 } from "./booking-intent-repository.js";
-import { SchedulingService, SlotExpiredError } from "../../services/schedulingService.js";
+import { SchedulingService } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";

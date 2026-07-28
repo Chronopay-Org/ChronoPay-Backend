@@ -10,19 +10,19 @@
  *   - Cursor stability preserved with reranking
  */
 
-import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
+import { describe, it, expect, jest, afterEach } from "@jest/globals";
 import { Pool } from "pg";
-import { MarketplaceSearchService, SearchResult } from "../services/marketplaceSearchService.js";
+import { MarketplaceSearchService } from "../services/marketplaceSearchService.js";
 import {
   SearchLtrReranker,
-  RERANK_BUDGET_MS,
+  
 } from "../services/ltr/reranker.js";
 import type {
   LtrModelWeights,
-  SlotFeatureVector,
-  RerankResult,
+  
+  
 } from "../services/ltr/types.js";
-import { NUM_FEATURES } from "../services/ltr/types.js";
+
 import { setFeatureFlagsFromEnv } from "../flags/index.js";
 
 
@@ -65,7 +65,7 @@ function makeSlotRow(overrides: Partial<any> = {}): any {
   };
 }
 
-function makeSlot(overrides: Partial<Slot> = {}): Slot {
+function _makeSlot(overrides: Partial<Slot> = {}): Slot {
   return {
     id: 1,
     professional: "alice",

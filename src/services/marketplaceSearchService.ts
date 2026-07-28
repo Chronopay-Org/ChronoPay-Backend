@@ -10,8 +10,8 @@ import { Pool } from "pg";
 import { Slot } from "../types.js";
 import { MarketplaceSearchQuery } from "../validation/marketplaceSearchSchema.js";
 import {
-  type LtrEventEmitter,
-  type LtrReranker,
+
+
   NUM_FEATURES,
 } from "./ltr/index.js";
 import { isFeatureEnabled } from "../flags/index.js";

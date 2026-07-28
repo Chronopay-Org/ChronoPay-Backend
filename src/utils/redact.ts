@@ -17,7 +17,7 @@
  * Sensitive field names that should be redacted
  * Includes common variations and case-insensitive matches
  */
-const SENSITIVE_FIELDS = new Set([
+const _SENSITIVE_FIELDS = new Set([
   "password",
   "secret",
   "token",

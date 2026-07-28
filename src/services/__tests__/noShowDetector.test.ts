@@ -14,7 +14,7 @@
 
 import {
   NoShowDetector,
-  resetNoShowDetectorSingleton,
+  
   DEFAULT_MAX_GPS_ACCURACY_M,
   type GpsCheckIn,
   type SlotLocation,

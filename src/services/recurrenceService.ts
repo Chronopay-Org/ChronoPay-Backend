@@ -1,8 +1,8 @@
 // rrule is a CJS module; import the default export and destructure for
 // compatibility with Jest's --experimental-vm-modules ESM test environment.
 import type { RRule as RRuleType } from "rrule";
-import rruleLib from "rrule";
-const { RRule, rrulestr } = rruleLib as any as {
+
+const { _RRule, rrulestr } = rruleLib as any as {
   RRule: typeof RRuleType;
   rrulestr: (rruleStr: string, options?: Record<string, unknown>) => RRuleType;
 };

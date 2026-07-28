@@ -4,7 +4,7 @@ import {
   PayoutDlqStore,
   getPayoutDlqStore,
   resetPayoutDlqStore,
-  type PayoutDlqEntry,
+  type 
 } from "../payoutDlqStore.js";
 
 describe("PayoutDlqStore", () => {

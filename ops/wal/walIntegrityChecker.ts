@@ -378,7 +378,7 @@ export class WalIntegrityChecker {
         // a restore-in-progress situation exists – suppress full GAP alarm.
         if (curr.sequenceNumber !== expected) {
           const gapSize = curr.sequenceNumber - expected;
-          gapsDetected += gapSize;
+          _gapsDetected += gapSize;
           alarms.push({
             severity: "CRITICAL",
             code: "GAP_DETECTED",
