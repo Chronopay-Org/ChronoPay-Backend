@@ -1,6 +1,6 @@
 import type { StrategyId, StrategyConfig } from "../../services/pricingStrategy.js";
 
-export type BookingIntentStatus = "pending" | "confirmed" | "cancelled" | "expired";
+export type BookingIntentStatus = "pending" | "confirmed" | "firm" | "cancelled" | "expired";
 
 /**
  * Immutable snapshot of the pricing inputs and result captured at intent
