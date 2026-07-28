@@ -1,6 +1,6 @@
 import { createBudgetedGauge } from "../metrics.js";
 
-export type RouteName = "booking_intent" | "slots_list" | "checkout";
+export type RouteName = "booking_intent" | "slots_list" | "checkout" | "escrow_listener";
 export type WindowName = "5m" | "1h" | "6h";
 
 export const WINDOWS_MS: Record<WindowName, number> = {
@@ -13,6 +13,7 @@ export const SLO_OBJECTIVES: Record<RouteName, number> = {
   booking_intent: 0.999, // 99.9%
   slots_list: 0.995,     // 99.5%
   checkout: 0.9999,      // 99.99%
+  escrow_listener: 0.99, // 99% of ticks must observe freshness within SLO
 };
 
 // Use an internal gauge wrapper to emit metric
@@ -91,6 +92,7 @@ const routeMetrics: Record<string, RouteMetrics> = {
   booking_intent: new RouteMetrics("booking_intent"),
   slots_list: new RouteMetrics("slots_list"),
   checkout: new RouteMetrics("checkout"),
+  escrow_listener: new RouteMetrics("escrow_listener"),
 };
 
 export function recordRouteTraffic(route: RouteName, isError: boolean, now: number = Date.now()) {

@@ -47,7 +47,7 @@ import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
-import graphqlRouter from "./routes/graphql.js";
+import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 
 // Import modules
 import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
@@ -257,6 +257,11 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(parseCookies);
   app.use(metricsMiddleware);
   app.use(createRequestLogger());
+
+  // ── Impersonation session recorder ────────────────────────────────────────
+  // Must be registered AFTER any auth middleware that populates req.impersonation.
+  // It is a transparent no-op for requests without an impersonation context.
+  app.use(impersonationRecorder());
 
   // ── Feature flag context middleware (makes flags available to routes) ──────
   app.use(featureFlagContextMiddleware);
