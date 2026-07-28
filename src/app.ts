@@ -43,6 +43,9 @@ import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
+import { legalHoldRouter } from "./routes/legalHold.js";
+import graphqlRouter from "./routes/graphql.js";
+import webhookRouter, { registerWebhookRoutes } from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 
 // Import modules
@@ -406,11 +409,8 @@ export function createApp(options: AppFactoryOptions = {}) {
   // 3c. Legal Holds Routes
   app.use("/api/v1/admin", legalHoldRouter);
 
-  // 3c. GraphQL Route
-  app.use("/api/v1/graphql", graphqlRouter);
-
-  // 3c. GraphQL Route
-  app.use("/api/v1/graphql", graphqlRouter);
+  // 3d. Reputation Transparency Routes
+  app.use("/api/v1/suppliers", reputationRouter);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
@@ -440,7 +440,7 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 5. Webhooks Routes
   registerWebhookRoutes(app);
-  app.use("/api/v1", webhookRouter);
+  app.use("/api/v1", webhookRoutes);
 
   // 6. SMS Routes
   app.post("/api/v1/notifications/sms", validateRequiredFields(["to", "message"]), (req, res) => {
