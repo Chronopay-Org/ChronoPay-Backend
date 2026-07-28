@@ -196,6 +196,21 @@ export class MarketplaceSearchService {
     conditions.push(`status = $${paramCount++}`);
     params.push("available");
 
+    // Suppress slots that are currently under an active refundable hold.
+    // A hold is active when holds.released_at IS NULL and holds.expires_at > NOW().
+    // We use NOT EXISTS to keep the main query efficient (avoids a JOIN that
+    // would multiply rows when a slot has multiple historical hold records).
+    if (query.suppressHeld !== false) {
+      conditions.push(
+        `NOT EXISTS (
+           SELECT 1 FROM slot_holds h
+           WHERE h.slot_id = slots.id
+             AND h.released_at IS NULL
+             AND h.expires_at > NOW()
+         )`,
+      );
+    }
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     return { whereClause, params, paramCount };
   }
@@ -354,7 +369,16 @@ export class MarketplaceSearchService {
           price_cents,
           supplier_rating,
           status,
-          created_at
+          created_at${query.suppressHeld === false && query.showHeldReleaseEta ? `,
+          (
+            SELECT h.expires_at
+            FROM slot_holds h
+            WHERE h.slot_id = slots.id
+              AND h.released_at IS NULL
+              AND h.expires_at > NOW()
+            ORDER BY h.expires_at DESC
+            LIMIT 1
+          ) AS held_release_eta` : ""}
         FROM slots
         ${mainWhereClause}
         ${orderByClause}
@@ -372,6 +396,10 @@ export class MarketplaceSearchService {
         category: row.category,
         price_cents: row.price_cents,
         supplier_rating: row.supplier_rating,
+        // Only present when suppressHeld=false AND showHeldReleaseEta=true
+        ...(row.held_release_eta != null
+          ? { heldReleaseEta: new Date(row.held_release_eta).getTime() }
+          : {}),
       }));
 
       // ── LTR Reranking Stage ──────────────────────────────────────────

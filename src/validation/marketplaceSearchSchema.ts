@@ -77,6 +77,20 @@ export const MarketplaceSearchSchema = z.object({
 
   timeWindow: TimeWindowSchema.optional(),
 
+  /**
+   * When true (default), slots that are currently held are excluded from
+   * browse results. Set to false only in admin / operator contexts where
+   * held slots must still be visible.
+   */
+  suppressHeld: z.boolean().default(true),
+
+  /**
+   * When true, the estimated hold-release time is included in each
+   * returned slot where policy allows disclosure.  Ignored when
+   * suppressHeld is true (held slots are not returned at all).
+   */
+  showHeldReleaseEta: z.boolean().default(false),
+
   // Sorting/ranking
   sortBy: z.enum(["rating", "price", "relevance"]).default("relevance"),
 });
