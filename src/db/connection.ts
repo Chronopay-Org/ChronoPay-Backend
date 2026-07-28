@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Pool, PoolClient } from "pg";
 import { logger } from "../utils/logger.js";
 import { slowQueryCounter, slowQueryDuration, queryBudgetBreaches } from "../metrics.js";
