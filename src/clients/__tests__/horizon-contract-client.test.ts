@@ -129,6 +129,128 @@ describe("HorizonContractClient.call()", () => {
     );
   });
 
+  it("getTransactions formats cursor, limit, and order query parameters", async () => {
+    const txList = { _embedded: { records: [] } };
+    mockOk(txList);
+
+    const client = makeClient();
+    await client.getTransactionsPaged(ACCOUNT_ID, { cursor: "100", limit: 50, order: "asc" });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/accounts/${ACCOUNT_ID}/transactions?cursor=100&limit=50&order=asc`,
+      expect.anything(),
+    );
+  });
+
+  it("fetchAllTransactionsPaged aggregates records using cursor chaining", async () => {
+    const page1 = {
+      _embedded: {
+        records: [
+          { id: "1", paging_token: "100", hash: "h1" },
+          { id: "2", paging_token: "101", hash: "h2" },
+        ],
+      },
+    };
+    const page2 = {
+      _embedded: {
+        records: [
+          { id: "3", paging_token: "102", hash: "h3" },
+        ],
+      },
+    };
+    const page3 = { _embedded: { records: [] } };
+
+    mockOk(page1);
+    mockOk(page2);
+    mockOk(page3);
+
+    const client = makeClient();
+    const records = await client.fetchAllTransactionsPaged(ACCOUNT_ID, { limitPerPage: 2 });
+
+    expect(records).toHaveLength(3);
+    expect(records.map((r) => r.id)).toEqual(["1", "2", "3"]);
+  });
+
+  it("fetchAllTransactionsPaged handles 429 rate limit retry", async () => {
+    mockHttpError(429, "rate limit");
+    const page = {
+      _embedded: {
+        records: [{ id: "1", paging_token: "100", hash: "h1" }],
+      },
+    };
+    mockOk(page);
+    const emptyPage = { _embedded: { records: [] } };
+    mockOk(emptyPage);
+
+    const client = makeClient();
+    let rateLimitCalls = 0;
+    const records = await client.fetchAllTransactionsPaged(ACCOUNT_ID, {
+      maxRetriesOnRateLimit: 2,
+      onRateLimit: async (attempt) => {
+        rateLimitCalls = attempt;
+      },
+    });
+
+    expect(rateLimitCalls).toBe(1);
+    expect(records).toHaveLength(1);
+  });
+
+  it("fetchAllTransactionsPaged uses default rate limit delay when onRateLimit callback is omitted", async () => {
+    mockHttpError(429, "rate limit");
+    mockOk({ _embedded: { records: [{ id: "1", paging_token: "100", hash: "h1" }] } });
+    mockOk({ _embedded: { records: [] } });
+
+    const client = makeClient();
+    const records = await client.fetchAllTransactionsPaged(ACCOUNT_ID, {
+      maxRetriesOnRateLimit: 1,
+    });
+    expect(records).toHaveLength(1);
+  });
+
+  it("fetchAllTransactionsPaged stops immediately when maxRecords limit is reached inside page loop", async () => {
+    mockOk({
+      _embedded: {
+        records: [
+          { id: "1", paging_token: "100", hash: "h1" },
+          { id: "2", paging_token: "101", hash: "h2" },
+        ],
+      },
+    });
+
+    const client = makeClient();
+    const records = await client.fetchAllTransactionsPaged(ACCOUNT_ID, {
+      maxRecords: 1,
+    });
+    expect(records).toHaveLength(1);
+  });
+
+  it("fetchAllTransactionsPaged breaks when no new unique records are added in a page", async () => {
+    mockOk({
+      _embedded: {
+        records: [{ id: "1", paging_token: "100", hash: "h1" }],
+      },
+    });
+    mockOk({
+      _embedded: {
+        records: [{ id: "1", paging_token: "100", hash: "h1" }],
+      },
+    });
+
+    const client = makeClient();
+    const records = await client.fetchAllTransactionsPaged(ACCOUNT_ID);
+    expect(records).toHaveLength(1);
+  });
+
+  it("getLatestLedger fetches /ledgers?limit=1&order=desc", async () => {
+    mockOk({ _embedded: { records: [] } });
+    const client = makeClient();
+    await client.call(args("getLatestLedger", ""));
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/ledgers?limit=1&order=desc`,
+      expect.anything(),
+    );
+  });
+
   it("getTransaction fetches /transactions/:hash", async () => {
     const tx = { hash: TX_HASH };
     mockOk(tx);
