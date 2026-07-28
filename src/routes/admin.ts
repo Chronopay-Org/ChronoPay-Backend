@@ -82,23 +82,88 @@ router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response)
   return res.status(200).json({ success: true });
 });
 
-/**
- * @route GET /api/v1/admin/capacity/forecast
- * @desc Get capacity forecast for next 8 weeks and backtest error
- * @access Private (admin token only)
- */
-router.get("/capacity/forecast", requireAdminToken, (req: Request, res: Response) => {
-  try {
-    const rawHistory = req.query.history as string;
-    const history = rawHistory ? rawHistory.split(',').map(Number).filter(n => !isNaN(n)) : [];
-    
-    const onboardWeek = req.query.onboardWeek ? parseInt(req.query.onboardWeek as string, 10) : 0;
-    
-    const result = capacityForecaster.forecast(history, onboardWeek);
-    return res.status(200).json({ success: true, ...result });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, error: error.message || "Forecast failed" });
-  }
+// --- Mock Dispute Logic for E2E Tests ---
+type Dispute = {
+  id: string;
+  status: "OPEN" | "EVIDENCED" | "ADJUDICATED" | "APPEALED" | "CLOSED" | "TIMEOUT";
+  buyerId: string;
+  supplierId: string;
+  amount: number;
+  evidence: string[];
+  ruling?: string;
+  arbiter?: string;
+};
+
+const disputes = new Map<string, Dispute>();
+let ledgers = { buyer: 1000, supplier: 1000 };
+
+export const resetDisputesState = () => {
+  disputes.clear();
+  ledgers = { buyer: 1000, supplier: 1000 };
+};
+
+router.post("/disputes", requireAdminToken, (req, res) => {
+  const { buyerId, supplierId, amount } = req.body;
+  const id = `dispute-${Date.now()}`;
+  disputes.set(id, {
+    id,
+    status: "OPEN",
+    buyerId,
+    supplierId,
+    amount,
+    evidence: [],
+  });
+  return res.status(201).json({ success: true, dispute: disputes.get(id) });
 });
+
+router.post("/disputes/:id/evidence", requireAdminToken, (req, res) => {
+  const dispute = disputes.get(req.params.id);
+  if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
+  if (req.body.failUpload) return res.status(500).json({ success: false, error: "Evidence upload failed" });
+  
+  dispute.evidence.push(req.body.evidence);
+  dispute.status = "EVIDENCED";
+  return res.status(200).json({ success: true, dispute, evidenceAnchor: `anchor-${Date.now()}` });
+});
+
+router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
+  const dispute = disputes.get(req.params.id);
+  if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
+  
+  const { ruling, arbiter } = req.body;
+  dispute.ruling = ruling;
+  dispute.arbiter = arbiter;
+  dispute.status = "ADJUDICATED";
+
+  if (ruling === "BUYER_FAVOR") {
+    ledgers.buyer += dispute.amount;
+    ledgers.supplier -= dispute.amount;
+  } else {
+    ledgers.buyer -= dispute.amount;
+    ledgers.supplier += dispute.amount;
+  }
+  
+  return res.status(200).json({ 
+    success: true, 
+    dispute, 
+    rulingAudit: `audit-${Date.now()}`,
+    ledgers 
+  });
+});
+
+router.post("/disputes/:id/appeal", requireAdminToken, (req, res) => {
+  const dispute = disputes.get(req.params.id);
+  if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
+  dispute.status = "APPEALED";
+  return res.status(200).json({ success: true, dispute });
+});
+
+router.post("/disputes/:id/timeout", requireAdminToken, (req, res) => {
+  const dispute = disputes.get(req.params.id);
+  if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
+  dispute.status = "TIMEOUT";
+  return res.status(200).json({ success: true, dispute });
+});
+// ----------------------------------------
 
 export default router;
