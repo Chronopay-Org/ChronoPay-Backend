@@ -5,6 +5,164 @@ import { ContractInvalidRequestError, ContractRateLimitError } from "../errors/c
 import { withTimeout } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
 import { validateFeeBumpTransaction } from "./fee-bump-validator.js";
+import { CursorStore, InMemoryCursorStore } from "./cursor-store.js";
+
+// ─── SSE reconnection constants ──────────────────────────────────────────────
+
+/** Initial backoff delay (ms) before the first reconnect attempt. */
+export const SSE_BACKOFF_BASE_MS = 1_000;
+
+/** Maximum backoff delay (ms) — caps exponential growth. */
+export const SSE_BACKOFF_MAX_MS = 30_000;
+
+/** Multiplier applied to the backoff on each successive failure. */
+export const SSE_BACKOFF_FACTOR = 2;
+
+/**
+ * Upper bound of the jitter window as a fraction of the current backoff value.
+ * e.g. 0.3 → up to ±30 % of the base delay is added randomly.
+ */
+export const SSE_JITTER_FACTOR = 0.3;
+
+// ─── SSE public types ─────────────────────────────────────────────────────────
+
+/** A single SSE event parsed from the Horizon stream. */
+export interface HorizonSseEvent {
+  /** Horizon paging token — use as the next `resumeAfter` cursor. */
+  cursor: string;
+  /** Raw event type field from the SSE frame (e.g. "payment", "close"). */
+  eventType: string;
+  /** Parsed JSON data payload from the `data:` field. */
+  data: unknown;
+}
+
+/** Options accepted by {@link HorizonContractClient.streamEvents}. */
+export interface StreamEventsOptions {
+  /**
+   * Horizon resource path to stream, relative to the base URL.
+   * e.g. `/accounts/GABC…/payments`
+   */
+  path: string;
+
+  /**
+   * Key used to read / write the cursor in the {@link CursorStore}.
+   * Defaults to the `path` if omitted.
+   */
+  streamKey?: string;
+
+  /**
+   * Override the initial cursor.  When supplied, this value is used for the
+   * very first connection instead of whatever is in the cursor store.
+   */
+  resumeAfter?: string;
+
+  /**
+   * Invoked for every successfully parsed event.
+   * **Must** be async-safe — the stream waits for the promise to resolve
+   * before advancing to the next event so that the cursor is only saved
+   * after the caller has handled the event.
+   */
+  onEvent: (event: HorizonSseEvent) => Promise<void>;
+
+  /**
+   * Invoked whenever a reconnect attempt is about to be made.
+   * Useful for metrics / logging.
+   */
+  onReconnect?: (attempt: number, delayMs: number, cursor: string | undefined) => void;
+
+  /**
+   * AbortSignal — when aborted, the stream stops cleanly without throwing.
+   */
+  signal?: AbortSignal;
+
+  /**
+   * Cursor store to use for durable bookmark persistence.
+   * Defaults to a new {@link InMemoryCursorStore} per stream if omitted.
+   */
+  cursorStore?: CursorStore;
+
+  /**
+   * Override for the initial backoff in tests.  Defaults to
+   * {@link SSE_BACKOFF_BASE_MS}.
+   */
+  backoffBaseMs?: number;
+
+  /**
+   * Override for the maximum backoff in tests.  Defaults to
+   * {@link SSE_BACKOFF_MAX_MS}.
+   */
+  backoffMaxMs?: number;
+}
+
+export interface StellarPayoutBalanceOptions {
+  amount?: string | number;
+  baseReserve?: number;
+  subentries?: number;
+  trustlines?: number;
+  offers?: number;
+}
+
+interface HorizonAccountResponse {
+  id?: string;
+  subentry_count?: number;
+  balances?: Array<{
+    asset_type: string;
+    balance: string;
+  }>;
+}
+
+export function computeMinBalance(subentries: number, baseReserve = 5_000_000): number {
+  if (!Number.isInteger(subentries) || subentries < 0) {
+    throw new ContractInvalidRequestError("Subentry count must be a non-negative integer");
+  }
+
+  if (!Number.isFinite(baseReserve) || baseReserve <= 0) {
+    throw new ContractInvalidRequestError("Base reserve must be a positive number");
+  }
+
+  return (2 + subentries) * baseReserve;
+}
+
+function parseStellarAmount(amount: string | number | undefined): number {
+  if (amount === undefined || amount === null) {
+    return 0;
+  }
+
+  if (typeof amount === "number") {
+    return Math.trunc(amount);
+  }
+
+  const trimmed = amount.trim();
+  if (trimmed === "") {
+    return 0;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return Number.parseInt(trimmed, 10);
+  }
+
+  const match = trimmed.match(/^(\d+)(?:\.(\d{1,7}))?$/);
+  if (!match) {
+    throw new ContractInvalidRequestError(`Invalid Stellar amount: ${amount}`);
+  }
+
+  const whole = Number.parseInt(match[1], 10);
+  const fractional = match[2] ?? "";
+  return whole * 10_000_000 + Number.parseInt(fractional.padEnd(7, "0"), 10);
+}
+
+export class HorizonInsufficientBalanceError extends Error {
+  constructor(
+    public readonly accountId: string,
+    public readonly balance: number,
+    public readonly minimumBalance: number,
+  ) {
+    super(
+      `Account ${accountId} does not have enough balance to cover the Stellar reserve minimum: ${balance} < ${minimumBalance}`,
+    );
+    this.name = "HorizonInsufficientBalanceError";
+  }
+}
 
 /**
  * Options for paginated Horizon endpoint queries.
@@ -61,6 +219,7 @@ export interface FetchAllPagesOptions {
  * Maps Horizon REST endpoints onto the generic contract interface:
  *   - call()            → GET  /accounts/:address  (read-only queries)
  *   - sendTransaction() → POST /transactions        (XDR envelope submission)
+ *   - streamEvents()    → SSE  /<path>?cursor=<cursor>  (streaming with reconnect)
  *
  * The `method` field in ContractInteractionArgs selects the Horizon operation:
  *   call:            "getAccount" | "getTransactions" | "getTransaction"
@@ -156,6 +315,38 @@ export class HorizonContractClient implements IContractClient {
     } catch {
       return false;
     }
+  /**
+   * Checks the account balance against the Stellar minimum reserve before submitting a payout.
+   * The reserve is derived from the effective subentry count, including trustlines and offers.
+   */
+  async submitPayout(accountId: string, xdr: string, options: StellarPayoutBalanceOptions = {}): Promise<TransactionResult> {
+    const accountResponse = await this.call<HorizonAccountResponse>({
+      address: accountId,
+      abi: null,
+      method: "getAccount",
+      args: [accountId],
+    });
+
+    const account = accountResponse.data;
+    const baseReserve = options.baseReserve ?? 5_000_000;
+    const effectiveSubentries = (options.subentries ?? account.subentry_count ?? 0) + (options.trustlines ?? 0) + (options.offers ?? 0);
+    const minimumBalance = computeMinBalance(effectiveSubentries, baseReserve);
+    const payoutAmount = parseStellarAmount(options.amount);
+    const nativeBalance = account.balances?.find((balance) => balance.asset_type === "native")?.balance;
+    const balanceInStroops = nativeBalance === undefined ? 0 : parseStellarAmount(nativeBalance);
+
+    if (balanceInStroops < minimumBalance + payoutAmount) {
+      throw new HorizonInsufficientBalanceError(accountId, balanceInStroops, minimumBalance + payoutAmount);
+    }
+
+    return this.sendTransaction({
+      address: accountId,
+      abi: null,
+      method: "submitTransaction",
+      args: [xdr],
+    });
+  }
+
   /**
    * Submits a low-cost memo transaction anchoring a 32-byte (64 hex characters) hash on Stellar.
    */
