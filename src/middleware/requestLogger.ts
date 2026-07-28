@@ -1,6 +1,7 @@
 import { pinoHttp, Options as PinoHttpOptions } from "pino-http";
 import { Request, Response, NextFunction } from "express";
 import { logger } from "../utils/logger.js";
+import { getTraceContext } from "../tracing/context.js";
 import { IncomingMessage, ServerResponse } from "http";
 import type { LevelWithSilent } from "pino";
 import {
@@ -225,8 +226,11 @@ export const createRequestLogger = () => {
       const identity = extractIdentity(req);
       const contextWithIdentity = addIdentityToContext(baseContext, identity);
 
+      const traceContext = getTraceContext();
       return {
         requestId: contextWithIdentity.requestId,
+        traceId: traceContext?.traceId || contextWithIdentity.requestId,
+        spanId: traceContext?.spanId,
         route: contextWithIdentity.route,
         method: contextWithIdentity.method,
         userId: contextWithIdentity.userId,
