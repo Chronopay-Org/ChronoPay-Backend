@@ -1,4 +1,5 @@
 import pino from "pino";
+import { getTraceContext } from "../tracing/context.js";
 
 /**
  * Log levels following pino conventions:
@@ -13,6 +14,8 @@ export type LogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace";
 
 export interface LogContext {
   requestId?: string;
+  traceId?: string;
+  spanId?: string;
   userId?: string;
   service?: string;
   version?: string;
@@ -88,6 +91,20 @@ const sanitizeForLogging = (obj: Record<string, unknown>): Record<string, unknow
   return sanitize(obj) as Record<string, unknown>;
 };
 
+export function addTraceCorrelationToLog(obj: Record<string, unknown>): Record<string, unknown> {
+  const formatted = { ...obj };
+  const traceContext = getTraceContext();
+
+  if (traceContext) {
+    formatted.traceId = traceContext.traceId;
+    formatted.spanId = traceContext.spanId;
+  } else if (!formatted.traceId && typeof formatted.requestId === "string") {
+    formatted.traceId = formatted.requestId;
+  }
+
+  return formatted;
+}
+
 /**
  * Creates the pino logger configuration with production-grade settings
  */
@@ -116,10 +133,10 @@ const createLoggerConfig = (): any => {
         };
       },
       /**
-       * Object formatter to sanitize all logged objects
+       * Object formatter to sanitize all logged objects and add trace correlation fields.
        */
       log(obj: any) {
-        return sanitizeForLogging(obj);
+        return addTraceCorrelationToLog(sanitizeForLogging(obj));
       },
     },
     /**
