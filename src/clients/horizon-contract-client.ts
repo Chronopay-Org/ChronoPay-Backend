@@ -4,6 +4,7 @@ import { ContractService } from "../services/contract.service.js";
 import { ContractInvalidRequestError, ContractRateLimitError } from "../errors/contractErrors.js";
 import { withTimeout } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
+import { validateFeeBumpTransaction } from "./fee-bump-validator.js";
 
 export interface StellarPayoutBalanceOptions {
   amount?: string | number;
@@ -179,6 +180,11 @@ export class HorizonContractClient implements IContractClient {
    */
   async sendTransaction(args: ContractInteractionArgs): Promise<TransactionResult> {
     const xdr = args.args[0] as string;
+
+    if (this.isFeeBumpTransaction(xdr)) {
+      validateFeeBumpTransaction(xdr);
+    }
+
     const url = `${this.horizonUrl}/transactions`;
 
     const response = await this.contractService.sendTransaction<{ hash: string }>(
@@ -212,6 +218,14 @@ export class HorizonContractClient implements IContractClient {
     };
   }
 
+  private isFeeBumpTransaction(xdrBase64: string): boolean {
+    try {
+      const buf = Buffer.from(xdrBase64, "base64");
+      if (buf.length < 4) return false;
+      return buf.readInt32BE(0) === 4;
+    } catch {
+      return false;
+    }
   /**
    * Checks the account balance against the Stellar minimum reserve before submitting a payout.
    * The reserve is derived from the effective subentry count, including trustlines and offers.
