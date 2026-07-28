@@ -72,6 +72,8 @@ jobs:
         run: npm run check-openapi-examples
       - name: Run Pact contract tests
         run: npm run test:pact && npm run verify:pact
+      - name: Run mutation tests
+        run: CHANGED_FILES="src/services src/utils" npm run mutation:test
       - name: Build
         if: github.event_name != 'pull_request'
         run: npm run build
