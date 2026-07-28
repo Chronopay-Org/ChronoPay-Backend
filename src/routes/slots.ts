@@ -1,7 +1,8 @@
 import { Router, Request, Response } from "express";
 import { slotService, SlotNotFoundError, SlotValidationError } from "../services/slotService.js";
 import { requireApiKey } from "../middleware/apiKeyAuth.js";
-import { validateRequiredFields } from "../middleware/validation.js";
+import { validateRequiredFields, validateBody } from "../middleware/validation.js";
+import { CreateSlotBodySchema } from "../middleware/schemas.js";
 import { requireFeatureFlag, featureFlagContextMiddleware } from "../middleware/featureFlags.js";
 import { requireRole } from "../middleware/rbac.js";
 import { parseSlotIdParam } from "../middleware/slotIdParam.js";

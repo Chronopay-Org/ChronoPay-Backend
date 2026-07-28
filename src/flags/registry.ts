@@ -44,6 +44,13 @@ export const FEATURE_FLAGS: Record<FeatureFlagName, FeatureFlagDefinition> = {
     defaultEnabled: true,
     guardedRoutes: [],
   },
+  SEARCH_LTR_RERANKER: {
+    envVar: "FF_SEARCH_LTR_RERANKER",
+    description: "Enable learning-to-rank reranker for marketplace search results. Guards behind an A/B experiment; safe to toggle off at runtime.",
+    // Default false for safe rollout; enable explicitly in production when model weights are available.
+    defaultEnabled: false,
+    guardedRoutes: [],
+  },
   SMS_NOTIFICATIONS: {
     envVar: "FF_SMS_NOTIFICATIONS",
     description: "Enable SMS notification sending via POST /api/v1/notifications/sms",
