@@ -298,7 +298,7 @@ export function requirePermission(requiredPermission: Permission) {
       }
 
       return next();
-    } catch (error) {
+    } catch (_error) {
       return sendErrorResponse(
         res,
         new InternalServerError("Authorization middleware error"),
