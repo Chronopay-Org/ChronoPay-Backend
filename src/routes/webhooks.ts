@@ -4,6 +4,8 @@ import { internalHmacAuth } from "../middleware/internalHmacAuth.js";
 import { _settlements } from "../services/settlementReconciler.js";
 import { WebhookIdempotencyStore } from "../services/webhookIdempotencyStore.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { PartnerTokenSoftLimitService } from "../services/partnerTokenSoftLimitService.js";
+import { processPendingDeliveries } from "../services/partnerTokenSoftLimitService.js";
 
 const allowedEventTypes = new Set([
   "settlement_completed",
@@ -120,6 +122,65 @@ router.post("/admin/idempotency/sweep", async (req, res, next) => {
   }
 });
 
+// Partner token soft-limit admin routes
+router.post("/admin/partner-soft-limit", async (req, res, next) => {
+  try {
+    const { partnerId, webhookUrl, softLimit } = req.body;
+    if (!partnerId || !webhookUrl) {
+      return res.status(400).json({ success: false, error: "partnerId and webhookUrl are required" });
+    }
+    await PartnerTokenSoftLimitService.upsertConfig(partnerId, webhookUrl, softLimit);
+    await defaultAuditLogger.log({ action: 'partner_soft_limit.configure', status: 'success', resource: `partner:${partnerId}`, metadata: { softLimit, webhookUrl } });
+    return res.json({ success: true });
+  } catch (err: any) {
+    if (err.message) {
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    next(err);
+  }
+});
+
+router.get("/admin/partner-soft-limit/:partnerId", async (req, res, next) => {
+  try {
+    const { partnerId } = req.params;
+    const config = await PartnerTokenSoftLimitService.getConfig(partnerId);
+    if (!config) {
+      return res.status(404).json({ success: false, error: "Partner config not found" });
+    }
+    return res.json({ success: true, data: config });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Token usage check endpoint — checks soft limit and enqueues warning if breached
+router.post("/partner-token/usage", async (req, res, next) => {
+  try {
+    const { partnerId, usage, hardCutoff } = req.body;
+    if (!partnerId || typeof usage !== "number" || typeof hardCutoff !== "number") {
+      return res.status(400).json({ success: false, error: "partnerId, usage (number), and hardCutoff (number) are required" });
+    }
+
+    const entry = await PartnerTokenSoftLimitService.checkAndWarn(partnerId, usage, hardCutoff);
+    if (entry) {
+      return res.status(200).json({ success: true, warningEnqueued: true, entryId: entry.id });
+    }
+    return res.status(200).json({ success: true, warningEnqueued: false });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Process pending webhook deliveries (can be called by a scheduler/cron)
+router.post("/partner-token/deliver", async (req, res, next) => {
+  try {
+    const result = await processPendingDeliveries();
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
 
 export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions = {}) {
@@ -128,5 +189,25 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
     internalHmacAuth(options.signingSecret),
     validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
     (req, res, next) => handleSettlementWebhook(req, res).catch(next),
+  );
+
+  app.post(
+    "/api/v1/webhooks/partner-token/check",
+    internalHmacAuth(options.signingSecret),
+    async (req, res, next) => {
+      try {
+        const { partnerId, usage, hardCutoff } = req.body;
+        if (!partnerId || typeof usage !== "number" || typeof hardCutoff !== "number") {
+          return res.status(400).json({ success: false, error: "partnerId, usage (number), and hardCutoff (number) are required" });
+        }
+        const entry = await PartnerTokenSoftLimitService.checkAndWarn(partnerId, usage, hardCutoff);
+        if (entry) {
+          return res.status(200).json({ success: true, warningEnqueued: true, entryId: entry.id });
+        }
+        return res.status(200).json({ success: true, warningEnqueued: false });
+      } catch (err) {
+        next(err);
+      }
+    },
   );
 }
