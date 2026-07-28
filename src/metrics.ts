@@ -470,31 +470,53 @@ export const slowQueryDuration = createBudgetedHistogram({
   registers: [register],
 });
 
-// ─── Reputation Transparency Metrics ─────────────────────────────────────────
+// ─── Escrow drift reconciler metrics ──────────────────────────────────────────
 
-export const reputationTransparencyRequestsTotal = createBudgetedCounter({
-  name: "reputation_transparency_requests_total",
-  help: "Total number of supplier reputation signal projection requests",
-  labels: ["tenant", "status"],
-  budget: 100,
+/**
+ * Gauge set to 1 when drift is detected between chain escrow state and local DB.
+ */
+export const escrowDriftDetected = createBudgetedGauge({
+  name: "escrow_drift_detected",
+  help: "Whether escrow state drift has been detected (1 = drift, 0 = clean)",
+  labels: ["slot_id"],
+  budget: 128,
+  buckets: [],
   registers: [register],
 });
 
-export const reputationSmallCellSuppressionsTotal = createBudgetedCounter({
-  name: "reputation_small_cell_suppressions_total",
-  help: "Total number of small-cell count suppressions applied to protect counterparty privacy",
-  labels: ["tenant", "category"],
-  budget: 100,
+/**
+ * Counter incremented each time an escrow reader returns a result that
+ * disagrees with the quorum majority for any slot.
+ */
+export const escrowReaderDisagreementTotal = createBudgetedCounter({
+  name: "escrow_reader_disagreement_total",
+  help: "Total number of reader disagreements observed during escrow drift reconciliation",
+  labels: ["reader_id"],
+  budget: 8,
   registers: [register],
 });
 
-export function recordReputationQuery(tenant: string, status: string): void {
-  reputationTransparencyRequestsTotal.labels(tenant || "unknown", status).inc();
-}
+/**
+ * Counter incremented on each drift reconciliation tick.
+ */
+export const escrowDriftReconciliationTicks = createBudgetedCounter({
+  name: "escrow_drift_reconciliation_ticks_total",
+  help: "Total number of escrow drift reconciliation ticks performed",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
 
-export function recordSmallCellSuppression(tenant: string, category: string): void {
-  reputationSmallCellSuppressionsTotal.labels(tenant || "unknown", category).inc();
-}
+/**
+ * Counter incremented each time a drift override is applied.
+ */
+export const escrowDriftOverridesApplied = createBudgetedCounter({
+  name: "escrow_drift_overrides_applied_total",
+  help: "Total number of manual escrow drift overrides applied",
+  labels: ["slot_id"],
+  budget: 64,
+  registers: [register],
+});
 
 /**
  * Express middleware to track HTTP request duration.
