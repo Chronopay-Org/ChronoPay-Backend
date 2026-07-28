@@ -5,6 +5,94 @@ import { ContractInvalidRequestError, ContractRateLimitError } from "../errors/c
 import { withTimeout } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
 import { validateFeeBumpTransaction } from "./fee-bump-validator.js";
+import { CursorStore, InMemoryCursorStore } from "./cursor-store.js";
+
+// ─── SSE reconnection constants ──────────────────────────────────────────────
+
+/** Initial backoff delay (ms) before the first reconnect attempt. */
+export const SSE_BACKOFF_BASE_MS = 1_000;
+
+/** Maximum backoff delay (ms) — caps exponential growth. */
+export const SSE_BACKOFF_MAX_MS = 30_000;
+
+/** Multiplier applied to the backoff on each successive failure. */
+export const SSE_BACKOFF_FACTOR = 2;
+
+/**
+ * Upper bound of the jitter window as a fraction of the current backoff value.
+ * e.g. 0.3 → up to ±30 % of the base delay is added randomly.
+ */
+export const SSE_JITTER_FACTOR = 0.3;
+
+// ─── SSE public types ─────────────────────────────────────────────────────────
+
+/** A single SSE event parsed from the Horizon stream. */
+export interface HorizonSseEvent {
+  /** Horizon paging token — use as the next `resumeAfter` cursor. */
+  cursor: string;
+  /** Raw event type field from the SSE frame (e.g. "payment", "close"). */
+  eventType: string;
+  /** Parsed JSON data payload from the `data:` field. */
+  data: unknown;
+}
+
+/** Options accepted by {@link HorizonContractClient.streamEvents}. */
+export interface StreamEventsOptions {
+  /**
+   * Horizon resource path to stream, relative to the base URL.
+   * e.g. `/accounts/GABC…/payments`
+   */
+  path: string;
+
+  /**
+   * Key used to read / write the cursor in the {@link CursorStore}.
+   * Defaults to the `path` if omitted.
+   */
+  streamKey?: string;
+
+  /**
+   * Override the initial cursor.  When supplied, this value is used for the
+   * very first connection instead of whatever is in the cursor store.
+   */
+  resumeAfter?: string;
+
+  /**
+   * Invoked for every successfully parsed event.
+   * **Must** be async-safe — the stream waits for the promise to resolve
+   * before advancing to the next event so that the cursor is only saved
+   * after the caller has handled the event.
+   */
+  onEvent: (event: HorizonSseEvent) => Promise<void>;
+
+  /**
+   * Invoked whenever a reconnect attempt is about to be made.
+   * Useful for metrics / logging.
+   */
+  onReconnect?: (attempt: number, delayMs: number, cursor: string | undefined) => void;
+
+  /**
+   * AbortSignal — when aborted, the stream stops cleanly without throwing.
+   */
+  signal?: AbortSignal;
+
+  /**
+   * Cursor store to use for durable bookmark persistence.
+   * Defaults to a new {@link InMemoryCursorStore} per stream if omitted.
+   */
+  cursorStore?: CursorStore;
+
+  /**
+   * Override for the initial backoff in tests.  Defaults to
+   * {@link SSE_BACKOFF_BASE_MS}.
+   */
+  backoffBaseMs?: number;
+
+  /**
+   * Override for the maximum backoff in tests.  Defaults to
+   * {@link SSE_BACKOFF_MAX_MS}.
+   */
+  backoffMaxMs?: number;
+}
 
 export interface StellarPayoutBalanceOptions {
   amount?: string | number;
@@ -131,6 +219,7 @@ export interface FetchAllPagesOptions {
  * Maps Horizon REST endpoints onto the generic contract interface:
  *   - call()            → GET  /accounts/:address  (read-only queries)
  *   - sendTransaction() → POST /transactions        (XDR envelope submission)
+ *   - streamEvents()    → SSE  /<path>?cursor=<cursor>  (streaming with reconnect)
  *
  * The `method` field in ContractInteractionArgs selects the Horizon operation:
  *   call:            "getAccount" | "getTransactions" | "getTransaction"
