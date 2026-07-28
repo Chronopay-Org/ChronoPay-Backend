@@ -10,7 +10,7 @@ legalHoldRouter.post("/legal-holds", async (req, res) => {
     await LegalHoldService.addHold(subjectId, actor, reason, region);
     await defaultAuditLogger.log({ action: 'legal_hold.added', status: 'success', resource: `subject:${subjectId}`, metadata: { actor, reason, region } });
     res.status(201).json({ success: true });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -19,7 +19,7 @@ legalHoldRouter.get("/legal-holds/:subjectId", async (req, res) => {
   try {
     const isHeld = await LegalHoldService.isHeld(req.params.subjectId);
     res.json({ isHeld });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });

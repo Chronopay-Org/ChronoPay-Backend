@@ -1,5 +1,4 @@
 // src/scripts/generate-openapi.ts
-import fs from "node:fs";
 import path from "node:path";
 import swaggerJsdoc from "swagger-jsdoc";
 import { mergeOpenApiExamples } from "../docs/openapiExamples.js";

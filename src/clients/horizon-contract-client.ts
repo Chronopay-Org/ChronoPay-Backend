@@ -1,7 +1,7 @@
 import { IContractClient } from "./contract-client.interface.js";
 import { ContractInteractionArgs, ContractCallResult, TransactionResult } from "./types.js";
 import { ContractService } from "../services/contract.service.js";
-import { ContractInvalidRequestError } from "../errors/contractErrors.js";
+import { ContractInvalidRequestError, ContractRateLimitError } from "../errors/contractErrors.js";
 import { withTimeout } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
 import { validateFeeBumpTransaction } from "./fee-bump-validator.js";
@@ -92,6 +92,55 @@ export interface StreamEventsOptions {
    * {@link SSE_BACKOFF_MAX_MS}.
    */
   backoffMaxMs?: number;
+}
+
+/**
+ * Options for paginated Horizon endpoint queries.
+ */
+export interface HorizonPaginationOptions {
+  cursor?: string;
+  limit?: number;
+  order?: "asc" | "desc";
+}
+
+/**
+ * Structure of a transaction record returned by Horizon REST API.
+ */
+export interface HorizonTransactionRecord {
+  id: string;
+  paging_token: string;
+  hash: string;
+  ledger?: number;
+  created_at?: string;
+  memo?: string;
+  memo_type?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Structure of a collection response from Horizon REST API.
+ */
+export interface HorizonCollectionResponse<T = HorizonTransactionRecord> {
+  _embedded: {
+    records: T[];
+  };
+  _links?: {
+    next?: { href: string };
+    prev?: { href: string };
+    self?: { href: string };
+  };
+}
+
+/**
+ * Configuration options for fetchAllTransactionsPaged.
+ */
+export interface FetchAllPagesOptions {
+  limitPerPage?: number;
+  order?: "asc" | "desc";
+  initialCursor?: string;
+  maxRecords?: number;
+  maxRetriesOnRateLimit?: number;
+  onRateLimit?: (attempt: number) => Promise<void>;
 }
 
 /**
@@ -416,6 +465,123 @@ export class HorizonContractClient implements IContractClient {
     } catch {
       return false;
     }
+   * Submits a low-cost memo transaction anchoring a 32-byte (64 hex characters) hash on Stellar.
+   */
+  async submitMemoTransaction(memoHashHex: string): Promise<TransactionResult> {
+    const cleanHash = memoHashHex.trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(cleanHash)) {
+      throw new ContractInvalidRequestError("Memo hash must be a 32-byte hex string (64 characters)");
+    }
+
+    // Simple envelope payload containing memo hash
+    const memoPayload = `tx_memo_hash=${cleanHash}`;
+    return this.sendTransaction({
+      address: "",
+      abi: null,
+      method: "submitTransaction",
+      args: [memoPayload],
+    });
+  }
+
+  /**
+   * Fetches transaction details including memo from Horizon by transaction hash.
+   */
+  async getTransactionMemo(txHash: string): Promise<{ hash: string; memo?: string; memo_type?: string }> {
+    const res = await this.call<{ hash: string; memo?: string; memo_type?: string }>({
+      address: "",
+      abi: null,
+      method: "getTransaction",
+      args: [txHash],
+    });
+    return res.data;
+  }
+
+  /**
+   * Fetches paged transactions for an account with optional pagination options (cursor, limit, order).
+   */
+  async getTransactionsPaged<T = HorizonTransactionRecord>(
+    accountId: string,
+    options?: HorizonPaginationOptions,
+  ): Promise<ContractCallResult<HorizonCollectionResponse<T>>> {
+    return this.call<HorizonCollectionResponse<T>>({
+      address: accountId,
+      abi: null,
+      method: "getTransactions",
+      args: [accountId, options],
+    });
+  }
+
+  /**
+   * Iteratively fetches transactions for an account using strict cursor chaining to prevent cursor drift.
+   * Guaranteed to avoid duplicates and gaps by advancing the cursor to the last seen record's paging_token.
+   * Handles rate-limiting (429) gracefully using configurable retry logic.
+   */
+  async fetchAllTransactionsPaged<T extends { paging_token: string } = HorizonTransactionRecord>(
+    accountId: string,
+    options: FetchAllPagesOptions = {},
+  ): Promise<T[]> {
+    const limit = options.limitPerPage ?? 200;
+    const order = options.order ?? "asc";
+    let cursor = options.initialCursor;
+    const maxRecords = options.maxRecords ?? Infinity;
+
+    const records: T[] = [];
+    const seenCursors = new Set<string>();
+
+    while (records.length < maxRecords) {
+      const fetchLimit = Math.min(limit, maxRecords - records.length);
+      let pageData: HorizonCollectionResponse<T>;
+
+      let attempt = 0;
+      const maxRetries = options.maxRetriesOnRateLimit ?? 5;
+      while (true) {
+        try {
+          const res = await this.getTransactionsPaged<T>(accountId, {
+            cursor,
+            limit: fetchLimit,
+            order,
+          });
+          pageData = res.data;
+          break;
+        } catch (err: unknown) {
+          if (err instanceof ContractRateLimitError && attempt < maxRetries) {
+            attempt++;
+            if (options.onRateLimit) {
+              await options.onRateLimit(attempt);
+            } else {
+              await new Promise((resolve) => setTimeout(resolve, 10 * attempt));
+            }
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      const pageRecords = pageData?._embedded?.records || [];
+      if (pageRecords.length === 0) {
+        break;
+      }
+
+      let addedInThisPage = 0;
+      for (const rec of pageRecords) {
+        const token = rec.paging_token;
+        if (token && !seenCursors.has(token)) {
+          seenCursors.add(token);
+          records.push(rec);
+          addedInThisPage++;
+          cursor = token;
+          if (records.length >= maxRecords) {
+            break;
+          }
+        }
+      }
+
+      if (addedInThisPage === 0) {
+        break;
+      }
+    }
+
+    return records;
   }
 
   private buildReadUrl(method: string, methodArgs: any[]): string {
@@ -423,8 +589,21 @@ export class HorizonContractClient implements IContractClient {
     switch (method) {
       case "getAccount":
         return `${this.horizonUrl}/accounts/${encodeURIComponent(id)}`;
-      case "getTransactions":
-        return `${this.horizonUrl}/accounts/${encodeURIComponent(id)}/transactions`;
+      case "getTransactions": {
+        let url = `${this.horizonUrl}/accounts/${encodeURIComponent(id)}/transactions`;
+        const options = methodArgs[1] as HorizonPaginationOptions | undefined;
+        if (options) {
+          const params = new URLSearchParams();
+          if (options.cursor !== undefined) params.set("cursor", options.cursor);
+          if (options.limit !== undefined) params.set("limit", options.limit.toString());
+          if (options.order !== undefined) params.set("order", options.order);
+          const queryString = params.toString();
+          if (queryString) {
+            url += `?${queryString}`;
+          }
+        }
+        return url;
+      }
       case "getTransaction":
         return `${this.horizonUrl}/transactions/${encodeURIComponent(id)}`;
       case "getLatestLedger":

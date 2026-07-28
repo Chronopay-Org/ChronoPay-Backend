@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, jest } from "@jest/globals";
+import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
 import request from "supertest";
 import { Pool } from "pg";
 import { MigrationRunner } from "../db/migrationRunner.js";
@@ -7,7 +7,6 @@ import * as migrationRepository from "../db/migrationRepository.js";
 import { createApp } from "../app.js";
 import { SignJWT } from "jose";
 import { KycService } from "../services/kycService.js";
-import { _settlements } from "../services/settlementReconciler.js";
 
 const TEST_SECRET = "test-secret-key-at-least-32-chars!!";
 

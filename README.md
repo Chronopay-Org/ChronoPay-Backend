@@ -144,6 +144,30 @@ This detects:
 
 See [docs/database/migrations.md](docs/database/migrations.md) for complete documentation.
 
+## SDK release automation
+
+Tag-based SDK publishing is available for OpenAPI diff-triggered releases. When a tag such as `openapi-breaking-2026-07-28` or `openapi-nonbreaking-2026-07-28` is pushed, the GitHub Actions workflow resolves the next semantic version from the diff class and publishes the package to npm with provenance.
+
+### How it works
+
+1. The tag name is inspected for `breaking`, `major`, `minor`, or `nonbreaking` markers.
+2. A semantic version is computed from the current package version and the detected class.
+3. The package manifest is temporarily updated to the next version and the workflow runs `npm publish --provenance`.
+4. If npm rejects the publish because of a 2FA challenge or a duplicate version, the workflow exits safely and leaves the manifest unchanged.
+
+### Required secrets
+
+- `NPM_TOKEN` with permission to publish the package to npm.
+- `id-token: write` permission is enabled for provenance generation.
+
+### Manual override
+
+You can also run the release script locally for validation:
+
+```bash
+node scripts/release-sdk.js --tag openapi-breaking-2026-07-28 --dry-run
+```
+
 ## API Documentation
 
 Detailed API contracts and endpoint documentation:
