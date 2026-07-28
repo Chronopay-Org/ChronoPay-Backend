@@ -369,6 +369,31 @@ export const slowQueryDuration = createBudgetedHistogram({
   registers: [register],
 });
 
+// ─── Query budget metrics ────────────────────────────────────────────────────
+
+/**
+ * Counter incremented each time a query exceeds the per-request statement_timeout budget.
+ */
+export const queryBudgetBreaches = createBudgetedCounter({
+  name: "query_budget_breaches_total",
+  help: "Total number of database queries cancelled due to statement_timeout budget enforcement",
+  labels: ["route"],
+  budget: 32,
+  registers: [register],
+});
+
+/**
+ * Histogram tracking total SQL wall-clock time (ms) consumed per request.
+ */
+export const queryBudgetSqlTimeMs = createBudgetedHistogram({
+  name: "query_budget_sql_time_ms",
+  help: "Total SQL wall-clock time (ms) consumed by a request across all queries",
+  labels: ["route", "outcome"],
+  budget: 64,
+  buckets: [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
+  registers: [register],
+});
+
 /**
  * Express middleware to track HTTP request duration.
  */
