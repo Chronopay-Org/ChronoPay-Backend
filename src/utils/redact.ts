@@ -10,57 +10,14 @@
  * - Non-mutating: creates a new object
  * - Circular reference detection
  * - Preserves original data structure and types
+ * - Hot-reloadable policy via redactionPolicy.ts
  */
 
-/**
- * Sensitive field names that should be redacted
- * Includes common variations and case-insensitive matches
- */
-const SENSITIVE_FIELDS = new Set([
-  "password",
-  "secret",
-  "token",
-  "apikey",
-  "api_key",
-  "authorization",
-  "cookie",
-  "session",
-  "privatekey",
-  "private_key",
-  "accesstoken",
-  "access_token",
-  "refreshtoken",
-  "refresh_token",
-  "bearer",
-  "x-api-key",
-  "api-key",
-  "app_secret",
-  "appsecret",
-  "client_secret",
-  "clientsecret",
-  "signing_key",
-  "signingkey",
-  "hmac",
-  "jwt",
-  "aws_secret",
-  "awssecret",
-  "database_url",
-  "databaseurl",
-  "db_password",
-  "dbpassword",
-  "encryption_key",
-  "encryptionkey",
-  "webhook_secret",
-  "webhooksecret",
-  "oauth_token",
-  "oauthtoken",
-  "auth_code",
-  "authcode",
-  "cardtoken",
-  "card_token",
-  "tracking_token",
-  "trackingtoken",
-]);
+import {
+  getCurrentPolicy,
+  isFieldRedacted as policyIsFieldRedacted,
+  getPolicyFields as policyGetPolicyFields,
+} from "./redactionPolicy.js";
 
 /**
  * Default mask pattern for redacted values
@@ -75,9 +32,10 @@ const DEFAULT_MASK_PATTERN = (value: string): string => {
 
 /**
  * Checks if a field name should be redacted (case-insensitive)
+ * Reads from the current hot-reloadable policy.
  */
 const isSensitiveField = (fieldName: string): boolean => {
-  return SENSITIVE_FIELDS.has(fieldName.toLowerCase());
+  return policyIsFieldRedacted(fieldName);
 };
 
 /**
@@ -155,7 +113,8 @@ export const redact = (
 
 /**
  * Checks if a value would be redacted
- * Useful for testing and validation
+ * Useful for testing and validation.
+ * Reads from the current hot-reloadable policy.
  */
 export const wouldBeRedacted = (fieldName: string): boolean => {
   return isSensitiveField(fieldName);
@@ -163,9 +122,10 @@ export const wouldBeRedacted = (fieldName: string): boolean => {
 
 /**
  * Gets the list of all recognized sensitive field names
+ * from the current hot-reloadable policy.
  */
 export const getSensitiveFields = (): string[] => {
-  return Array.from(SENSITIVE_FIELDS);
+  return policyGetPolicyFields();
 };
 
 /**
