@@ -9,6 +9,13 @@ import {
 } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
+import {
+  permissionCatalog,
+  hasPermission,
+  getEffectivePermissions,
+  auditPermissionCheck,
+  type Permission,
+} from "../services/permissionCatalog.js";
 
 const ROLE_HEADER = "x-user-role";
 const ROLES_CONFIG_URL = new URL("../config/roles.json", import.meta.url);
@@ -220,3 +227,94 @@ export function requireRole(requiredRoles: UserRole | UserRole[]) {
 export const roles = Object.fromEntries(
   [...roleHierarchy.roles].map((role) => [role, role]),
 ) as Record<UserRole, UserRole>;
+
+/**
+ * Middleware factory that requires a specific permission
+ * Uses the fine-grained permission catalog with wildcard grant evaluation
+ * 
+ * @param requiredPermission - The permission required to access the resource
+ * @returns Express middleware function
+ */
+export function requirePermission(requiredPermission: Permission) {
+  const normalizedPermission = requiredPermission.trim().toLowerCase();
+
+  if (!normalizedPermission) {
+    throw new Error("requirePermission must specify a permission");
+  }
+
+  if (!permissionCatalog.permissions.has(normalizedPermission)) {
+    throw new Error(`requirePermission references unknown permission: ${requiredPermission}`);
+  }
+
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsedRole = normalizeRole(req.header(ROLE_HEADER));
+
+      if (!parsedRole) {
+        emitRbacAudit(req, "RBAC_MISSING", 401);
+        return sendErrorResponse(
+          res,
+          new UnauthorizedError(
+            `Missing required authentication header: ${ROLE_HEADER}`,
+            ERROR_CODES.AUTHENTICATION_REQUIRED.code,
+          ),
+          req,
+        );
+      }
+
+      if (!isKnownRole(parsedRole)) {
+        emitRbacAudit(req, "RBAC_INVALID_ROLE", 400);
+        return sendErrorResponse(
+          res,
+          new BadRequestError("Invalid user role"),
+          req,
+        );
+      }
+
+      const granted = hasPermission(permissionCatalog, parsedRole, normalizedPermission);
+
+      // Audit the permission check
+      await auditPermissionCheck(
+        parsedRole,
+        normalizedPermission,
+        granted,
+        req.ip || req.socket?.remoteAddress,
+        req.originalUrl,
+      );
+
+      if (!granted) {
+        emitRbacAudit(req, "RBAC_FORBIDDEN", 403, {
+          role: parsedRole,
+          permission: normalizedPermission,
+        });
+        return sendErrorResponse(
+          res,
+          new ForbiddenError(
+            "Insufficient permissions",
+            ERROR_CODES.INSUFFICIENT_PERMISSIONS.code,
+          ),
+          req,
+        );
+      }
+
+      return next();
+    } catch (error) {
+      return sendErrorResponse(
+        res,
+        new InternalServerError("Authorization middleware error"),
+        req,
+      );
+    }
+  };
+}
+
+/**
+ * Gets all effective permissions for the current user's role
+ * Useful for returning capability information to clients
+ * 
+ * @param role - The user role
+ * @returns Set of all permissions the role has access to
+ */
+export function getUserPermissions(role: string): ReadonlySet<Permission> {
+  return getEffectivePermissions(permissionCatalog, role);
+}
