@@ -1,5 +1,10 @@
 import { jest } from "@jest/globals";
-import { HorizonContractClient, HorizonHttpError } from "../../clients/horizon-contract-client.js";
+import {
+  HorizonContractClient,
+  HorizonHttpError,
+  HorizonInsufficientBalanceError,
+  computeMinBalance,
+} from "../../clients/horizon-contract-client.js";
 import { ContractService } from "../../services/contract.service.js";
 import { RetryPolicy } from "../../utils/retry-policy.js";
 import {
@@ -83,6 +88,60 @@ describe("HorizonHttpError", () => {
     expect(err.name).toBe("HorizonHttpError");
   });
 
+  it("computes minimum balance for zero subentries and many trustlines", () => {
+    expect(computeMinBalance(0, 5_000_000)).toBe(10_000_000);
+    expect(computeMinBalance(42, 5_000_000)).toBe(220_000_000);
+  });
+
+  it("rejects payouts that would breach the minimum reserve by one stroop", async () => {
+    const client = makeClient();
+    mockOk({
+      id: ACCOUNT_ID,
+      subentry_count: 2,
+      balances: [{ asset_type: "native", balance: "1.0000000" }],
+    });
+
+    await expect(
+      client.submitPayout(ACCOUNT_ID, XDR, { baseReserve: 5_000_000, subentries: 2, amount: "1.0000000" }),
+    ).rejects.toBeInstanceOf(HorizonInsufficientBalanceError);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows payouts when the account balance is exactly at the minimum reserve", async () => {
+    const client = makeClient();
+    mockOk({
+      id: ACCOUNT_ID,
+      subentry_count: 2,
+      balances: [{ asset_type: "native", balance: "2.0000000" }],
+    });
+    mockOk({ hash: TX_HASH });
+
+    await expect(client.submitPayout(ACCOUNT_ID, XDR, { baseReserve: 5_000_000, subentries: 2 })).resolves.toEqual(
+      expect.objectContaining({ hash: TX_HASH }),
+    );
+  });
+
+  it("includes trustlines and offers in the effective reserve calculation", async () => {
+    const client = makeClient();
+    mockOk({
+      id: ACCOUNT_ID,
+      subentry_count: 2,
+      balances: [{ asset_type: "native", balance: "19.0000000" }],
+    });
+    mockOk({ hash: TX_HASH });
+
+    await expect(
+      client.submitPayout(ACCOUNT_ID, XDR, {
+        baseReserve: 5_000_000,
+        subentries: 2,
+        trustlines: 30,
+        offers: 4,
+        amount: "0",
+      }),
+    ).resolves.toEqual(expect.objectContaining({ hash: TX_HASH }));
+  });
+
   it("5xx message contains 'service unavailable'", () => {
     expect(new HorizonHttpError(500, "err").message).toContain("service unavailable");
     expect(new HorizonHttpError(503, "err").message).toContain("service unavailable");
@@ -125,6 +184,128 @@ describe("HorizonContractClient.call()", () => {
 
     expect(mockFetch).toHaveBeenCalledWith(
       `${BASE_URL}/accounts/${ACCOUNT_ID}/transactions`,
+      expect.anything(),
+    );
+  });
+
+  it("getTransactions formats cursor, limit, and order query parameters", async () => {
+    const txList = { _embedded: { records: [] } };
+    mockOk(txList);
+
+    const client = makeClient();
+    await client.getTransactionsPaged(ACCOUNT_ID, { cursor: "100", limit: 50, order: "asc" });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/accounts/${ACCOUNT_ID}/transactions?cursor=100&limit=50&order=asc`,
+      expect.anything(),
+    );
+  });
+
+  it("fetchAllTransactionsPaged aggregates records using cursor chaining", async () => {
+    const page1 = {
+      _embedded: {
+        records: [
+          { id: "1", paging_token: "100", hash: "h1" },
+          { id: "2", paging_token: "101", hash: "h2" },
+        ],
+      },
+    };
+    const page2 = {
+      _embedded: {
+        records: [
+          { id: "3", paging_token: "102", hash: "h3" },
+        ],
+      },
+    };
+    const page3 = { _embedded: { records: [] } };
+
+    mockOk(page1);
+    mockOk(page2);
+    mockOk(page3);
+
+    const client = makeClient();
+    const records = await client.fetchAllTransactionsPaged(ACCOUNT_ID, { limitPerPage: 2 });
+
+    expect(records).toHaveLength(3);
+    expect(records.map((r) => r.id)).toEqual(["1", "2", "3"]);
+  });
+
+  it("fetchAllTransactionsPaged handles 429 rate limit retry", async () => {
+    mockHttpError(429, "rate limit");
+    const page = {
+      _embedded: {
+        records: [{ id: "1", paging_token: "100", hash: "h1" }],
+      },
+    };
+    mockOk(page);
+    const emptyPage = { _embedded: { records: [] } };
+    mockOk(emptyPage);
+
+    const client = makeClient();
+    let rateLimitCalls = 0;
+    const records = await client.fetchAllTransactionsPaged(ACCOUNT_ID, {
+      maxRetriesOnRateLimit: 2,
+      onRateLimit: async (attempt) => {
+        rateLimitCalls = attempt;
+      },
+    });
+
+    expect(rateLimitCalls).toBe(1);
+    expect(records).toHaveLength(1);
+  });
+
+  it("fetchAllTransactionsPaged uses default rate limit delay when onRateLimit callback is omitted", async () => {
+    mockHttpError(429, "rate limit");
+    mockOk({ _embedded: { records: [{ id: "1", paging_token: "100", hash: "h1" }] } });
+    mockOk({ _embedded: { records: [] } });
+
+    const client = makeClient();
+    const records = await client.fetchAllTransactionsPaged(ACCOUNT_ID, {
+      maxRetriesOnRateLimit: 1,
+    });
+    expect(records).toHaveLength(1);
+  });
+
+  it("fetchAllTransactionsPaged stops immediately when maxRecords limit is reached inside page loop", async () => {
+    mockOk({
+      _embedded: {
+        records: [
+          { id: "1", paging_token: "100", hash: "h1" },
+          { id: "2", paging_token: "101", hash: "h2" },
+        ],
+      },
+    });
+
+    const client = makeClient();
+    const records = await client.fetchAllTransactionsPaged(ACCOUNT_ID, {
+      maxRecords: 1,
+    });
+    expect(records).toHaveLength(1);
+  });
+
+  it("fetchAllTransactionsPaged breaks when no new unique records are added in a page", async () => {
+    mockOk({
+      _embedded: {
+        records: [{ id: "1", paging_token: "100", hash: "h1" }],
+      },
+    });
+    mockOk({
+      _embedded: {
+        records: [{ id: "1", paging_token: "100", hash: "h1" }],
+      },
+    });
+
+    const client = makeClient();
+    const records = await client.fetchAllTransactionsPaged(ACCOUNT_ID);
+    expect(records).toHaveLength(1);
+  });
+
+  it("getLatestLedger fetches /ledgers?limit=1&order=desc", async () => {
+    mockOk({ _embedded: { records: [] } });
+    const client = makeClient();
+    await client.call(args("getLatestLedger", ""));
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/ledgers?limit=1&order=desc`,
       expect.anything(),
     );
   });
@@ -224,6 +405,18 @@ describe("HorizonContractClient.call()", () => {
       expect.anything(),
     );
   });
+
+  it("getLatestLedger fetches /ledgers?limit=1&order=desc", async () => {
+    const ledger = { _embedded: { records: [{ sequence: 100 }] } };
+    mockOk(ledger);
+    const client = makeClient();
+    const result = await client.call(args("getLatestLedger", ""));
+    expect(result.data).toEqual(ledger);
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/ledgers?limit=1&order=desc`,
+      expect.anything(),
+    );
+  });
 });
 
 // ─── sendTransaction() ────────────────────────────────────────────────────────
@@ -295,6 +488,193 @@ describe("HorizonContractClient.sendTransaction()", () => {
     mockNetworkError("ETIMEDOUT");
     const client = makeClient();
     await expect(client.sendTransaction(args("submitTransaction", XDR))).rejects.toBeInstanceOf(Error);
+  });
+
+  it("submitMemoTransaction validates memo hash format and posts to Horizon", async () => {
+    const client = makeClient();
+    const invalidHash = "12345";
+    await expect(client.submitMemoTransaction(invalidHash)).rejects.toBeInstanceOf(
+      ContractInvalidRequestError,
+    );
+
+    const validHash = "ab".repeat(32);
+    mockOk({ hash: TX_HASH });
+
+    const res = await client.submitMemoTransaction(validHash);
+    expect(res.hash).toBe(TX_HASH);
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/transactions`,
+      expect.objectContaining({
+        method: "POST",
+        body: `tx=${encodeURIComponent(`tx_memo_hash=${validHash}`)}`,
+      }),
+    );
+  });
+
+  it("getTransactionMemo fetches transaction details including memo by tx hash", async () => {
+    const client = makeClient();
+    const memoHash = "cd".repeat(32);
+    mockOk({ hash: TX_HASH, memo: memoHash, memo_type: "hash" });
+
+    const txData = await client.getTransactionMemo(TX_HASH);
+    expect(txData.hash).toBe(TX_HASH);
+    expect(txData.memo).toBe(memoHash);
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/transactions/${TX_HASH}`,
+      expect.anything(),
+    );
+  });
+});
+
+// ─── Fee-bump validation path (issue #436) ─────────────────────
+
+import {
+  TEST_DEST_KEY,
+  TEST_FEE_SOURCE_KEY,
+  TX_FEE,
+  TX_SEQ_NUM,
+  buildFeeBumpEnvelope,
+  concatBuffers,
+  defaultFeeBumpEnvelope,
+  defaultRegularEnvelope,
+  int64BE,
+  makePaymentOperation,
+  makeTestSig,
+  paddedKey,
+  toBase64Xdr,
+  uint32BE,
+} from "./fee-bump-fixtures.js";
+import { ENVELOPE_TYPE_FEE_BUMP, ENVELOPE_TYPE_TX } from "../fee-bump-validator.js";
+
+describe("HorizonContractClient.sendTransaction() — fee-bump validation (issue #436)", () => {
+  it("posts a valid fee-bump envelope to /transactions", async () => {
+    mockOk({ hash: TX_HASH });
+
+    const client = makeClient();
+    const xdr = defaultFeeBumpEnvelope();
+    const result = await client.sendTransaction(args("submitTransaction", xdr));
+
+    expect(result.hash).toBe(TX_HASH);
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${BASE_URL}/transactions`,
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    const calledArgs = mockFetch.mock.calls[0] as [string, RequestInit];
+    const calledBody = (calledArgs[1].body ?? "") as string;
+    expect(calledBody).toContain(`tx=${encodeURIComponent(xdr)}`);
+  });
+
+  it("posts a regular (non-fee-bump) envelope without invoking the validator", async () => {
+    mockOk({ hash: TX_HASH });
+
+    const client = makeClient();
+    await client.sendTransaction(args("submitTransaction", defaultRegularEnvelope()));
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a fee-bump envelope where sponsor == inner source (no fetch)", async () => {
+    const xdr = buildFeeBumpEnvelope(
+      TEST_FEE_SOURCE_KEY,
+      BigInt(1000),
+      TEST_FEE_SOURCE_KEY, // INTENTIONALLY same as sponsor
+      TX_FEE,
+      TX_SEQ_NUM,
+      makePaymentOperation(TEST_DEST_KEY, BigInt(100)),
+      [makeTestSig()],
+      [makeTestSig()],
+    );
+
+    const client = makeClient();
+    await expect(client.sendTransaction(args("submitTransaction", xdr))).rejects.toBeInstanceOf(
+      ContractInvalidRequestError,
+    );
+    // fetch MUST NOT be called — validation happens before the HTTP POST.
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fee-bump envelope with no inner signatures (no fetch)", async () => {
+    const xdr = defaultFeeBumpEnvelope(BigInt(1000), [], [makeTestSig()]);
+
+    const client = makeClient();
+    await expect(client.sendTransaction(args("submitTransaction", xdr))).rejects.toBeInstanceOf(
+      ContractInvalidRequestError,
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fee-bump envelope with a zero fee (no fetch)", async () => {
+    const xdr = defaultFeeBumpEnvelope(BigInt(0));
+
+    const client = makeClient();
+    await expect(client.sendTransaction(args("submitTransaction", xdr))).rejects.toBeInstanceOf(
+      ContractInvalidRequestError,
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fee-bump envelope whose inner envelope type is unsupported (no fetch)", async () => {
+    // Construct a fee-bump shell where inner-envelope-type is not 1 (Tx) or 4 (FeeBump).
+    const buf = concatBuffers(
+      uint32BE(ENVELOPE_TYPE_FEE_BUMP),
+      paddedKey(TEST_FEE_SOURCE_KEY),
+      int64BE(BigInt(1000)),
+      uint32BE(2),
+    );
+    const xdr = toBase64Xdr(Array.from(buf));
+
+    const client = makeClient();
+    await expect(client.sendTransaction(args("submitTransaction", xdr))).rejects.toBeInstanceOf(
+      ContractInvalidRequestError,
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke the validator for an XDR whose envelope type is not 4", async () => {
+    // Regular tx envelopes must pass straight through to Horizon — the validator
+    // is fee-bump-scoped.
+    const header = concatBuffers(
+      uint32BE(ENVELOPE_TYPE_TX),
+      paddedKey(TEST_FEE_SOURCE_KEY),
+      int64BE(BigInt(0)), // would be rejected as a fee-bump fee, but we are not in fee-bump scope
+    );
+    const malformed = toBase64Xdr(Array.from(header));
+
+    mockHttpError(400, "bad request");
+
+    const client = makeClient();
+    await expect(client.sendTransaction(args("submitTransaction", malformed))).rejects.toBeInstanceOf(
+      ContractInvalidRequestError,
+    );
+    // The ContractInvalidRequestError came from Horizon's HTTP 400 mapping, not from the validator.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("isFeeBumpTransaction heuristic ignores XDR that is too short to read", async () => {
+    // Less than 4 bytes — the client must NOT throw and must NOT attempt to validate
+    // a fee-bump envelope; it should just route the bad XDR to Horizon (which will reject).
+    const shortB64 = Buffer.from([0x00, 0x00]).toString("base64");
+    mockHttpError(400, "bad request");
+
+    const client = makeClient();
+    await expect(client.sendTransaction(args("submitTransaction", shortB64))).rejects.toBeInstanceOf(
+      ContractInvalidRequestError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("isFeeBumpTransaction returns false if Buffer.from throws an exception", async () => {
+    jest.spyOn(Buffer, "from").mockImplementationOnce(() => {
+      throw new Error("Buffer conversion error");
+    });
+    mockHttpError(400, "bad request");
+
+    const client = makeClient();
+    await expect(client.sendTransaction(args("submitTransaction", "trigger-error"))).rejects.toBeInstanceOf(
+      ContractInvalidRequestError,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
 

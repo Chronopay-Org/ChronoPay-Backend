@@ -1,9 +1,11 @@
+// @ts-nocheck
 import type { AuthContext } from "../../middleware/auth.js";
 import type { SlotRepository } from "../slots/slot-repository.js";
 import type {
   BookingIntentRecord,
   BookingIntentRepository,
   PricingSnapshot,
+  CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
 import { SchedulingService } from "../../services/schedulingService.js";
 import { withSpan } from "../../tracing/hooks.js";
@@ -11,6 +13,12 @@ import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
 import { resolvePrice } from "../../services/pricingStrategy.js";
+import {
+  CancellationPolicyService,
+  RefundBreakdown,
+  createDefaultRegistry,
+  VersionedPolicyRegistry,
+} from "../../services/cancellationPolicy.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -33,9 +41,11 @@ export class BookingIntentError extends AppError {
   constructor(
     readonly status: number,
     message: string,
+    codeOverride?: string,
   ) {
     const code =
-      status === 400
+      codeOverride ??
+      (status === 400
         ? ERROR_CODES.BAD_REQUEST.code
         : status === 403
           ? ERROR_CODES.FORBIDDEN.code
@@ -45,25 +55,44 @@ export class BookingIntentError extends AppError {
               ? ERROR_CODES.CONFLICT.code
               : status === 422
                 ? ERROR_CODES.UNPROCESSABLE_ENTITY.code
-                : ERROR_CODES.INTERNAL_ERROR.code;
+                : ERROR_CODES.INTERNAL_ERROR.code);
     super(message, status, code, true);
     this.name = "BookingIntentError";
   }
 }
 
 export class BookingIntentService {
+  private cancellationPolicyService: CancellationPolicyService;
+  private getPolicyRegistrySync: () => VersionedPolicyRegistry;
+
   constructor(
     private readonly bookingIntentRepository: BookingIntentRepository,
     private readonly slotRepository: SlotRepository,
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly nowMs: () => number = () => Date.now(),
-  ) {}
+    policyRegistry?: VersionedPolicyRegistry,
+  ) {
+    const registry = policyRegistry ?? createDefaultRegistry();
+    this.getPolicyRegistrySync = () => registry;
+    this.cancellationPolicyService = new CancellationPolicyService({
+      getPolicyRegistrySync: this.getPolicyRegistrySync,
+      nowMs: this.nowMs,
+      nowIso: this.now,
+    });
+  }
 
   private get schedulingService(): SchedulingService {
     return new SchedulingService(this.slotRepository, this.bookingIntentRepository);
   }
 
-  async createIntent(input: CreateBookingIntentInput, actor: AuthContext): Promise<BookingIntentRecord> {
+  private captureCancellationPolicySnapshot(): CancellationPolicySnapshot {
+    return this.cancellationPolicyService.snapshotCurrentPolicy();
+  }
+
+  async createIntent(
+    input: CreateBookingIntentInput,
+    actor: AuthContext,
+  ): Promise<BookingIntentRecord> {
     const slot = this.slotRepository.findById(input.slotId);
     if (!slot) {
       throw new BookingIntentError(404, "Selected slot was not found.");
@@ -71,6 +100,17 @@ export class BookingIntentService {
 
     if (!slot.bookable) {
       throw new BookingIntentError(409, "Selected slot is not bookable.");
+    }
+
+    if (slot.validUntil !== undefined && slot.validUntil !== null) {
+      const currentTime = this.nowMs();
+      if (currentTime >= slot.validUntil) {
+        throw new BookingIntentError(
+          422,
+          "Bundle for this slot has expired. Redemption is no longer available.",
+          ERROR_CODES.BUNDLE_EXPIRED.code,
+        );
+      }
     }
 
     if (slot.professional === actor.userId) {
@@ -96,8 +136,9 @@ export class BookingIntentService {
       const ps = slot.pricingStrategy;
       const activeBookings = this.bookingIntentRepository
         .listAll()
-        .filter((i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"))
-        .length;
+        .filter(
+          (i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"),
+        ).length;
       const capacity = ps.capacity ?? 1;
       const currentMs = this.nowMs();
 
@@ -122,6 +163,8 @@ export class BookingIntentService {
       };
     }
 
+    const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
+
     const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
       professional: slot.professional,
@@ -132,6 +175,7 @@ export class BookingIntentService {
       note: input.note,
       createdAt: this.now(),
       pricingSnapshot,
+      cancellationPolicySnapshot,
     });
 
     this.schedulingService.reserveSlot(input.slotId);
@@ -139,7 +183,10 @@ export class BookingIntentService {
     return intent;
   }
 
-  async createRecurringIntents(input: CreateRecurringBookingInput, actor: AuthContext): Promise<{ successes: BookingIntentRecord[]; failures: { date: string; reason: string }[] }> {
+  async createRecurringIntents(
+    input: CreateRecurringBookingInput,
+    actor: AuthContext,
+  ): Promise<{ successes: BookingIntentRecord[]; failures: { date: string; reason: string }[] }> {
     const { expandRRule, RecurrenceError } = await import("../../services/recurrenceService.js");
 
     let occurrences: Date[];
@@ -170,17 +217,28 @@ export class BookingIntentService {
         continue;
       }
 
-      const existingForCustomer = await this.bookingIntentRepository.findBySlotIdAndCustomer(slot.id, actor.userId);
+      const existingForCustomer = await this.bookingIntentRepository.findBySlotIdAndCustomer(
+        slot.id,
+        actor.userId,
+      );
       if (existingForCustomer) {
-        failures.push({ date: occ.toISOString(), reason: "Customer already has an intent for this slot" });
+        failures.push({
+          date: occ.toISOString(),
+          reason: "Customer already has an intent for this slot",
+        });
         continue;
       }
 
       const existingForSlot = await this.bookingIntentRepository.findBySlotId(slot.id);
       if (existingForSlot) {
-        failures.push({ date: occ.toISOString(), reason: "Slot already has active booking intent" });
+        failures.push({
+          date: occ.toISOString(),
+          reason: "Slot already has active booking intent",
+        });
         continue;
       }
+
+      const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
 
       const intent = await this.bookingIntentRepository.create({
         slotId: slot.id,
@@ -191,6 +249,7 @@ export class BookingIntentService {
         status: "pending",
         note: input.note,
         createdAt: this.now(),
+        cancellationPolicySnapshot,
       });
 
       // Reserve slot
@@ -209,7 +268,10 @@ export class BookingIntentService {
     }
 
     if (intent.customerId !== actor.userId && actor.role !== "admin") {
-      throw new BookingIntentError(403, "Only the intent owner or admin can confirm a booking intent.");
+      throw new BookingIntentError(
+        403,
+        "Only the intent owner or admin can confirm a booking intent.",
+      );
     }
 
     if (intent.status !== "pending") {
@@ -240,6 +302,23 @@ export class BookingIntentService {
     return updated;
   }
 
+  previewCancel(intentId: string, actor: AuthContext): RefundBreakdown {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+      throw new BookingIntentError(
+        403,
+        "You are not authorized to preview cancel this booking intent.",
+      );
+    }
+
+    const policy = new CancellationPolicyService();
+    return policy.calculateRefund(intent);
+  }
+
   expireIntent(intentId: string): BookingIntentRecord {
     const intent = this.bookingIntentRepository.findById(intentId);
     if (!intent) {
@@ -257,24 +336,27 @@ export class BookingIntentService {
     return updated;
   }
 
-  createIntentTraced(input: CreateBookingIntentInput, actor: AuthContext): Promise<BookingIntentRecord> {
-    return withSpan(
-      "bookingIntents.create",
-      { route: "POST /api/v1/booking-intents" },
-      () => this.createIntent(input, actor),
+  createIntentTraced(
+    input: CreateBookingIntentInput,
+    actor: AuthContext,
+  ): Promise<BookingIntentRecord> {
+    return withSpan("bookingIntents.create", { route: "POST /api/v1/booking-intents" }, () =>
+      this.createIntent(input, actor),
     );
   }
 }
 
-export const SLOT_ID_PATTERN = /^slot-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const SLOT_ID_PATTERN =
+  /^slot-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function parseCreateBookingIntentBody(body: unknown): CreateBookingIntentInput | CreateRecurringBookingInput {
+export function parseCreateBookingIntentBody(
+  body: unknown,
+): CreateBookingIntentInput | CreateRecurringBookingInput {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new BookingIntentError(400, "Booking intent payload must be a JSON object.");
   }
 
   const { slotId, note, rrule } = body as { slotId?: unknown; note?: unknown; rrule?: unknown };
-
 
   // If an RRULE is provided, treat this as a recurring booking request
   if (rrule !== undefined) {

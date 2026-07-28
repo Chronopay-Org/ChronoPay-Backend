@@ -35,6 +35,8 @@ export interface EnvConfig {
   horizonUrl?: string;
   /** Stellar network passphrase used to identify the target network */
   networkPassphrase?: string;
+  /** Pinned hash for the current active escrow contract */
+  escrowContractHash?: string;
 }
 
 export class EnvValidationError extends Error {
@@ -70,6 +72,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   const corsAllowedOrigins = parseStringList(env.CORS_ALLOWED_ORIGINS);
   const horizonUrl = parseOptionalUrl(env.HORIZON_URL, "HORIZON_URL", issues);
   const networkPassphrase = parseOptionalString(env.STELLAR_NETWORK_PASSPHRASE);
+  const escrowContractHash = parseOptionalString(env.ESCROW_CONTRACT_HASH);
 
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
@@ -89,6 +92,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     corsAllowedOrigins,
     horizonUrl,
     networkPassphrase,
+    escrowContractHash,
   };
 }
 

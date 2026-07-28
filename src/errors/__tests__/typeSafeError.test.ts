@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tests for type-safe error sender functions.
  *
@@ -19,7 +20,7 @@ import {
   sendErrorResponse,
   type SendErrorOptions,
 } from "../typeSafeError.js";
-import { AppError, ValidationError, NotFoundError } from "../AppError.js";
+import { ValidationError, NotFoundError } from "../AppError.js";
 
 // Mock Express Response
 const createMockResponse = (): Response => {

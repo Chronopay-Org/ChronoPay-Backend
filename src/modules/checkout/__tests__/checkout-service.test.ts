@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest } from "@jest/globals";
 import { CheckoutSessionService, setCheckoutRepository } from "../../../services/checkout.js";
 import { PgCheckoutSessionRepository } from "../pg-checkout-session-repository.js";

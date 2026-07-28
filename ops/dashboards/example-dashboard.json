@@ -1,0 +1,18 @@
+{
+  "id": null,
+  "uid": "example-dash",
+  "title": "Example Dashboard",
+  "tags": [ "templated" ],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 0,
+  "refresh": "25s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Uptime",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    }
+  ]
+}

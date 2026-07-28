@@ -15,8 +15,6 @@ import {
   getSupportedLocales,
   type SupportedLocale,
 } from "../../i18n/messageLoader.js";
-import { EN_MESSAGES } from "../../i18n/locales.en.js";
-import { ES_MESSAGES } from "../../i18n/locales.es.js";
 
 describe("i18n Message Loader", () => {
   describe("Locale Support", () => {

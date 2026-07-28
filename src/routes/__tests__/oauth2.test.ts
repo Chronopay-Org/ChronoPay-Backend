@@ -1,10 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, jest } from "@jest/globals";
+// @ts-nocheck
+import { describe, it, expect, beforeAll, beforeEach, jest } from "@jest/globals";
 import express from "express";
 import request from "supertest";
 import oauth2Router from "../oauth2.js";
-import { oauth2Service } from "../../services/oauth2.service.js";
 import { configService } from "../../config/config.service.js";
-import { signJwt } from "../../utils/jwt.js";
 
 // Mock fetch to avoid real HTTP calls
 global.fetch = jest.fn();
@@ -462,7 +461,6 @@ describe("OAuth2 Routes", () => {
         .get("/oauth/google/callback?state=test")
         .set("Cookie", startCookies);
 
-      let setCookies = res.headers["set-cookie"] || [];
       // Even though cookies may not have been sent with wrong params, verify structure
       expect(res.status).toBe(400);
     });

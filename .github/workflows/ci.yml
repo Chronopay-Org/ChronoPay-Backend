@@ -15,7 +15,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: package-lock.json
       - name: Install dependencies
@@ -23,7 +23,9 @@ jobs:
       - name: Run ESLint
         run: npm run lint
       - name: Lint Prometheus Rules
-        run: docker run --rm -v ${{ github.workspace }}:/workspace prom/prometheus promtool check rules /workspace/ops/alerts/*.yml
+        run: docker run --rm --entrypoint sh -v ${{ github.workspace }}:/workspace prom/prometheus -c 'promtool check rules /workspace/ops/alerts/*.yml'
+      - name: Validate Grafana Dashboards
+        run: npx tsx scripts/validate-dashboards.ts
 
   test-shards:
     needs: lint
@@ -56,30 +58,88 @@ jobs:
       NODE_ENV: test
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history on PRs so git diff can compute the merge-base.
+          # Pushes to main always run the full suite so depth=1 is fine.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: package-lock.json
+
       - name: Install dependencies
         run: npm ci
+
       - name: Typecheck
         run: npm run typecheck
+
       - name: Build
         if: github.event_name != 'pull_request'
         run: npm run build
+
       - name: Validate migrations
         run: npm run migrate validate
+
       - name: Run migrations
         run: npm run migrate up
-      - name: Run tests
+
+      # ------------------------------------------------------------------
+      # Determine changed files (PR only). On pushes to main this step is
+      # skipped and the full suite always runs.
+      # ------------------------------------------------------------------
+      - name: Get changed files
+        id: changed_files
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            > /tmp/changed_files.txt
+          echo "Changed files:"
+          cat /tmp/changed_files.txt
+
+      - name: Select tests for changed files
+        id: select_tests
+        if: github.event_name == 'pull_request'
+        run: |
+          mapfile -t changed < /tmp/changed_files.txt
+          npx tsx scripts/select-tests.ts \
+            --changed-files "${changed[@]}" \
+            --graph scripts/test-graph.json \
+            --output /tmp/selected-tests.txt \
+            --verbose
+          echo "Selected tests:"
+          cat /tmp/selected-tests.txt
+
+      # ------------------------------------------------------------------
+      # Run tests.
+      #   main / push : always full suite.
+      #   PR          : selected subset, or full suite on fallback.
+      # ------------------------------------------------------------------
+      - name: Run tests (full — main)
+        if: github.event_name != 'pull_request'
         run: npm test
+
+      - name: Run tests (selected — PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          SELECTION=$(cat /tmp/selected-tests.txt)
+          if [ "$SELECTION" = "__full_run__" ]; then
+            echo "Graph triggered full run."
+            npm test
+          else
+            echo "Running selected tests:"
+            cat /tmp/selected-tests.txt
+            mapfile -t TEST_PATHS < /tmp/selected-tests.txt
+            PATTERN=$(IFS='|'; echo "${TEST_PATHS[*]}")
+            npm test -- --testPathPattern="$PATTERN"
+          fi
 
   openapi-breaking-check:
     name: OpenAPI Breaking‑Change Check
     runs-on: ubuntu-latest
-    needs: build-test
+    needs: [lint, test-shards]
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +148,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
       - name: Install dependencies
         run: npm ci
@@ -132,12 +192,46 @@ jobs:
             \`\`\`
             ${{ steps.diff.outputs.breaking == 'yes' && '⚠️ Breaking changes detected. Add `breaking-change-approved` label to override.' || '✅ No breaking changes.' }}
 
+  sdk-release:
+    name: Publish SDK to npm
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [lint, test-shards]
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Publish SDK
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node scripts/release-sdk.js --tag "${GITHUB_REF_NAME}"
+
   container-scan:
     name: Container Image Security Scan
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
       - name: Cache Trivy DB
         uses: actions/cache@v4
         with:
@@ -151,15 +245,34 @@ jobs:
         run: docker build -t app:${{ github.sha }} .
       - name: Run Trivy scan (high/critical)
         run: trivy image --exit-code 1 --severity HIGH,CRITICAL --format json -o trivy-report.json app:${{ github.sha }}
-      - name: Generate SBOM
-        run: trivy image --format spdx-json -o sbom.spdx.json app:${{ github.sha }}
+      - name: Generate application SBOM (CycloneDX)
+        run: npm run sbom -- --output sbom.app.cyclonedx.json
+      - name: Generate container SBOM (CycloneDX, includes OS packages)
+        run: trivy image --format cyclonedx -o sbom.container.cyclonedx.json app:${{ github.sha }}
       - name: Upload Trivy report
         uses: actions/upload-artifact@v4
         with:
           name: trivy-report
           path: trivy-report.json
-      - name: Upload SBOM
+      - name: Upload SBOMs (workflow artifacts)
         uses: actions/upload-artifact@v4
         with:
           name: sbom
-          path: sbom.spdx.json
+          path: |
+            sbom.app.cyclonedx.json
+            sbom.container.cyclonedx.json
+      - name: Upload SBOMs to supply-chain security portal
+        continue-on-error: true
+        env:
+          SBOM_PORTAL_URL: ${{ secrets.SBOM_PORTAL_URL }}
+          SBOM_PORTAL_API_KEY: ${{ secrets.SBOM_PORTAL_API_KEY }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          npm run sbom:upload -- --file sbom.app.cyclonedx.json
+          npm run sbom:upload -- --file sbom.container.cyclonedx.json
+      - name: Attach SBOMs to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sbom.app.cyclonedx.json
+            sbom.container.cyclonedx.json

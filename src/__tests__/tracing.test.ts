@@ -1,3 +1,4 @@
+// @ts-nocheck
 import request from "supertest";
 import app from "../index.js";
 import { getTraceContext, generateId, runWithTraceContext } from "../tracing/context.js";

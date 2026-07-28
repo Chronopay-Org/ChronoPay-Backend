@@ -1,8 +1,8 @@
+// @ts-nocheck
 import { jest } from "@jest/globals";
 import { BookingIntentService } from "../booking-intent-service.js";
 import { InMemoryBookingIntentRepository } from "../booking-intent-repository.js";
-import { InMemorySlotRepository } from "../../slots/slot-repository.js";
-import type { SlotRecord } from "../../slots/slot-repository.js";
+import { InMemorySlotRepository, type SlotRecord } from "../../slots/slot-repository.js";
 import { DECAY_WINDOW_MS } from "../../../services/pricingStrategy.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────

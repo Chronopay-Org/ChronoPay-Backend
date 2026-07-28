@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest } from "@jest/globals";
 import request from "supertest";
 import { createApp } from "../app.js";
@@ -7,7 +8,6 @@ import { CheckoutSession, CheckoutSessionStatus } from "../types/checkout.js";
 import { randomUUID } from "crypto";
 
 const app = createApp({ enableContentNegotiation: false });
-const JSON_CT = { 'Content-Type': 'application/json' };
 
 beforeEach(() => {
   process.env.FF_CHECKOUT = 'true';

@@ -5,12 +5,10 @@
  * to prevent resource exhaustion attacks.
  */
 
-import { ZodSchema, z } from "zod";
+import { z } from "zod";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const MAX_CATEGORIES = 10;
-const MAX_PRICE_RANGES = 5;
-const MAX_RATINGS = 1;
 const MAX_RESULTS = 100;
 const MIN_RESULTS = 1;
 
@@ -64,6 +62,7 @@ export const MarketplaceSearchSchema = z.object({
     .min(MIN_RESULTS, `limit must be >= ${MIN_RESULTS}`)
     .max(MAX_RESULTS, `limit must be <= ${MAX_RESULTS}`)
     .default(10),
+  cursor: z.string().trim().optional(),
 
   // Filters
   categories: z.array(
