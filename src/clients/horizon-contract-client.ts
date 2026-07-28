@@ -1,7 +1,11 @@
 import { IContractClient } from "./contract-client.interface.js";
 import { ContractInteractionArgs, ContractCallResult, TransactionResult } from "./types.js";
 import { ContractService } from "../services/contract.service.js";
-import { ContractInvalidRequestError, ContractRateLimitError } from "../errors/contractErrors.js";
+import {
+  ContractInvalidRequestError,
+  ContractRateLimitError,
+  ContractSequenceCollisionError,
+} from "../errors/contractErrors.js";
 import { withTimeout } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
 
@@ -52,6 +56,13 @@ export interface FetchAllPagesOptions {
   maxRecords?: number;
   maxRetriesOnRateLimit?: number;
   onRateLimit?: (attempt: number) => Promise<void>;
+}
+
+export interface SequenceRecoveryOptions {
+  maxRetries?: number;
+  initialDelayMs?: number;
+  useJitter?: boolean;
+  onRetry?: (attempt: number, newSequence: string) => void;
 }
 
 /**
@@ -172,6 +183,70 @@ export class HorizonContractClient implements IContractClient {
       args: [txHash],
     });
     return res.data;
+  }
+
+  /**
+   * Fetches the current sequence number for a Stellar account from Horizon.
+   * Returns the sequence as a string (matching the Stellar Horizon API format).
+   */
+  async getAccountSequence(accountId: string): Promise<string> {
+    const result = await this.call<{ sequence: string }>({
+      address: accountId,
+      abi: null,
+      method: "getAccount",
+      args: [accountId],
+    });
+    return result.data.sequence;
+  }
+
+  /**
+   * Submits a transaction with sequence-number collision recovery.
+   *
+   * On tx_bad_seq, re-reads the account sequence from Horizon and retries
+   * with jitter after the caller rebuilds the XDR using the fresh sequence.
+   *
+   * @param rebuildXdr - Callback that receives the fresh sequence string and returns a rebuilt XDR envelope.
+   * @param options - Recovery tuning: maxRetries, initialDelayMs, useJitter, onRetry.
+   */
+  async sendTransactionWithSequenceRecovery(
+    initialXdr: string,
+    accountId: string,
+    rebuildXdr: (freshSequence: string) => Promise<string>,
+    options: SequenceRecoveryOptions = {},
+  ): Promise<TransactionResult> {
+    const maxRetries = options.maxRetries ?? 5;
+    let delayMs = options.initialDelayMs ?? 100;
+    const useJitter = options.useJitter ?? true;
+
+    let currentXdr = initialXdr;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await this.sendTransaction({
+          address: accountId,
+          abi: null,
+          method: "submitTransaction",
+          args: [currentXdr],
+        });
+      } catch (err: unknown) {
+        if (!(err instanceof ContractSequenceCollisionError) || attempt === maxRetries) {
+          throw err;
+        }
+
+        const freshSequence = await this.getAccountSequence(accountId);
+        currentXdr = await rebuildXdr(freshSequence);
+
+        if (options.onRetry) {
+          options.onRetry(attempt + 1, freshSequence);
+        }
+
+        const jitterDelay = useJitter ? Math.floor(Math.random() * delayMs) : delayMs;
+        await new Promise((resolve) => setTimeout(resolve, jitterDelay));
+        delayMs = Math.min(delayMs * 2, 10_000);
+      }
+    }
+
+    throw new ContractSequenceCollisionError("Sequence collision recovery exhausted all retries");
   }
 
   /**
