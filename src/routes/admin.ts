@@ -2,6 +2,9 @@ import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
 import { capacityForecaster } from "../services/capacityForecaster.js";
+import { RefundService } from "../services/refund.js";
+import { getImpersonationSessionStore } from "../services/impersonationSessionStore.js";
+import type { SessionListOptions } from "../types/impersonation.types.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import {
   appendFinalityLink,
@@ -109,24 +112,107 @@ router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response)
   return res.status(200).json({ success: true });
 });
 
-// --- Mock Dispute Logic with Senior-Panel Appeal Workflow ---
-//
-// State machine (enforced by src/services/disputeAppeals.ts):
-//   OPEN → EVIDENCED → ADJUDICATED → APPEALED → SENIOR_REVIEW → FINAL
-// Appeals are accepted only within an `appealWindowMs` window after
-// `adjudicatedAt` (default 72 h). The senior panel is selected from a
-// module-level pool that excludes the original arbiter, any arbiter
-// affiliated with the buyer's or supplier's tenant, and any arbiter who
-// already served on a prior panel for the same dispute (appeal-of-appeal).
-// Every status transition appends a SHA-256 hash link that chains to the
-// previous one, so the lifecycle can be replayed from the chain alone.
-//
-// Audit envelope: each transition emits an event via `defaultAuditLogger`
-// with `action= DISPUTE_APPEAL_INITIATED | DISPUTE_APPEAL_REJECTED |
-// DISPUTE_SENIOR_PANEL_SELECTED | DISPUTE_FINAL` (plus
-// `DISPUTE_FINAL_REJECTED`). The route never blocks on audit write
-// failures; `logAudit()` swallows errors so a flaky disk does not stall
-// the dispute pipeline.
+// --- Refund Routes ---
+
+/**
+ * @route POST /api/v1/admin/refunds
+ * @desc Create a partial refund against a completed payment session.
+ *       Enforces the invariant that sum of refunds <= captured amount.
+ * @access Private (admin token only)
+ */
+router.post("/refunds", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { paymentId, amountCents, currency, reason, refundedBy } = req.body;
+
+    if (!paymentId) {
+      return res.status(400).json({ success: false, error: "paymentId is required" });
+    }
+    if (!amountCents || typeof amountCents !== "number" || amountCents <= 0) {
+      return res.status(400).json({ success: false, error: "amountCents must be a positive integer" });
+    }
+
+    const refund = await RefundService.createRefundTraced({
+      paymentId,
+      amountCents,
+      currency,
+      reason,
+      refundedBy,
+    });
+
+    return res.status(201).json({ success: true, refund });
+  } catch (error: any) {
+    const status = error.status ?? 500;
+    return res.status(status).json({
+      success: false,
+      error: error.message ?? "Refund creation failed",
+      code: error.code,
+      details: error.details,
+    });
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/payments/:id/trace
+ * @desc Retrieve a payment trace including the original payment and all linked refund entries.
+ * @access Private (admin token only)
+ */
+router.get("/payments/:id/trace", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const trace = await RefundService.getPaymentTraceTraced(req.params.id);
+    return res.json({ success: true, trace });
+  } catch (error: any) {
+    const status = error.status ?? 500;
+    return res.status(status).json({
+      success: false,
+      error: error.message ?? "Trace retrieval failed",
+    });
+  }
+});
+
+// ----------------------------------------
+type Dispute = {
+  id: string;
+  status: "OPEN" | "EVIDENCED" | "ADJUDICATED" | "APPEALED" | "CLOSED" | "TIMEOUT";
+  buyerId: string;
+  supplierId: string;
+  amount: number;
+  evidence: string[];
+  ruling?: string;
+  arbiter?: string;
+};
+
+const disputes = new Map<string, Dispute>();
+let ledgers = { buyer: 1000, supplier: 1000 };
+
+export const resetDisputesState = () => {
+  disputes.clear();
+  ledgers = { buyer: 1000, supplier: 1000 };
+};
+
+router.post("/disputes", requireAdminToken, (req, res) => {
+  const { buyerId, supplierId, amount } = req.body;
+  const id = `dispute-${Date.now()}`;
+  disputes.set(id, {
+    id,
+    status: "OPEN",
+    buyerId,
+    supplierId,
+    amount,
+    evidence: [],
+  });
+  return res.status(201).json({ success: true, dispute: disputes.get(id) });
+});
+
+router.post("/disputes/:id/evidence", requireAdminToken, (req, res) => {
+  const dispute = disputes.get(req.params.id);
+  if (!dispute) return res.status(404).json({ success: false, error: "Dispute not found" });
+  if (req.body.failUpload) return res.status(500).json({ success: false, error: "Evidence upload failed" });
+  
+  dispute.evidence.push(req.body.evidence);
+  dispute.status = "EVIDENCED";
+  return res.status(200).json({ success: true, dispute, evidenceAnchor: `anchor-${Date.now()}` });
+});
+// ─── Impersonation Session Review API ────────────────────────────────────────
 
 /**
  * @route GET /api/v1/admin/impersonation/sessions
