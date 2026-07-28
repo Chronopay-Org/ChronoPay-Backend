@@ -2,6 +2,16 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import https from 'https';
 
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled Rejection:', err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const PR_NUMBER = process.env.PR_NUMBER;
 const BASE_SHA = process.env.BASE_SHA;
@@ -27,7 +37,7 @@ async function fetchOSV(pkgName, version) {
       res.on('end', () => {
         try {
           resolve(JSON.parse(body));
-        } catch (e) {
+        } catch {
           resolve({});
         }
       });
@@ -55,21 +65,21 @@ async function run() {
   try {
     execSync(`git checkout ${BASE_SHA} -- package-lock.json`);
     baseLock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
-  } catch (e) {
+  } catch {
     baseLock = { packages: {} };
   }
 
   try {
     execSync(`git checkout ${HEAD_SHA} -- package-lock.json`);
     headLock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
-  } catch (e) {
+  } catch {
     headLock = { packages: {} };
   }
 
   // Restore working tree state
   try {
     execSync(`git checkout HEAD -- package-lock.json`);
-  } catch (e) {}
+  } catch {}
 
   const baseDeps = baseLock.packages || baseLock.dependencies || {};
   const headDeps = headLock.packages || headLock.dependencies || {};

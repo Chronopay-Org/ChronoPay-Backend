@@ -18,7 +18,6 @@ import {
   type ErrorCode,
   type ErrorType,
   isPublicError,
-  type PublicErrorCode,
   type I18nMessageKey,
 } from "./errorTaxonomy.js";
 
@@ -323,6 +322,23 @@ export class ServiceUnavailableError extends AppError {
     code: string = ERROR_CODES.SERVICE_UNAVAILABLE.code,
   ) {
     super(message, ERROR_CODES.SERVICE_UNAVAILABLE.status, code, true);
+  }
+}
+
+export class QueryBudgetExceededError extends AppError {
+  constructor(
+    message: string = "Query budget exceeded — the request consumed too much database time",
+    details?: unknown,
+    messageKey: I18nMessageKey = "errors.budget.query_budget_exceeded" as I18nMessageKey,
+  ) {
+    super(
+      message,
+      ERROR_CODES.QUERY_BUDGET_EXCEEDED.status,
+      ERROR_CODES.QUERY_BUDGET_EXCEEDED.code,
+      true,
+      details,
+      messageKey,
+    );
   }
 }
 
