@@ -1,12 +1,37 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
-import { capacityForecaster } from "../services/capacityForecaster.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { _settlements } from "../services/settlementReconciler.js";
+import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
+import { AUDIT_SCHEMA_VERSION } from "../types/auditEvent.js";
+import {
+  canTransition,
+  appendFinalityLink,
+  isWithinAppealWindow,
+  selectSeniorPanel,
+  getSeniorPool,
+  SENIOR_PANEL_MIN_SIZE,
+  validateSeniorDecision,
+  decideByMajority,
+  resetSeniorPool,
+} from "../services/disputeAppeals.js";
+import { getPayoutDlqStore } from "../services/payoutDlqStore.js";
+import type { PayoutDlqStatus } from "../services/payoutDlqStore.js";
+import { getImpersonationSessionStore } from "../services/impersonationSessionStore.js";
+import type { SessionListOptions } from "../types/impersonation.types.js";
+import type { SeniorPanelVote } from "../types/dispute.js";
+import type { LocalIntentStatus } from "../services/escrowDriftReconciler.js";
+import { getTzDriftMetricsSnapshot } from "../metrics/tzDriftMetrics.js";
+import { getLastScanFindings } from "../scheduler/tzDriftMonitor.js";
 
 const router = Router();
+const disputeQueueService = new DisputeArbitrationQueueService();
+
+// In-memory dispute state for E2E tests
+const disputes = new Map<string, any>();
+let ledgers = { buyer: 1000, supplier: 1000 };
 
 // --- Pending Payout Replays State ---
 export type PendingReplay = {
@@ -257,11 +282,21 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const opts: SessionListOptions = {};
+      const store = getImpersonationSessionStore();
+      const sessions = await store.listSessions(opts);
+
+      return res.status(200).json({ success: true, sessions });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error.message ?? "Failed to list impersonation sessions" });
+    }
+  },
+);
 
 export const resetDisputesState = () => {
   disputes.clear();
   ledgers = { buyer: 1000, supplier: 1000 };
   resetSeniorPool();
+  disputeQueueService.clear();
 };
 
 function readStringField(body: any, key: string, fallback: unknown): string {
@@ -332,6 +367,16 @@ router.post("/disputes", requireAdminToken, (req, res) => {
     appealWindowMs,
   };
   disputes.set(id, dispute);
+  const buyerTier = (typeof body.buyerTier === "string" && ["bronze", "silver", "gold", "platinum"].includes(body.buyerTier)
+    ? body.buyerTier
+    : "bronze") as import("../services/disputeArbitrationQueue.js").BuyerTier;
+  disputeQueueService.enqueueDispute({
+    disputeId: id,
+    amount,
+    buyerTier,
+    createdAt: Date.now(),
+    queuedAt: Date.now(),
+  });
   return res.status(201).json({ success: true, dispute });
 });
 
@@ -393,6 +438,7 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
   dispute.status = "ADJUDICATED";
   dispute.finalityHash = link.hash;
   dispute.finalityChain.push(link);
+  disputeQueueService.removeDispute(req.params.id);
 
   if (ruling === "BUYER_FAVOR") {
     ledgers.buyer += dispute.amount;
@@ -407,6 +453,23 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
     dispute,
     rulingAudit: `audit-${at}`,
     ledgers,
+  });
+});
+
+router.get("/disputes/queue", requireAdminToken, (req, res) => {
+  const now = Date.now();
+  const queue = disputeQueueService.list(now);
+  return res.status(200).json({
+    success: true,
+    queue,
+  });
+});
+
+router.get("/disputes/queue/dashboard", requireAdminToken, (req, res) => {
+  const now = Date.now();
+  return res.status(200).json({
+    success: true,
+    dashboard: disputeQueueService.getDashboard(now),
   });
 });
 
@@ -616,6 +679,7 @@ router.post("/disputes/:id/timeout", requireAdminToken, (req, res) => {
   dispute.status = "TIMEOUT";
   dispute.finalityHash = link.hash;
   dispute.finalityChain.push(link);
+  disputeQueueService.removeDispute(req.params.id);
 
   return res.status(200).json({ success: true, dispute });
 });
@@ -716,13 +780,6 @@ router.get(
 );
 
 // ─── Payout DLQ Inspection API ──────────────────────────────────────────────
-
-// In-memory dispute state for testing (kept for backward compatibility)
-let disputesState: Map<string, any> = new Map();
-
-export function resetDisputesState(): void {
-  disputesState = new Map();
-}
 
 /**
  * Validated PayoutDlqStatus values.
