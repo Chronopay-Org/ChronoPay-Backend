@@ -181,6 +181,7 @@ export class EscrowStateProjector {
       return noop(
         "noop_slot_already",
         `intent ${intent.id} already ${target} (${event.txHash.toLowerCase()}:${event.eventIndex})`,
+        intent,
       );
     }
 
@@ -189,6 +190,7 @@ export class EscrowStateProjector {
       return noop(
         "noop_terminal_intent",
         `intent ${intent.id} is terminal (${intent.status}); cannot apply ${event.kind} → ${target}`,
+        intent,
       );
     }
 
@@ -198,6 +200,7 @@ export class EscrowStateProjector {
       return noop(
         "noop_illegal_transition",
         `(intent ${intent.id}) ${event.kind} → ${target} not legal from status ${intent.status}`,
+        intent,
       );
     }
 
