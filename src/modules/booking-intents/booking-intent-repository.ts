@@ -48,6 +48,12 @@ export interface BookingIntentRepository {
   findById(id: string): BookingIntentRecord | undefined;
   findBySlotId(slotId: string): BookingIntentRecord | undefined;
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
+  /**
+   * Indexed lookup for the most recent intent (regardless of status) for a
+   * slot. Returns undefined when no intent exists. Optional — implementations
+   * that omit it will fall back to a listAll scan (only safe for in-memory).
+   */
+  findLatestBySlotId?(slotId: string): BookingIntentRecord | undefined;
   listByCustomer(customerId: string): BookingIntentRecord[];
   listAll(): BookingIntentRecord[];
   updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord;
@@ -79,6 +85,14 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
       (entry) => entry.slotId === slotId && entry.customerId === customerId && entry.status === "pending",
     );
     return intent ? { ...intent } : undefined;
+  }
+
+  findLatestBySlotId(slotId: string): BookingIntentRecord | undefined {
+    const candidates = this.intents.filter((entry) => entry.slotId === slotId);
+    if (candidates.length === 0) return undefined;
+    return candidates.reduce((latest, current) =>
+      current.startTime > latest.startTime ? current : latest,
+    );
   }
 
   findById(id: string): BookingIntentRecord | undefined {
