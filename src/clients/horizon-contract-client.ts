@@ -4,6 +4,7 @@ import { ContractService } from "../services/contract.service.js";
 import { ContractInvalidRequestError } from "../errors/contractErrors.js";
 import { withTimeout } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
+import { validateFeeBumpTransaction } from "./fee-bump-validator.js";
 
 /**
  * Stellar Horizon HTTP API client implementing IContractClient.
@@ -60,6 +61,11 @@ export class HorizonContractClient implements IContractClient {
    */
   async sendTransaction(args: ContractInteractionArgs): Promise<TransactionResult> {
     const xdr = args.args[0] as string;
+
+    if (this.isFeeBumpTransaction(xdr)) {
+      validateFeeBumpTransaction(xdr);
+    }
+
     const url = `${this.horizonUrl}/transactions`;
 
     const response = await this.contractService.sendTransaction<{ hash: string }>(
@@ -91,6 +97,16 @@ export class HorizonContractClient implements IContractClient {
         );
       },
     };
+  }
+
+  private isFeeBumpTransaction(xdrBase64: string): boolean {
+    try {
+      const buf = Buffer.from(xdrBase64, "base64");
+      if (buf.length < 4) return false;
+      return buf.readInt32BE(0) === 4;
+    } catch {
+      return false;
+    }
   }
 
   private buildReadUrl(method: string, methodArgs: any[]): string {
