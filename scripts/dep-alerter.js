@@ -2,6 +2,16 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled Rejection:', err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const PR_NUMBER = process.env.PR_NUMBER;
 const BASE_SHA = process.env.BASE_SHA;
