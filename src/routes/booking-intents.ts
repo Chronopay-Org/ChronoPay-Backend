@@ -157,6 +157,24 @@ export function createBookingIntentsRouter() {
     },
   );
 
+  router.get(
+    "/:id/cancel-preview",
+    requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    requireAuthenticatedActor(["customer", "admin"]),
+    createAuthAwareRateLimiter(),
+    (req: Request, res: Response): void => {
+      try {
+        const preview = bookingIntentService.previewCancel(req.params.id, req.auth!);
+        res.status(200).json({
+          success: true,
+          preview,
+        });
+      } catch (error) {
+        handleServiceError(error, res);
+      }
+    },
+  );
+
   return router;
 }
 
