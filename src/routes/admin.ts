@@ -328,6 +328,27 @@ router.post("/fraud/hitl/:id/decision", requireAuthenticatedActor(["admin"]), (r
   }
 });
 
+/**
+ * @route POST /api/v1/admin/escrow/pause
+ * @desc Admin endpoint to toggle escrow paused state during migration.
+ * @access Private (admin role required)
+ */
+router.post("/escrow/pause", requireAuthenticatedActor(["admin"]), (req: Request, res: Response) => {
+  const { paused } = req.body;
+  if (typeof paused !== "boolean") {
+    return res.status(400).json({ success: false, error: "paused must be a boolean" });
+  }
+
+  // Assuming scheduling service is somehow accessible or we use the global state
+  // Let's create an escrowMigrationState singleton and use it here.
+  import("../services/escrowMigrationState.js").then(({ escrowMigrationState }) => {
+    escrowMigrationState.setPaused(paused);
+    res.json({ success: true, paused: escrowMigrationState.isPaused() });
+  }).catch(err => {
+    res.status(500).json({ success: false, error: err.message });
+  });
+});
+
 // --- Mock Dispute Logic for E2E Tests ---
 type Dispute = {
   id: string;
