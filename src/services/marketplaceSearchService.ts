@@ -105,7 +105,7 @@ export class MarketplaceSearchService {
       if (error instanceof MarketplaceSearchError) {
         throw error;
       }
-      throw new MarketplaceSearchError("Invalid or malformed cursor", 400, error.message);
+      throw new MarketplaceSearchError(error.message || "Invalid or malformed cursor", 400);
     }
   }
 

@@ -223,3 +223,11 @@ jobs:
         with:
           name: sbom
           path: sbom.spdx.json
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.5.0
+      - name: Sign Docker Image
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: cosign sign --key env://COSIGN_PRIVATE_KEY -y app:${{ github.sha }}
+

@@ -139,12 +139,33 @@ export class SlotService {
     return finalResult;
   }
 
+  hasConflict(professional: string, startTime: number, endTime: number, excludeId?: number): boolean {
+    return this._slots.some(slot => 
+      slot.professional === professional && 
+      String(slot.id) !== String(excludeId) &&
+      startTime < slot.endTime && 
+      endTime > slot.startTime
+    );
+  }
+
+  async createSlotTraced(data: any): Promise<Slot> {
+    return this.createSlot(data);
+  }
+
+  async updateSlotTraced(id: number | string, data: any): Promise<Slot> {
+    return this.updateSlot(id, data);
+  }
+
+  async listSlotsTraced(options: PaginationOptions = {}): Promise<any> {
+    return this.listSlots(options);
+  }
+
   createSlot(data: any): Slot {
     if (typeof data.professional !== 'string' || data.professional.trim().length === 0) {
         throw new SlotValidationError("professional must be a non-empty string");
     }
     if (data.endTime <= data.startTime) {
-        throw new SlotValidationError("reversed time ranges");
+        throw new SlotValidationError("endTime must be greater than startTime");
     }
     if (!Number.isFinite(data.startTime) || !Number.isFinite(data.endTime)) {
         throw new SlotValidationError("startTime and endTime must be finite numbers");

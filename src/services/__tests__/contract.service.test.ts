@@ -3,7 +3,8 @@ import { ContractService } from '../contract.service';
 // @ts-expect-error - Auto-fixed by script
 import { ContractProviderUnavailableError, ContractInvalidRequestError } from '../../errors/contractErrors';
 // @ts-expect-error - Auto-fixed by script
-import { RetryPolicy } from '../../utils/retry-policy';
+import { jest } from '@jest/globals';
+import { RetryPolicy } from '../../utils/retry-policy.js';
 
 describe('ContractService', () => {
   let contractService: ContractService;
@@ -14,7 +15,7 @@ describe('ContractService', () => {
     // Mock RetryPolicy to control retry behavior easily if needed,
     // or just use the real one and mock the action.
     // @ts-expect-error - Auto-fixed by script
-    _mockRetryPolicy = new RetryPolicy() as jest.Mocked<RetryPolicy>;
+    mockRetryPolicy = new RetryPolicy() as jest.Mocked<RetryPolicy>;
     // Actually, let's use the real RetryPolicy but with short delays for tests
     const fastRetryPolicy = new RetryPolicy({
       maxRetries: 3,
