@@ -34,6 +34,13 @@ export class EscrowPausedError extends Error {
   }
 }
 
+export class BundleNotTransferableError extends Error {
+  constructor(bundleId: string) {
+    super(`Bundle ${bundleId} is not transferable; resale listing is blocked.`);
+    this.name = "BundleNotTransferableError";
+  }
+}
+
 import { escrowMigrationState } from "./escrowMigrationState.js";
 
 /**

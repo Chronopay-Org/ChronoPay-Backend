@@ -6,7 +6,8 @@ import type {
   PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
-import { SchedulingService, SlotExpiredError } from "../../services/schedulingService.js";
+import { SchedulingService, SlotExpiredError, BundleNotTransferableError } from "../../services/schedulingService.js";
+import { BundleTransferabilityService } from "../../services/bundleTransferabilityService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
@@ -84,6 +85,10 @@ export class BookingIntentService {
     return new SchedulingService(this.slotRepository, this.bookingIntentRepository);
   }
 
+  private get bundleTransferabilityService(): BundleTransferabilityService {
+    return new BundleTransferabilityService(this.slotRepository);
+  }
+
   private captureCancellationPolicySnapshot(): CancellationPolicySnapshot {
     return this.cancellationPolicyService.snapshotCurrentPolicy();
   }
@@ -110,6 +115,21 @@ export class BookingIntentService {
           ERROR_CODES.BUNDLE_EXPIRED.code,
         );
       }
+    }
+
+    // Enforce bundle transferability — non-transferable bundles cannot be
+    // listed for resale unless the actor is an admin (override path).
+    try {
+      this.bundleTransferabilityService.assertBundleTransferable(slot, actor);
+    } catch (err) {
+      if (err instanceof BundleNotTransferableError) {
+        throw new BookingIntentError(
+          422,
+          err.message,
+          ERROR_CODES.BUNDLE_NOT_TRANSFERABLE.code,
+        );
+      }
+      throw err;
     }
 
     if (slot.professional === actor.userId) {
@@ -208,6 +228,17 @@ export class BookingIntentService {
       if (!slot) {
         failures.push({ date: occ.toISOString(), reason: "No available slot at this time" });
         continue;
+      }
+
+      // Enforce bundle transferability
+      try {
+        this.bundleTransferabilityService.assertBundleTransferable(slot, actor);
+      } catch (err) {
+        if (err instanceof BundleNotTransferableError) {
+          failures.push({ date: occ.toISOString(), reason: err.message });
+          continue;
+        }
+        throw err;
       }
 
       // Basic conflicts and checks similar to single-create
