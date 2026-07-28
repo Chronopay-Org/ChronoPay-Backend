@@ -9,8 +9,9 @@
  *
  * State machine (applied to the active booking intent for the slot):
  *
- *   pending ──Held──▶ confirmed ──┐
- *      │                            ├──Released──▶ cancelled (slot freed)
+ *   pending ──Held──▶ confirmed ──Captured──▶ firm
+ *      │                 │
+ *      │                 ├──Released──▶ cancelled (slot freed)
  *      ├──────────Released──────────┘
  *      ├──────────Refunded──────────▶ cancelled (slot freed)
  *      ├──────────Slashed───────────▶ expired    (slot freed, alert metric)
@@ -18,6 +19,10 @@
  *   confirmed ──Refunded──▶ cancelled (slot freed)
  *   confirmed ──Slashed────▶ expired   (slot freed, alert metric)
  *   confirmed ──Released──▶ cancelled (slot freed; service complete payout)
+ *
+ *   firm ──Released──▶ cancelled (slot freed; service complete payout)
+ *   firm ──Refunded──▶ cancelled (slot freed; dispute resolved)
+ *   firm ──Slashed────▶ expired   (slot freed, alert metric)
  *
  * Outcomes the projector may emit:
  *   - applied:               state transition applied successfully
@@ -42,6 +47,8 @@ import {
   SlotNotFoundError,
 } from "../services/schedulingService.js";
 import type { EscrowEvent } from "./escrowEventTypes.js";
+import { defaultAuditLogger } from "../services/auditLogger.js";
+import { defaultAuditLogger } from "../services/auditLogger.js";
 
 export type ProjectionResultKind =
   | "applied"
@@ -93,6 +100,7 @@ function noop(
  */
 const TARGET_BY_KIND: Record<EscrowEvent["kind"], BookingIntentStatus> = {
   Held: "confirmed",
+  Captured: "firm",
   Released: "cancelled",
   Refunded: "cancelled",
   Slashed: "expired",
@@ -113,6 +121,12 @@ const STATUS_TRANSITIONS: Record<
     { kind: "Slashed", next: "expired" },
   ],
   confirmed: [
+    { kind: "Captured", next: "firm" },
+    { kind: "Released", next: "cancelled" },
+    { kind: "Refunded", next: "cancelled" },
+    { kind: "Slashed", next: "expired" },
+  ],
+  firm: [
     { kind: "Released", next: "cancelled" },
     { kind: "Refunded", next: "cancelled" },
     { kind: "Slashed", next: "expired" },
@@ -167,6 +181,7 @@ export class EscrowStateProjector {
       return noop(
         "noop_slot_already",
         `intent ${intent.id} already ${target} (${event.txHash.toLowerCase()}:${event.eventIndex})`,
+        intent,
       );
     }
 
@@ -175,6 +190,7 @@ export class EscrowStateProjector {
       return noop(
         "noop_terminal_intent",
         `intent ${intent.id} is terminal (${intent.status}); cannot apply ${event.kind} → ${target}`,
+        intent,
       );
     }
 
@@ -184,6 +200,7 @@ export class EscrowStateProjector {
       return noop(
         "noop_illegal_transition",
         `(intent ${intent.id}) ${event.kind} → ${target} not legal from status ${intent.status}`,
+        intent,
       );
     }
 
@@ -228,6 +245,8 @@ export class EscrowStateProjector {
    * Apply a state transition idempotently. Updates the intent status and,
    * when applicable, releases the slot. Tolerates missing/already-released
    * slots so a stale projection cannot wedge the listener.
+   * 
+   * Emits audit events for firm booking escalation (Captured event).
    */
   private transition(
     intent: BookingIntentRecord,
@@ -236,8 +255,13 @@ export class EscrowStateProjector {
   ): ProjectionOutcome {
     const updated = this.bookingIntentRepository.updateStatus(intent.id, nextStatus);
 
+    // Emit firm booking receipt when payment is captured
+    if (event.kind === "Captured" && nextStatus === "firm") {
+      this.emitFirmBookingReceipt(updated, event);
+    }
+
     let slotFreed = false;
-    if (nextStatus !== "confirmed") {
+    if (nextStatus !== "confirmed" && nextStatus !== "firm") {
       slotFreed = this.tryReleaseSlot(event.slotId);
     }
 
@@ -247,6 +271,31 @@ export class EscrowStateProjector {
       reason: `applied ${event.kind} -> ${nextStatus}`,
       slotFreed,
     };
+  }
+
+  /**
+   * Emits audit event and firm booking receipt when a refundable hold
+   * is captured and escalated to firm booking.
+   */
+  private emitFirmBookingReceipt(intent: BookingIntentRecord, event: EscrowEvent): void {
+    defaultAuditLogger
+      .log("escrow.capture.firm_booking", {
+        context: {
+          intentId: intent.id,
+          slotId: intent.slotId,
+          customerId: intent.customerId,
+          professional: intent.professional,
+          txHash: event.txHash,
+          eventIndex: event.eventIndex,
+          ledgerSeq: event.ledgerSeq,
+          contractAddress: event.contractAddress,
+          amount: event.amount,
+          captureTime: event.closeTime,
+        },
+      }, { status: "success", resource: `booking:${intent.id}` })
+      .catch((err) => {
+        console.error("Failed to emit firm booking receipt:", err);
+      });
   }
 
   private tryReleaseSlot(slotId: string): boolean {

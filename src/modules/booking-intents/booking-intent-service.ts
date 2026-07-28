@@ -11,6 +11,7 @@ import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
 import { resolvePrice } from "../../services/pricingStrategy.js";
+import { CancellationPolicyService, RefundBreakdown } from "../../services/cancellationPolicy.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -251,6 +252,20 @@ export class BookingIntentService {
     this.schedulingService.releaseSlot(intent.slotId);
 
     return updated;
+  }
+
+  previewCancel(intentId: string, actor: AuthContext): RefundBreakdown {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+      throw new BookingIntentError(403, "You are not authorized to preview cancel this booking intent.");
+    }
+
+    const policy = new CancellationPolicyService();
+    return policy.calculateRefund(intent);
   }
 
   expireIntent(intentId: string): BookingIntentRecord {
