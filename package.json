@@ -13,12 +13,8 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --coverage",
     "migrate": "tsx src/scripts/migrate.ts",
-    "generate-openapi": "tsx src/scripts/generate-openapi.ts",
-    "check-log-schemas": "tsx src/scripts/check-log-schemas.ts",
-    "check-openapi-examples": "npm run generate-openapi -- openapi-spec.json && tsx src/scripts/check-openapi-examples.ts",
-    "test:pact": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand test/pact/verifyPact.test.ts",
-    "verify:pact": "tsx test/pact/verifyPact.ts",
-    "mutation:test": "tsx src/scripts/run-mutation-tests.ts"
+    "canary": "tsx scripts/canary.ts",
+    "generate-openapi": "tsx src/scripts/generate-openapi.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
