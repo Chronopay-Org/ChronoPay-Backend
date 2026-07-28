@@ -44,8 +44,7 @@ import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
-import graphqlRouter from "./routes/graphql.js";
-import webhookRouter, { registerWebhookRoutes } from "./routes/webhooks.js";
+import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 
 // Import modules

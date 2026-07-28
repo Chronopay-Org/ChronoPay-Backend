@@ -1,4 +1,3 @@
-import { jest } from "@jest/globals";
 import {
   InMemoryRecurrenceSeriesRepository,
 } from "../../models/recurrenceSeries.js";

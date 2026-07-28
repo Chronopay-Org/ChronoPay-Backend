@@ -3,8 +3,7 @@ import request from "supertest";
 import { createApp } from "../../app.js";
 import {
   getPayoutDlqStore,
-  resetPayoutDlqStore,
-  type 
+  resetPayoutDlqStore 
 } from "../../services/payoutDlqStore.js";
 
 const app = createApp({ enableTestRoutes: false, enableDocs: false });
