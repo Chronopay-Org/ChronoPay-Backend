@@ -46,8 +46,12 @@ import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
+import webhookRoutes from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 import fraudModelsRouter from "./routes/fraudModels.js";
+import redactionPolicyRouter from "./routes/redactionPolicy.js";
+import { gdprExportRouter } from "./routes/gdprExport.js";
+import reputationRouter from "./routes/reputation.js";
 import { requireAdminToken } from "./middleware/authorization.js";
 import { listReputationEvents } from "./services/reputationWriteAudit.js";
 import {
@@ -58,6 +62,8 @@ import {
 
 // Import modules
 import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
+import { InMemoryBookingIntentRepository } from "./modules/booking-intents/booking-intent-repository.js";
+import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
 import { ConflictPreviewService } from "./services/conflictPreviewService.js";
 import { RecurrenceError } from "./services/recurrenceService.js";
 import { ConflictPreviewBodySchema } from "./middleware/schemas.js";

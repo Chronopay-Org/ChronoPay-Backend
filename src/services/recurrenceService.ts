@@ -1,6 +1,7 @@
 // @ts-nocheck
 // rrule is a CJS module; import the default export and destructure for
 // compatibility with Jest's --experimental-vm-modules ESM test environment.
+import * as rruleLib from "rrule";
 import type { RRule as RRuleType } from "rrule";
 import { AuditLogger, defaultAuditLogger } from "./auditLogger.js";
 import { SupplierTimezoneContext } from "../modules/slots/slot-repository.js";
