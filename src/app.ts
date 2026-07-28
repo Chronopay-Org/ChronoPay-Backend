@@ -404,6 +404,9 @@ export function createApp(options: AppFactoryOptions = {}) {
   // 3c. GraphQL Route
   app.use("/api/v1/graphql", graphqlRouter);
 
+  // 3c. GraphQL Route
+  app.use("/api/v1/graphql", graphqlRouter);
+
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
   const bookingIntentService = options.bookingIntentService || new BookingIntentService(bookingIntentRepo, slotRepo);
