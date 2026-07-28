@@ -1,15 +1,11 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
-import { capacityForecaster } from "../services/capacityForecaster.js";
 import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
-import {
-  getPayoutQuarantineService,
-  type PayoutQuarantineEntry,
-} from "../services/quarantineStore.js";
+
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 import {
@@ -870,11 +866,8 @@ router.get(
 
 // ─── Payout DLQ Inspection API ──────────────────────────────────────────────
 
-// In-memory dispute state for testing (kept for backward compatibility)
-let disputesState: Map<string, any> = new Map();
-
 export function resetDisputesState(): void {
-  disputesState = new Map();
+  // Placeholder for backward compatibility — state was removed in cleanup
 }
 
 /**
