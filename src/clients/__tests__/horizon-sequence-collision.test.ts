@@ -1,7 +1,6 @@
 import { jest } from "@jest/globals";
 import {
   HorizonContractClient,
-  HorizonHttpError,
 } from "../horizon-contract-client.js";
 import { ContractService } from "../../services/contract.service.js";
 import { RetryPolicy } from "../../utils/retry-policy.js";
@@ -432,7 +431,7 @@ describe("concurrent submitters race simulation", () => {
 
   it("handles both submitters colliding and recovering concurrently", async () => {
     let submissionCount = 0;
-    mockFetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    mockFetch.mockImplementation(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const urlStr = typeof input === "string" ? input : input.toString();
 
       if (urlStr.includes("/accounts/")) {
@@ -532,7 +531,7 @@ describe("concurrent submitters race simulation", () => {
   it("proves convergence within bounded retries", async () => {
     const FAIL_COUNT = 4;
 
-    mockFetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    mockFetch.mockImplementation(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const urlStr = typeof input === "string" ? input : input.toString();
 
       if (urlStr.includes("/accounts/")) {
@@ -543,7 +542,7 @@ describe("concurrent submitters race simulation", () => {
         } as unknown as Response;
       }
 
-      const body = (init?.body as string) || "";
+      const body = (_init?.body as string) || "";
       const match = body.match(/XDR_(\d+)/);
       const retryNum = match ? parseInt(match[1], 10) : 0;
 
