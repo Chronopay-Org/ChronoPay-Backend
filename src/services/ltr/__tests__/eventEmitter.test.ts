@@ -8,7 +8,7 @@
  *   - Event structure validation
  */
 
-import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
+import { describe, it, expect, beforeEach } from "@jest/globals";
 import { SearchLtrEventEmitter, NoopLtrEventEmitter } from "../eventEmitter.js";
 import type {
   SearchImpressionEvent,

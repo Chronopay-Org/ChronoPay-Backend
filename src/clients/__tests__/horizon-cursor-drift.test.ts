@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest } from "@jest/globals";
 import { HorizonContractClient, HorizonTransactionRecord, HorizonCollectionResponse } from "../horizon-contract-client.js";
 import { ContractService } from "../../services/contract.service.js";

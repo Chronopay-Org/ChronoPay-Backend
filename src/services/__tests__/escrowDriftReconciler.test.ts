@@ -1,4 +1,4 @@
-import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import {  describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import {
   EscrowDriftReconciler,
   driftEvents,
@@ -9,7 +9,7 @@ import {
 import { EscrowReaderPool, readerPoolEvents } from "../escrowReaderPool.js";
 import type { IEscrowReader, SlotEscrowState, EscrowStateSnapshot, EscrowLedgerInfo } from "../escrowReader.js";
 import {
-  escrowDriftDetected,
+  
 } from "../../metrics.js";
 
 // ── Fake Escrow Reader ───────────────────────────────────────────────────────

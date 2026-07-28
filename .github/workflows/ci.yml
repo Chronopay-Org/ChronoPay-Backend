@@ -23,7 +23,7 @@ jobs:
       - name: Run ESLint
         run: npm run lint
       - name: Lint Prometheus Rules
-        run: docker run --rm -v ${{ github.workspace }}:/workspace prom/prometheus promtool check rules /workspace/ops/alerts/*.yml
+        run: docker run --rm --entrypoint sh -v ${{ github.workspace }}:/workspace prom/prometheus -c 'promtool check rules /workspace/ops/alerts/*.yml'
       - name: Validate Grafana Dashboards
         run: npx tsx scripts/validate-dashboards.ts
 
@@ -247,3 +247,11 @@ jobs:
         with:
           name: sbom
           path: sbom.spdx.json
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.5.0
+      - name: Sign Docker Image
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: cosign sign --key env://COSIGN_PRIVATE_KEY -y app:${{ github.sha }}
+

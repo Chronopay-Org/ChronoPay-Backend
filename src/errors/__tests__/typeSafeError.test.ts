@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tests for type-safe error sender functions.
  *

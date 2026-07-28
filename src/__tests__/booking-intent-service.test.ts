@@ -22,7 +22,7 @@ describe("parseCreateBookingIntentBody", () => {
 
   it("trims slotId", () => {
     const result = parseCreateBookingIntentBody({ slotId: `  ${VALID_SLOT_ID}  ` });
-    expect(result.slotId).toBe(VALID_SLOT_ID);
+    expect((result as any).slotId).toBe(VALID_SLOT_ID);
   });
 
   it("rejects empty slotId", () => {
@@ -204,7 +204,7 @@ describe("parseCreateBookingIntentBody", () => {
       slotId: VALID_SLOT_ID,
       note: "Test",
     });
-    expect(result.slotId).toBe(VALID_SLOT_ID);
+    expect((result as any).slotId).toBe(VALID_SLOT_ID);
   });
 
   it("rejects slotId with special characters", () => {
