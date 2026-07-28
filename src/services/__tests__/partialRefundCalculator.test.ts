@@ -1,5 +1,4 @@
 import { PartialRefundCalculator } from "../partialRefundCalculator.js";
-import { Currency } from "../../types/checkout.js";
 
 describe("PartialRefundCalculator", () => {
   it("should calculate refund with fixed rules only", () => {

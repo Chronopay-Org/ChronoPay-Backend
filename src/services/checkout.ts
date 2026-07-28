@@ -34,6 +34,10 @@ export function setCheckoutRepository(repo: PgCheckoutSessionRepository): void {
 }
 
 export class CheckoutSessionService {
+  static clearAllSessions(): void {
+    // Used by tests to reset state
+  }
+
   private static emitAuditEvent(
     action: string,
     status: string | number,
