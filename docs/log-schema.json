@@ -17,5 +17,58 @@
   "required": ["level","msg","requestId","route","latencyMs"],
   "if": {"properties":{"level":{"const":"error"}}},
   "then": {"required":["errCode"]},
-  "additionalProperties": false
+  "additionalProperties": false,
+  "registry": {
+    "http_request": {
+      "title": "HTTP request log",
+      "type": "object",
+      "properties": {
+        "api_call": {"type": "boolean"},
+        "method": {"type": "string"},
+        "endpoint": {"type": "string"},
+        "status_code": {"type": "number"},
+        "duration_ms": {"type": "number"}
+      },
+      "required": ["api_call", "method", "endpoint", "status_code", "duration_ms"],
+      "additionalProperties": true
+    },
+    "db_operation": {
+      "title": "Database operation log",
+      "type": "object",
+      "properties": {
+        "db_operation": {"type": "boolean"},
+        "operation": {"type": "string"},
+        "table": {"type": "string"},
+        "duration_ms": {"type": "number"}
+      },
+      "required": ["db_operation", "operation", "table", "duration_ms"],
+      "additionalProperties": true
+    },
+    "external_call": {
+      "title": "External service call log",
+      "type": "object",
+      "properties": {
+        "external_call": {"type": "boolean"},
+        "service_name": {"type": "string"},
+        "endpoint": {"type": "string"},
+        "success": {"type": "boolean"},
+        "duration_ms": {"type": "number"}
+      },
+      "required": ["external_call", "service_name", "endpoint", "success", "duration_ms"],
+      "additionalProperties": true
+    },
+    "security_event": {
+      "title": "Security event log",
+      "type": "object",
+      "properties": {
+        "security_event": {"type": "boolean"},
+        "event_type": {"type": "string"},
+        "user_id": {"type": "string"},
+        "success": {"type": "boolean"},
+        "timestamp": {"type": "string"}
+      },
+      "required": ["security_event", "event_type", "success", "timestamp"],
+      "additionalProperties": true
+    }
+  }
 }
