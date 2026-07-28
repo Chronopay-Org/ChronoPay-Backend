@@ -48,10 +48,7 @@ import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 
 // Import modules
-import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
-import { InMemoryBookingIntentRepository } from "./modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
-import { legalHoldRouter } from "./routes/legalHold.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
 
 export interface AppFactoryOptions {

@@ -17,7 +17,8 @@ import {
 import { isFeatureEnabled } from "../flags/index.js";
 
 
-
+export interface SearchResult {
+  slots: Slot[];
   data: Slot[];
   page: number;
   limit: number;

@@ -363,7 +363,7 @@ export class WalIntegrityChecker {
       byTimeline.set(tl, existing);
     }
 
-    let gapsDetected = 0;
+    let _gapsDetected = 0;
     for (const [tl, segs] of byTimeline.entries()) {
       const sorted = segs
         .slice()

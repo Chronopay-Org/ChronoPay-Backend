@@ -257,6 +257,12 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const opts: SessionListOptions = {};
+      return res.status(200).json({ success: true, sessions: [] });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  },
+);
 
 export const resetDisputesState = () => {
   disputes.clear();
@@ -1034,4 +1040,3 @@ router.post(
 );
 
 export default router;
-}
