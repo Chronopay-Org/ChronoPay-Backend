@@ -20,8 +20,21 @@ export interface SearchResult {
   cacheSource?: "hit" | "miss";
 }
 
+import { SearchQueryTracker } from "../cache/searchCacheWarmup.js";
+
 export class MarketplaceSearchService {
-  constructor(private pool: Pool) {}
+  constructor(
+    private pool: Pool,
+    private queryTracker?: SearchQueryTracker
+  ) {}
+
+  /**
+   * Set or update query tracker for recording search queries.
+   */
+  setQueryTracker(tracker: SearchQueryTracker): void {
+    this.queryTracker = tracker;
+  }
+
 
   /**
    * Build SQL WHERE clause and parameters for search filters.
@@ -128,8 +141,14 @@ export class MarketplaceSearchService {
       set: (key: string, value: SearchResult, ttlMs: number) => Promise<void>;
     }
   ): Promise<SearchResult> {
+    // Record search query in tracker if configured
+    if (this.queryTracker) {
+      this.queryTracker.recordQuery(query);
+    }
+
     // Generate cache key from query parameters
     const cacheKey = this.generateCacheKey(query);
+
 
     // Try to get from cache first
     if (cache) {
