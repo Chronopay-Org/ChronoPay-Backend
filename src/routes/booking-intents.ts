@@ -15,8 +15,6 @@ import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
-import { validateBody } from "../middleware/validation.js";
-import { CreateBookingIntentBodySchema } from "../middleware/schemas.js";
 import {
   BookingIntentService,
   BookingIntentError,

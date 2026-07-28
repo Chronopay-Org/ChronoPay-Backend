@@ -45,8 +45,6 @@ export async function queryWithSpan(
  * This wraps the pool.query method.
  */
 export function instrumentPool(pool: Pool): void {
-  const originalQuery = pool.query.bind(pool);
-
   pool.query = (async (
     text: string,
     params?: unknown[],

@@ -3,7 +3,6 @@ import { Request, Response, NextFunction } from "express";
 import fs from "node:fs";
 import { 
   requireApiKey, 
-  deriveApiKeyId, 
   matchEndpoint, 
   isEndpointAllowed
 } from "../apiKeyAuth.js";

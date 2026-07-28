@@ -1,7 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
-import { capacityForecaster } from "../services/capacityForecaster.js";
 
 const router = Router();
 

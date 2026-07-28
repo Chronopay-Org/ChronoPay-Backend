@@ -1,5 +1,5 @@
 import { BookingIntentService } from "../modules/booking-intents/booking-intent-service.js";
-import type { BookingIntentRecord, BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
+import type { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { CheckoutSessionService } from "../services/checkout.js";
 import { LegalHoldService } from "../services/legalHoldService.js";
 import {
@@ -159,7 +159,7 @@ export async function cleanupExpiryOnce(
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, _reject) => {
     if (signal.aborted) {
       return resolve();
     }
