@@ -1,0 +1,6 @@
+{
+  "queries": {
+    "dc89b82bc0e599b50b0728cce7183e20ec6113b85bb9a799f2482c3c6f131a49": "query GetUser { user { id } }",
+    "f2f25b2a0c64b58e77242e2b861215b22591602492f44bfb2229abff86a67a57": "mutation UpdateUser { updateUser { id } }"
+  }
+}
