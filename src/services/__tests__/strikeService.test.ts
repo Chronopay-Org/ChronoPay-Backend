@@ -1,4 +1,4 @@
-import { StrikeService, strikeService, DEFAULT_STRIKE_CONFIG } from "../strikeService.js";
+import { StrikeService, strikeService } from "../strikeService.js";
 
 describe("StrikeService Unit Tests", () => {
   let service: StrikeService;
@@ -85,7 +85,7 @@ describe("StrikeService Unit Tests", () => {
 
       const t0 = 1000;
 
-      const { strike } = await service.issueStrike({ buyerId, issuedAt: t0 });
+      await service.issueStrike({ buyerId, issuedAt: t0 });
 
       // Before decay boundary (t0 + 9999ms): Active
       expect(service.getActiveStrikes(buyerId, t0 + 9999).length).toBe(1);
@@ -133,8 +133,8 @@ describe("StrikeService Unit Tests", () => {
       service.updateConfig({ maxStrikesThreshold: 3 });
 
       const t0 = 1000;
-      const s1 = await service.issueStrike({ buyerId, issuedAt: t0 });
-      const s2 = await service.issueStrike({ buyerId, issuedAt: t0 + 100 });
+      await service.issueStrike({ buyerId, issuedAt: t0 });
+      await service.issueStrike({ buyerId, issuedAt: t0 + 100 });
       const s3 = await service.issueStrike({ buyerId, issuedAt: t0 + 200 });
 
       expect(s3.buyerSuspension.isSuspended).toBe(true);

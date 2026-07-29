@@ -417,7 +417,7 @@ function makeIntentWithPricing(overrides: Partial<BookingIntentRecord> = {}): Bo
     nowMs: Date.now(),
     activeBookings: 0,
     capacity: 1,
-    config: {},
+    config: { strategy: "fixed" },
   };
   return {
     id: "intent-escrow-1",
@@ -452,8 +452,8 @@ describe("Escrow Refund — supplier cancel before slot start (issue #439)", () 
 
   beforeEach(() => {
     slotRepo = new InMemorySlotRepository([
-      makeSlot({ id: "slot-escrow", bookable: false }),
-      makeSlot({ id: "slot-escrow-2", bookable: false }),
+      makeSlot({ id: "slot-escrow", bookable: true }),
+      makeSlot({ id: "slot-escrow-2", bookable: true }),
     ]);
     intentRepo = new InMemoryBookingIntentRepository();
     scheduler = new SchedulingService(slotRepo, intentRepo);
@@ -525,9 +525,9 @@ describe("Escrow Refund — supplier cancel before slot start (issue #439)", () 
 
   it("releases ALL reserved slots and the associated bundle", async () => {
     slotRepo = new InMemorySlotRepository([
-      makeSlot({ id: "s1", bookable: false }),
-      makeSlot({ id: "s2", bookable: false }),
-      makeSlot({ id: "s3", bookable: false }),
+      makeSlot({ id: "s1", bookable: true }),
+      makeSlot({ id: "s2", bookable: true }),
+      makeSlot({ id: "s3", bookable: true }),
     ]);
     scheduler = new SchedulingService(slotRepo, intentRepo);
     scheduler.reserveBundle("multi-slot-bundle", ["s1", "s2", "s3"]);

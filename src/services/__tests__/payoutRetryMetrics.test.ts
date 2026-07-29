@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from "@jest/globals";
 import {
   payoutRetryRollup,
   resolveRetryOutcome,
-  type PayoutRetryOutcome,
 } from "../../scheduler/payoutRetryMetrics.js";
 
 // ─── Suite ────────────────────────────────────────────────────────────────────
@@ -114,42 +113,42 @@ describe("payoutRetryRollup", () => {
 describe("resolveRetryOutcome", () => {
   it("returns 'exhausted' when isExhausted=true, regardless of cap vs ceiling", () => {
     // Even if cap < ceiling, exhausted takes priority
-    expect(resolveRetryOutcome(1_000, 30_000, true)).toBe<PayoutRetryOutcome>("exhausted");
-    expect(resolveRetryOutcome(30_000, 30_000, true)).toBe<PayoutRetryOutcome>("exhausted");
+    expect(resolveRetryOutcome(1_000, 30_000, true)).toBe("exhausted");
+    expect(resolveRetryOutcome(30_000, 30_000, true)).toBe("exhausted");
   });
 
   it("returns 'ceiling_hit' when cap equals the ceiling and not exhausted", () => {
-    expect(resolveRetryOutcome(30_000, 30_000, false)).toBe<PayoutRetryOutcome>("ceiling_hit");
+    expect(resolveRetryOutcome(30_000, 30_000, false)).toBe("ceiling_hit");
   });
 
   it("returns 'scheduled' when cap is below ceiling and not exhausted", () => {
-    expect(resolveRetryOutcome(4_000, 30_000, false)).toBe<PayoutRetryOutcome>("scheduled");
-    expect(resolveRetryOutcome(0, 30_000, false)).toBe<PayoutRetryOutcome>("scheduled");
+    expect(resolveRetryOutcome(4_000, 30_000, false)).toBe("scheduled");
+    expect(resolveRetryOutcome(0, 30_000, false)).toBe("scheduled");
   });
 
   it("returns 'ceiling_hit' when ceiling < base and cap is forced to ceiling from attempt 0", () => {
     // ceiling=500, cap=500 (clamped) → ceiling_hit
-    expect(resolveRetryOutcome(500, 500, false)).toBe<PayoutRetryOutcome>("ceiling_hit");
+    expect(resolveRetryOutcome(500, 500, false)).toBe("ceiling_hit");
   });
 
   it("'exhausted' is mutually exclusive with 'ceiling_hit'", () => {
     const outcome = resolveRetryOutcome(30_000, 30_000, true);
-    expect(outcome).not.toBe<PayoutRetryOutcome>("ceiling_hit");
+    expect(outcome).not.toBe("ceiling_hit");
   });
 
   it("'scheduled' indicates the exponential window has not reached the ceiling", () => {
     // cap=1000 < ceiling=30_000 → still growing, not clamped
     const outcome = resolveRetryOutcome(1_000, 30_000, false);
-    expect(outcome).toBe<PayoutRetryOutcome>("scheduled");
+    expect(outcome).toBe("scheduled");
   });
 
   describe("edge cases", () => {
     it("cap=0, ceiling=1, not exhausted → scheduled (cap < ceiling)", () => {
-      expect(resolveRetryOutcome(0, 1, false)).toBe<PayoutRetryOutcome>("scheduled");
+      expect(resolveRetryOutcome(0, 1, false)).toBe("scheduled");
     });
 
     it("cap=1, ceiling=1, not exhausted → ceiling_hit", () => {
-      expect(resolveRetryOutcome(1, 1, false)).toBe<PayoutRetryOutcome>("ceiling_hit");
+      expect(resolveRetryOutcome(1, 1, false)).toBe("ceiling_hit");
     });
   });
 });

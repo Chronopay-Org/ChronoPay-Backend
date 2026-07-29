@@ -63,6 +63,19 @@ export interface RefundSettlementRecord {
   failureReason?: string;
 }
 
+export interface EscrowRefundLedgerEntry {
+  refundRequestId: string;
+  bookingIntentId: string;
+  escrowHoldId: string;
+  buyerId: string;
+  supplierId: string;
+  grossAmountCents: number;
+  platformFeeReversedCents: number;
+  prepaidTaxReversedCents: number;
+  netRefundCents: number;
+  currency: string;
+}
+
 export const _settlements = new Map<string, Settlement>();
 export const _refundSettlements = new Map<string, RefundSettlementRecord>();
 export const settlementEvents = new EventEmitter();

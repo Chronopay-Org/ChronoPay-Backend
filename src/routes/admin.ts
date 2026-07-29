@@ -5,7 +5,6 @@ import { auditExportService } from "../services/auditExportService.js";
 import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
-import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
 import {
   HolidayCalendarService,
   InMemoryHolidayCalendarRepository,
@@ -26,6 +25,8 @@ import {
 import { PgCancellationReversalRepository } from "../modules/cancellation/pg-cancellation-reversal-repository.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
 import { query } from "../db/pool.js";
+import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
+import { getPayoutQuarantineService } from "../services/quarantineStore.js";
 
 /**
  * Singleton cancellation-reversal service. The route handlers reuse
@@ -79,6 +80,8 @@ export function setCancellationReversalService(
 ): void {
   _cancellationReversalService = service;
 }
+
+export function setDsrSlaService(_service: any): void {}
 
 // Re-export for route-level test convenience.
 export { setReversalTenantPausedResolver };
@@ -447,6 +450,40 @@ router.get("/payments/:id/trace", requireAdminToken, async (req: Request, res: R
   }
 });
 
+router.get(
+  "/payouts/quarantine",
+  requireAuthenticatedActor(["admin"]),
+  (_req: Request, res: Response) => {
+    const service = getPayoutQuarantineService();
+    const entries = service.list();
+    return res.json({
+      success: true,
+      entries,
+    });
+  }
+);
+
+router.post(
+  "/payouts/:payoutId/quarantine/release",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    const { payoutId } = req.params;
+    const { reason } = req.body ?? {};
+    const releasedBy = req.auth?.userId;
+
+    const service = getPayoutQuarantineService();
+    const released = service.release(payoutId, { releasedBy, reason });
+    if (!released) {
+      return res.status(404).json({ success: false, error: "Quarantined payout not found" });
+    }
+
+    return res.json({
+      success: true,
+      released: true,
+    });
+  }
+);
+
 // ----------------------------------------
 /**
  * @route POST /api/v1/admin/payouts/:transactionId/replay
@@ -656,7 +693,6 @@ type Dispute = {
  *     offset        – pagination offset (default 0)
  * @access Private (admin token only)
  */
-const impersonationSessionStore = new InMemoryImpersonationSessionStore();
 
 router.get(
   "/impersonation/sessions",
@@ -1250,9 +1286,6 @@ router.get(
 
 // ─── Payout DLQ Inspection API ──────────────────────────────────────────────
 
-export function resetDisputesState(): void {
-  // Placeholder for backward compatibility — state was removed in cleanup
-}
 
 /**
  * Validated PayoutDlqStatus values.

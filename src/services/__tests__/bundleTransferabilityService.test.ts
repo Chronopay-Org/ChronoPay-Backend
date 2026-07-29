@@ -14,7 +14,6 @@
  */
 
 import {
-  SchedulingService,
   BundleNotTransferableError,
 } from "../schedulingService.js";
 import {

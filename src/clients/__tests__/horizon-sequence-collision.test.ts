@@ -269,9 +269,8 @@ describe("sendTransactionWithSequenceRecovery", () => {
     // Only capture setTimeout calls that look like recovery delays (not withTimeout abort timers)
     // withTimeout uses a large timeout value (30s+), recovery delays are small (< 1000)
     const origSetTimeout = global.setTimeout.bind(global);
-    // @ts-expect-error - Spy replaces setTimeout
     // withTimeout uses 7000ms; recovery backoff delays are small (< 1000)
-    const spy = jest.spyOn(global, "setTimeout").mockImplementation((fn: any, delay?: number, ...args: any[]) => {
+    const spy = (jest.spyOn(global, "setTimeout") as any).mockImplementation((fn: any, delay?: number, ...args: any[]) => {
       if (delay !== undefined && delay > 0 && delay < 5000) {
         delays.push(delay);
       }
@@ -315,8 +314,7 @@ describe("sendTransactionWithSequenceRecovery", () => {
     const delays: number[] = [];
 
     const origSetTimeout = global.setTimeout.bind(global);
-    // @ts-expect-error - Spy replaces setTimeout
-    const spy = jest.spyOn(global, "setTimeout").mockImplementation((fn: any, delay?: number, ...args: any[]) => {
+    const spy = (jest.spyOn(global, "setTimeout") as any).mockImplementation((fn: any, delay?: number, ...args: any[]) => {
       if (delay !== undefined && delay > 0 && delay < 50000) {
         delays.push(delay);
       }
@@ -361,9 +359,8 @@ describe("sendTransactionWithSequenceRecovery", () => {
     const delays: number[] = [];
 
     const origSetTimeout = global.setTimeout.bind(global);
-    // @ts-expect-error - Spy replaces setTimeout
     // Jitter values are < 200 for initialDelayMs:100; withTimeout is 7000ms
-    const spy = jest.spyOn(global, "setTimeout").mockImplementation((fn: any, delay?: number, ...args: any[]) => {
+    const spy = (jest.spyOn(global, "setTimeout") as any).mockImplementation((fn: any, delay?: number, ...args: any[]) => {
       if (delay !== undefined && delay > 0 && delay < 5000) {
         delays.push(delay);
       }
@@ -431,7 +428,7 @@ describe("concurrent submitters race simulation", () => {
 
   it("handles both submitters colliding and recovering concurrently", async () => {
     let submissionCount = 0;
-    mockFetch.mockImplementation(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    (mockFetch as jest.Mock<any>).mockImplementation(async (input: any, _init?: any) => {
       const urlStr = typeof input === "string" ? input : input.toString();
 
       if (urlStr.includes("/accounts/")) {
@@ -481,7 +478,7 @@ describe("concurrent submitters race simulation", () => {
   });
 
   it("handles all submitters exhausting retries", async () => {
-    mockFetch.mockImplementation(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    (mockFetch as jest.Mock<any>).mockImplementation(async (input: any, _init?: any) => {
       const urlStr = typeof input === "string" ? input : input.toString();
 
       if (urlStr.includes("/accounts/")) {
@@ -531,7 +528,7 @@ describe("concurrent submitters race simulation", () => {
   it("proves convergence within bounded retries", async () => {
     const FAIL_COUNT = 4;
 
-    mockFetch.mockImplementation(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    (mockFetch as jest.Mock<any>).mockImplementation(async (input: any, _init?: any) => {
       const urlStr = typeof input === "string" ? input : input.toString();
 
       if (urlStr.includes("/accounts/")) {
@@ -692,7 +689,7 @@ describe("edge cases", () => {
 
   it("propagates network error during getAccountSequence in recovery", async () => {
     mockJsonRpcError(400, JSON.stringify({ detail: "tx_bad_seq" }));
-    mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
+    (mockFetch as jest.Mock<any>).mockRejectedValueOnce(new Error("ECONNRESET"));
 
     const client = makeClient();
     await expect(
@@ -724,7 +721,7 @@ describe("edge cases", () => {
   });
 
   it("does not treat network errors as sequence collisions during submission", async () => {
-    mockFetch.mockRejectedValueOnce(new Error("ETIMEDOUT"));
+    (mockFetch as jest.Mock<any>).mockRejectedValueOnce(new Error("ETIMEDOUT"));
 
     const client = makeClient();
     await expect(
@@ -743,8 +740,7 @@ describe("edge cases", () => {
     const delays: number[] = [];
 
     const origSetTimeout = global.setTimeout.bind(global);
-    // @ts-expect-error - Spy replaces setTimeout
-    const spy = jest.spyOn(global, "setTimeout").mockImplementation((fn: any, delay?: number, ...args: any[]) => {
+    const spy = (jest.spyOn(global, "setTimeout") as any).mockImplementation((fn: any, delay?: number, ...args: any[]) => {
       if (delay !== undefined && delay > 0 && delay < 5000) {
         delays.push(delay);
       }

@@ -33,7 +33,7 @@ export class DisputeArbitrationQueueService {
     const queueItem: DisputeQueueItem = {
       ...item,
       disputeId,
-      score: this.computeScore({ ...item, disputeId, score: undefined }, item.queuedAt),
+      score: this.computeScore(item, item.queuedAt),
     };
     this.items.push(queueItem);
     return queueItem;

@@ -161,7 +161,7 @@ describe("E2E Dispute Smoke Suite", () => {
   });
 
   it("should expose the dispute queue and dashboard ordering", async () => {
-    const first = await request(app)
+    await request(app)
       .post("/api/v1/admin/disputes")
       .set(adminHeaders)
       .send({ buyerId: "b1", supplierId: "s1", amount: 100, buyerTier: "bronze" });

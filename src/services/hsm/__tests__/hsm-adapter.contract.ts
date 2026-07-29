@@ -27,8 +27,7 @@
 
 import { describe, it, expect } from "@jest/globals";
 import type { IHsmAdapter } from "../hsm-adapter.interface.js";
-import { HsmError } from "../types.js";
-import type { SigningAlgorithm } from "../types.js";
+import { HsmError, type SigningAlgorithm } from "../types.js";
 
 /** Minimal factory spec consumed by the contract suite. */
 export interface AdapterFactory {

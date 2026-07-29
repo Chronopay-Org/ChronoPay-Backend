@@ -1,6 +1,7 @@
 // @ts-nocheck
-import type { BookingIntentRecord, BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
+import type { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import type { SlotRepository } from "../modules/slots/slot-repository.js";
+import { GraceWindowService, getGraceWindowService } from "./graceWindowService.js";
 import { EventEmitter } from "node:events";
 import crypto from "crypto";
 
@@ -65,6 +66,129 @@ export class BundleReservationError extends Error {
     super(`Failed to reserve bundle ${bundleId}: ${cause.message}`);
     this.name = "BundleReservationError";
   }
+}
+
+export class BundleNotTransferableError extends Error {
+  constructor(readonly bundleId: string) {
+    super(`Bundle ${bundleId} is not transferable`);
+    this.name = "BundleNotTransferableError";
+  }
+}
+
+export class CancellationAfterSlotStartError extends Error {
+  constructor(
+    readonly bookingIntentId: string,
+    readonly slotStartTime: number,
+    readonly cancelledAt: number,
+  ) {
+    super(
+      `Cannot cancel booking intent ${bookingIntentId} after slot start time ${new Date(slotStartTime).toISOString()}`,
+    );
+    this.name = "CancellationAfterSlotStartError";
+  }
+}
+
+export class EscrowRefundLedgerIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EscrowRefundLedgerIntegrityError";
+  }
+}
+
+export class ImpossibleRescheduleError extends Error {
+  constructor(
+    readonly bookingId: string,
+    readonly reason: string = "No valid candidate schedules found preserving required leg offsets",
+  ) {
+    super(`Impossible reschedule for booking ${bookingId}: ${reason}`);
+    this.name = "ImpossibleRescheduleError";
+  }
+}
+
+export class InvalidRescheduleRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidRescheduleRequestError";
+  }
+}
+
+export const sagaEvents = new EventEmitter();
+
+export interface MultiLegBookingLeg {
+  legId: string;
+  slotId: string;
+  professional: string;
+  startTime: number;
+  endTime: number;
+  offsetMs?: number;
+}
+
+export interface MultiLegBooking {
+  bookingId: string;
+  buyerId: string;
+  tenantId?: string;
+  legs: MultiLegBookingLeg[];
+  sagaId?: string;
+}
+
+export interface RescheduleLegOverride {
+  legId: string;
+  offsetOverrideMs?: number;
+  newSlotId?: string;
+  skipReschedule?: boolean;
+}
+
+export interface RescheduleOptions {
+  bookingId: string;
+  buyerId: string;
+  tenantId?: string;
+  targetAnchorStartTimeMs?: number;
+  searchWindow?: {
+    startMs: number;
+    endMs: number;
+  };
+  legOverrides?: Record<string, RescheduleLegOverride> | RescheduleLegOverride[];
+  maxOptions?: number;
+  searchStepMs?: number;
+}
+
+export interface CandidateLegSchedule {
+  legId: string;
+  currentSlotId: string;
+  newSlotId: string;
+  professional: string;
+  currentStartTime: number;
+  newStartTime: number;
+  newEndTime: number;
+  durationMs: number;
+  offsetMs: number;
+  isOverridden: boolean;
+  isPartialKept: boolean;
+}
+
+export interface RescheduleCandidateOption {
+  optionId: string;
+  anchorStartTimeMs: number;
+  legs: CandidateLegSchedule[];
+  totalDisruptionMs: number;
+  disruptionScore: number;
+  isFullyAvailable: boolean;
+}
+
+export interface ConfirmRescheduleRequest {
+  bookingId: string;
+  buyerId: string;
+  optionId: string;
+  candidateOption: RescheduleCandidateOption;
+  multiLegBooking: MultiLegBooking;
+}
+
+export interface ConfirmRescheduleResult {
+  bookingId: string;
+  sagaExecutionId: string;
+  status: "reexecuted" | "confirmed";
+  updatedLegs: CandidateLegSchedule[];
+  confirmedAtMs: number;
 }
 
 import { escrowMigrationState } from "./escrowMigrationState.js";
@@ -155,6 +279,8 @@ export class SchedulingService {
   private refundLedgerByRequestId = new Map<string, EscrowRefundLedgerEntry>();
   private refundLedgerByIntentId = new Map<string, EscrowRefundLedgerEntry[]>();
 
+  private readonly graceWindowService: GraceWindowService;
+
   constructor(
     private readonly slotRepository: SlotRepository,
     private readonly bookingIntentRepository: BookingIntentRepository,
@@ -162,6 +288,18 @@ export class SchedulingService {
   ) {
     // Accept an injected instance (for testing) or fall back to the singleton.
     this.graceWindowService = graceWindowService ?? getGraceWindowService();
+  }
+
+  resolveGraceWindow(slotId: string): number {
+    const slot = this.slotRepository.findById(slotId);
+    return this.graceWindowService.resolveGraceWindow(slot?.category);
+  }
+
+  noShowDeadlineMs(slotId: string): number {
+    const slot = this.slotRepository.findById(slotId);
+    if (!slot) throw new SlotNotFoundError(slotId);
+    const windowSec = this.resolveGraceWindow(slotId);
+    return slot.startTime + windowSec * 1000;
   }
 
   // ── Reservation ───────────────────────────────────────────────────────────
@@ -453,5 +591,299 @@ export class SchedulingService {
    */
   refundLedgerSize(): number {
     return this.refundLedger.length;
+  }
+
+  // ── Multi-Leg Reschedule Engine ──────────────────────────────────────────
+
+  /**
+   * Plans candidate reschedule options for a multi-leg booking.
+   * By default, preserves relative offsets between legs unless explicit
+   * per-leg overrides (offsetOverrideMs, newSlotId, or skipReschedule) are provided.
+   *
+   * @param booking Multi-leg booking containing leg details and owner information.
+   * @param options Reschedule options including anchor start time, search window, per-leg overrides, and maxOptions.
+   * @returns N candidate reschedule options sorted by fewest disruptions (totalDisruptionMs ascending).
+   */
+  planMultiLegReschedule(
+    booking: MultiLegBooking,
+    options: RescheduleOptions,
+  ): RescheduleCandidateOption[] {
+    const tenantId = options.tenantId ?? booking.tenantId;
+    if (tenantId && this.pausedTenants.has(tenantId)) {
+      throw new TenantPausedError(tenantId);
+    }
+
+    if (!booking || !booking.legs || booking.legs.length === 0) {
+      throw new InvalidRescheduleRequestError("Booking must contain at least one leg");
+    }
+
+    if (booking.buyerId && options.buyerId && booking.buyerId !== options.buyerId) {
+      throw new InvalidRescheduleRequestError(
+        `Buyer ${options.buyerId} is not authorized to reschedule booking owned by ${booking.buyerId}`,
+      );
+    }
+
+    const sortedLegs = [...booking.legs].sort((a, b) => a.startTime - b.startTime);
+    const anchorLeg = sortedLegs[0];
+    const leg0StartTime = anchorLeg.startTime;
+
+    const legOverridesMap = new Map<string, RescheduleLegOverride>();
+    if (options.legOverrides) {
+      if (Array.isArray(options.legOverrides)) {
+        for (const override of options.legOverrides) {
+          legOverridesMap.set(override.legId, override);
+        }
+      } else if (typeof options.legOverrides === "object") {
+        for (const [legId, override] of Object.entries(options.legOverrides)) {
+          legOverridesMap.set(legId, override);
+        }
+      }
+    }
+
+    const legConfigs = sortedLegs.map((leg, index) => {
+      const override = legOverridesMap.get(leg.legId);
+      const defaultOffset = leg.offsetMs ?? (leg.startTime - leg0StartTime);
+      const offsetMs =
+        override?.offsetOverrideMs !== undefined ? override.offsetOverrideMs : defaultOffset;
+      const durationMs = leg.endTime - leg.startTime;
+      return {
+        leg,
+        index,
+        offsetMs,
+        durationMs,
+        override,
+        isOverridden:
+          override?.offsetOverrideMs !== undefined || override?.newSlotId !== undefined,
+        skipReschedule: override?.skipReschedule ?? false,
+      };
+    });
+
+    const maxOptions = options.maxOptions ?? 3;
+    const stepMs = options.searchStepMs ?? 30 * 60 * 1000; // 30 minutes step default
+
+    const candidateAnchors: number[] = [];
+
+    if (options.targetAnchorStartTimeMs !== undefined) {
+      const target = options.targetAnchorStartTimeMs;
+      candidateAnchors.push(target);
+
+      const searchStart = options.searchWindow?.startMs ?? target - 2 * 3600_000;
+      const searchEnd = options.searchWindow?.endMs ?? target + 2 * 3600_000;
+
+      for (let t = searchStart; t <= searchEnd; t += stepMs) {
+        if (t !== target) {
+          candidateAnchors.push(t);
+        }
+      }
+    } else if (options.searchWindow) {
+      for (let t = options.searchWindow.startMs; t <= options.searchWindow.endMs; t += stepMs) {
+        candidateAnchors.push(t);
+      }
+    } else {
+      const base = leg0StartTime;
+      candidateAnchors.push(base);
+      for (let offset = stepMs; offset <= 4 * 3600_000; offset += stepMs) {
+        candidateAnchors.push(base + offset);
+        candidateAnchors.push(base - offset);
+      }
+    }
+
+    const candidateOptions: RescheduleCandidateOption[] = [];
+    const allSlots = this.slotRepository.list();
+
+    for (const anchorStartMs of candidateAnchors) {
+      if (anchorStartMs <= 0) continue;
+
+      let validForThisAnchor = true;
+      const proposedLegs: CandidateLegSchedule[] = [];
+      let optionTotalDisruption = 0;
+
+      for (const config of legConfigs) {
+        const { leg, offsetMs, durationMs, override, isOverridden, skipReschedule } = config;
+
+        let newStart: number;
+        let newEnd: number;
+        let candidateSlotId: string | undefined;
+
+        if (skipReschedule) {
+          newStart = leg.startTime;
+          newEnd = leg.endTime;
+          candidateSlotId = leg.slotId;
+        } else {
+          newStart = anchorStartMs + offsetMs;
+          newEnd = newStart + durationMs;
+
+          if (override?.newSlotId) {
+            const specificSlot = allSlots.find((s) => s.id === override.newSlotId);
+            if (
+              specificSlot &&
+              (specificSlot.bookable || specificSlot.id === leg.slotId) &&
+              specificSlot.professional === leg.professional &&
+              specificSlot.startTime === newStart &&
+              specificSlot.endTime === newEnd
+            ) {
+              candidateSlotId = specificSlot.id;
+            } else {
+              validForThisAnchor = false;
+              break;
+            }
+          } else {
+            const matchingSlot = allSlots.find(
+              (s) =>
+                s.professional === leg.professional &&
+                (s.bookable || s.id === leg.slotId) &&
+                s.startTime === newStart &&
+                s.endTime === newEnd,
+            );
+
+            if (matchingSlot) {
+              candidateSlotId = matchingSlot.id;
+            } else {
+              const flexSlot = allSlots.find(
+                (s) =>
+                  s.professional === leg.professional &&
+                  (s.bookable || s.id === leg.slotId) &&
+                  s.startTime <= newStart &&
+                  s.endTime >= newEnd,
+              );
+              if (flexSlot) {
+                candidateSlotId = flexSlot.id;
+              } else {
+                validForThisAnchor = false;
+                break;
+              }
+            }
+          }
+        }
+
+        const disruption = Math.abs(newStart - leg.startTime);
+        optionTotalDisruption += disruption;
+
+        proposedLegs.push({
+          legId: leg.legId,
+          currentSlotId: leg.slotId,
+          newSlotId: candidateSlotId!,
+          professional: leg.professional,
+          currentStartTime: leg.startTime,
+          newStartTime: newStart,
+          newEndTime: newEnd,
+          durationMs,
+          offsetMs,
+          isOverridden,
+          isPartialKept: skipReschedule,
+        });
+      }
+
+      if (validForThisAnchor && proposedLegs.length === legConfigs.length) {
+        const optionId = `opt_${crypto.randomUUID()}`;
+        candidateOptions.push({
+          optionId,
+          anchorStartTimeMs: anchorStartMs,
+          legs: proposedLegs,
+          totalDisruptionMs: optionTotalDisruption,
+          disruptionScore: optionTotalDisruption,
+          isFullyAvailable: true,
+        });
+      }
+    }
+
+    if (candidateOptions.length === 0) {
+      throw new ImpossibleRescheduleError(
+        booking.bookingId,
+        "No candidate slot combinations available preserving requested leg offsets",
+      );
+    }
+
+    // Sort candidate options by disruption score ascending (fewest disruptions first)
+    candidateOptions.sort((a, b) => a.disruptionScore - b.disruptionScore);
+
+    return candidateOptions.slice(0, maxOptions);
+  }
+
+  /**
+   * Confirms a chosen reschedule candidate option.
+   * Releases original slots and reserves new candidate slots atomically.
+   * Triggers saga re-execution event.
+   *
+   * @param request Confirmation request including booking, buyer ID, and chosen candidate option.
+   * @returns ConfirmRescheduleResult with status and saga execution details.
+   */
+  confirmMultiLegReschedule(request: ConfirmRescheduleRequest): ConfirmRescheduleResult {
+    const { bookingId, buyerId, candidateOption, multiLegBooking } = request;
+
+    const tenantId = multiLegBooking.tenantId;
+    if (tenantId && this.pausedTenants.has(tenantId)) {
+      throw new TenantPausedError(tenantId);
+    }
+
+    if (multiLegBooking.buyerId && buyerId && multiLegBooking.buyerId !== buyerId) {
+      throw new InvalidRescheduleRequestError(
+        `Buyer ${buyerId} is not authorized to confirm reschedule for booking owned by ${multiLegBooking.buyerId}`,
+      );
+    }
+
+    if (!candidateOption || !candidateOption.legs || candidateOption.legs.length === 0) {
+      throw new InvalidRescheduleRequestError("Invalid candidate option provided for confirmation");
+    }
+
+    const releasedSlotIds: string[] = [];
+    const reservedSlotIds: string[] = [];
+
+    try {
+      // Step 1: Release old slots for legs that are being rescheduled
+      for (const leg of candidateOption.legs) {
+        if (!leg.isPartialKept && leg.currentSlotId !== leg.newSlotId) {
+          try {
+            this.releaseSlot(leg.currentSlotId);
+            releasedSlotIds.push(leg.currentSlotId);
+          } catch {
+            // Ignore if slot was not found or already free
+          }
+        }
+      }
+
+      // Step 2: Reserve new candidate slots
+      for (const leg of candidateOption.legs) {
+        if (!leg.isPartialKept && leg.currentSlotId !== leg.newSlotId) {
+          this.reserveSlot(leg.newSlotId);
+          reservedSlotIds.push(leg.newSlotId);
+        }
+      }
+    } catch (error) {
+      // Rollback on failure: release newly reserved slots, re-reserve released old slots
+      for (const slotId of reservedSlotIds) {
+        try {
+          this.releaseSlot(slotId);
+        } catch {}
+      }
+      for (const slotId of releasedSlotIds) {
+        try {
+          this.reserveSlot(slotId);
+        } catch {}
+      }
+      throw new Error(
+        `Failed to confirm reschedule for booking ${bookingId}: ${(error as Error).message}`,
+      );
+    }
+
+    const sagaExecutionId = `saga_${crypto.randomUUID()}`;
+    const confirmedAtMs = Date.now();
+
+    sagaEvents.emit("saga.reexecute", {
+      bookingId,
+      buyerId,
+      sagaExecutionId,
+      optionId: candidateOption.optionId,
+      updatedLegs: candidateOption.legs,
+      confirmedAtMs,
+    });
+
+    return {
+      bookingId,
+      sagaExecutionId,
+      status: "reexecuted",
+      updatedLegs: candidateOption.legs,
+      confirmedAtMs,
+    };
   }
 }

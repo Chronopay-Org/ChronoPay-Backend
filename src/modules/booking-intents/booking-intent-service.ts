@@ -7,7 +7,7 @@ import type {
   PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
-import { SchedulingService, SlotExpiredError, BundleNotTransferableError } from "../../services/schedulingService.js";
+import { SchedulingService, BundleNotTransferableError } from "../../services/schedulingService.js";
 import { BundleTransferabilityService } from "../../services/bundleTransferabilityService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
@@ -211,6 +211,11 @@ export class BookingIntentService {
 
     const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
     const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
+
+    const bookingType = input.bookingType ?? "standard";
+    const status = bookingType === "refundable_hold" ? "hold_placed" : "pending";
+    const holdPlacedAt = bookingType === "refundable_hold" ? this.now() : undefined;
+    const holdUntilMs = bookingType === "refundable_hold" ? input.holdDeadlineMs : undefined;
 
     const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
@@ -420,6 +425,32 @@ export class BookingIntentService {
     return updated;
   }
 
+  private resolveIntentPrice(intent: BookingIntentRecord): number {
+    if (intent.pricingSnapshot) {
+      return intent.pricingSnapshot.resolvedPrice;
+    }
+    return 0;
+  }
+
+  autoRefundHold(intentId: string): BookingIntentRecord {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+    const refundAmount = this.resolveIntentPrice(intent);
+    const updated = this.bookingIntentRepository.update(intentId, {
+      status: "hold_refunded",
+      refundedAt: this.now(),
+      refundMetadata: {
+        refundedAt: this.now(),
+        refundedAmountCents: refundAmount,
+        refundReason: "hold_auto_refund",
+      },
+    });
+    this.schedulingService.releaseSlot(intent.slotId);
+    return updated;
+  }
+
   createIntentTraced(
     input: CreateBookingIntentInput,
     actor: AuthContext,
@@ -447,6 +478,23 @@ export function parseCreateBookingIntentBody(
     bookingType?: unknown;
     holdDeadlineMs?: unknown;
   };
+
+  let parsedBookingType: BookingType | undefined;
+  if (bookingType !== undefined) {
+    if (bookingType === "standard" || bookingType === "refundable_hold") {
+      parsedBookingType = bookingType;
+    } else {
+      throw new BookingIntentError(400, "Invalid bookingType.");
+    }
+  }
+
+  let parsedHoldDeadlineMs: number | undefined;
+  if (holdDeadlineMs !== undefined) {
+    if (typeof holdDeadlineMs !== "number" || Number.isNaN(holdDeadlineMs)) {
+      throw new BookingIntentError(400, "holdDeadlineMs must be a valid number.");
+    }
+    parsedHoldDeadlineMs = holdDeadlineMs;
+  }
 
   // If an RRULE is provided, treat this as a recurring booking request
   if (rrule !== undefined) {
