@@ -69,4 +69,31 @@ const server = app.listen(PORT, () => {
   console.log(`ChronoPay API listening on http://localhost:${PORT}`);
 });
 
+let _serverInstance: any = server;
+let _isShuttingDown = false;
+
+export function setServer(srv: any): void {
+  _serverInstance = srv;
+}
+
+export function resetShutdownFlag(): void {
+  _isShuttingDown = false;
+}
+
+export async function gracefulShutdown(): Promise<void> {
+  if (_isShuttingDown) return;
+  _isShuttingDown = true;
+  if (_serverInstance) {
+    await new Promise<void>((resolve) => {
+      try {
+        _serverInstance.close(() => resolve());
+      } catch {
+        resolve();
+      }
+    });
+  }
+}
+
+export function getActiveRequestCount(): number { return 0; }
+
 export default server;

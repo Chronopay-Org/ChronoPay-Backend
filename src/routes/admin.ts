@@ -82,6 +82,8 @@ export function setCancellationReversalService(
   _cancellationReversalService = service;
 }
 
+export function setDsrSlaService(_service: any): void {}
+
 // Re-export for route-level test convenience.
 export { setReversalTenantPausedResolver };
 

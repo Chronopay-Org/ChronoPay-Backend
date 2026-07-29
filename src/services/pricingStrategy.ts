@@ -48,6 +48,8 @@ export interface FixedConfig {
   strategy: "fixed";
 }
 
+export const DECAY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export interface TimeDecayConfig {
   strategy: "time_decay";
   /**

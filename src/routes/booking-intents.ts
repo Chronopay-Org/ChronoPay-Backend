@@ -26,6 +26,8 @@ import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import { FraudScorer, FraudReasonCode, getFraudReasonCode, getFraudMessage } from "../services/fraudScorer.js";
+import { QuarantineStore } from "../services/quarantineStore.js";
 
 export function createBookingIntentsRouter() {
   const router = Router();

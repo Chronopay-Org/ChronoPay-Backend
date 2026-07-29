@@ -588,3 +588,10 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
   next();
 };
 
+export const treasuryBalance = createBudgetedGauge({
+  name: "treasury_balance_stroops",
+  help: "Current treasury balance in stroops",
+  labels: ["asset_code", "asset_issuer"],
+  budget: 50,
+});
+
