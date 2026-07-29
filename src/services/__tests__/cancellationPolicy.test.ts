@@ -1,3 +1,4 @@
+import { jest, describe, it, expect } from "@jest/globals";
 import {
   CancellationPolicyService,
   computeRefundWithTerms,
@@ -15,6 +16,9 @@ import {
   ProratedCancellationTerms,
 } from "../../modules/booking-intents/booking-intent-repository.js";
 import { AuditLogger } from "../auditLogger.js";
+import {
+  InMemorySupplierCancellationOverrideStore,
+} from "../supplierCancellationOverrideStore.js";
 
 const BASE_PRICE = 10000;
 const HOUR_MS = 1000 * 60 * 60;
@@ -156,7 +160,8 @@ describe("computeRefundWithTerms (v2-prorated arithmetic)", () => {
   it("48h before: 60% refund + 50 flat fee", () => {
     const r = computeRefundWithTerms(PRORATED_V2_TERMS, BASE_PRICE, 48, V);
     expect(r.tierApplied?.refundRatio).toBe(0.6);
-    expect(r.tierApplied?.flatFee).toBe(50);
+    // flatFee is not part of tierApplied (it's only used in fee calculation)
+    expect(r.fee).toBe(50);
     const baseRefund = Math.round(BASE_PRICE * 0.6);
     const expectedTax = Math.round(baseRefund * 0.1);
     expect(r.taxReversal).toBe(expectedTax);
@@ -306,6 +311,190 @@ describe("CancellationPolicyService grandfathering", () => {
     expect(() => service.calculateRefund(cancelled)).toThrow(
       expect.objectContaining({ status: 409 }),
     );
+  });
+});
+
+describe("CancellationPolicyService with supplier overrides", () => {
+  const HOUR_MS = 1000 * 60 * 60;
+
+  function makeService(
+    nowMs: () => number,
+    overrideStore?: InMemorySupplierCancellationOverrideStore,
+  ) {
+    return new CancellationPolicyService({
+      getPolicyRegistrySync: createDefaultRegistry,
+      auditLogger: { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditLogger,
+      nowMs,
+      nowIso: () => new Date(nowMs()).toISOString(),
+      supplierOverrideStore: overrideStore,
+    });
+  }
+
+  function makeIntent(overrides: Partial<BookingIntentRecord> = {}): BookingIntentRecord {
+    return {
+      id: "intent-1",
+      slotId: "slot-1",
+      professional: "prof-1",
+      customerId: "cust-1",
+      startTime: Date.now() + 48 * HOUR_MS,
+      endTime: Date.now() + 49 * HOUR_MS,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      pricingSnapshot: {
+        strategyId: "fixed",
+        resolvedPrice: 10000,
+        basePrice: 10000,
+        slotStartMs: Date.now() + 48 * HOUR_MS,
+        nowMs: Date.now(),
+        activeBookings: 0,
+        capacity: 1,
+        config: { strategy: "fixed" },
+      },
+      ...overrides,
+    };
+  }
+
+  describe("calculateRefund with supplier override", () => {
+    it("uses supplier override when it exists for the intent's professional", async () => {
+      const nowMs = () => Date.now();
+      const store = new InMemorySupplierCancellationOverrideStore({
+        nowIso: () => new Date(nowMs()).toISOString(),
+      });
+
+      await store.setOverride(
+        "prof-1",
+        {
+          tiers: [{ minHoursUntilStart: 0, refundRatio: 0.5 }],
+        },
+        "admin-1",
+      );
+
+      const service = makeService(nowMs, store);
+      const intent = makeIntent({ professional: "prof-1" });
+      const refund = service.calculateRefund(intent);
+
+      // 50% refund on 10000 = 5000
+      expect(refund.netRefund).toBe(5000);
+      expect(refund.policyVersion).toBe("supplier-override:prof-1");
+      expect(refund.tierApplied?.refundRatio).toBe(0.5);
+    });
+
+    it("falls back to grandfathered policy when no supplier override exists", () => {
+      const nowMs = () => Date.now();
+      const store = new InMemorySupplierCancellationOverrideStore();
+      const service = makeService(nowMs, store);
+
+      // Create intent with v1 snapshot for a supplier who has no override
+      const startTime = Date.now() + 48 * HOUR_MS;
+      const v1Snapshot: CancellationPolicySnapshot = {
+        policyVersionId: LEGACY_V1_VERSION.versionId,
+        policyTerms: {
+          tiers: [
+            { minHoursUntilStart: 24, refundRatio: 1, percentageFee: 0.05, taxReversalRatio: 0.1 },
+            { minHoursUntilStart: 12, maxHoursUntilStart: 24, refundRatio: 0.5, percentageFee: 0.05, taxReversalRatio: 0.1 },
+            { minHoursUntilStart: 0, maxHoursUntilStart: 12, refundRatio: 0, percentageFee: 0.05, taxReversalRatio: 0.1 },
+          ],
+          minRefundAmount: 0,
+        },
+        capturedAtMs: Date.now() - 1000,
+      };
+
+      const intent = makeIntent({
+        professional: "prof-no-override",
+        startTime,
+        cancellationPolicySnapshot: v1Snapshot,
+      });
+
+      const refund = service.calculateRefund(intent);
+      expect(refund.policyVersion).toBe(LEGACY_V1_VERSION.versionId);
+      expect(refund.tierApplied?.refundRatio).toBe(1);
+    });
+
+    it("uses supplier override even when intent has a grandfathered snapshot", async () => {
+      const nowMs = () => Date.now();
+      const store = new InMemorySupplierCancellationOverrideStore({
+        nowIso: () => new Date(nowMs()).toISOString(),
+      });
+
+      await store.setOverride(
+        "prof-1",
+        {
+          tiers: [{ minHoursUntilStart: 0, refundRatio: 0.25 }],
+        },
+        "admin-1",
+      );
+
+      const service = makeService(nowMs, store);
+
+      // Intent has a grandfathered v1 snapshot but supplier override should win
+      const v1Snapshot: CancellationPolicySnapshot = {
+        policyVersionId: LEGACY_V1_VERSION.versionId,
+        policyTerms: {
+          tiers: [
+            { minHoursUntilStart: 24, refundRatio: 1, percentageFee: 0.05, taxReversalRatio: 0.1 },
+            { minHoursUntilStart: 0, maxHoursUntilStart: 24, refundRatio: 0.5, percentageFee: 0.05, taxReversalRatio: 0.1 },
+          ],
+          minRefundAmount: 0,
+        },
+        capturedAtMs: Date.now() - 1000,
+      };
+
+      const intent = makeIntent({
+        professional: "prof-1",
+        cancellationPolicySnapshot: v1Snapshot,
+      });
+
+      const refund = service.calculateRefund(intent);
+      expect(refund.policyVersion).toBe("supplier-override:prof-1");
+      expect(refund.tierApplied?.refundRatio).toBe(0.25);
+    });
+
+    it("ignores supplier override when no override store is configured", async () => {
+      const nowMs = () => Date.now();
+      const service = makeService(nowMs); // no store
+
+      const intent = makeIntent({ professional: "prof-1" });
+      const refund = service.calculateRefund(intent);
+      // Falls to legacy v1 since intent has no cancellationPolicySnapshot,
+      // and LEGACY_V1_VERSION is the oldest fallback
+      expect(refund.policyVersion).toBe(LEGACY_V1_VERSION.versionId);
+    });
+
+    it("boundary: supplier override tiers work correctly at exact hours", async () => {
+      const nowMs = () => Date.now();
+      const store = new InMemorySupplierCancellationOverrideStore();
+
+      await store.setOverride(
+        "prof-1",
+        {
+          tiers: [
+            { minHoursUntilStart: 24, refundRatio: 1.0 },
+            { minHoursUntilStart: 0, maxHoursUntilStart: 24, refundRatio: 0.0 },
+          ],
+        },
+        "admin-1",
+      );
+
+      const service = makeService(nowMs, store);
+
+      // Exactly 24h before start — should get 100% refund (inclusive lower bound)
+      const startIn24h = nowMs() + 24 * HOUR_MS;
+      const intent24h = makeIntent({
+        professional: "prof-1",
+        startTime: startIn24h,
+      });
+      const refund24h = service.calculateRefund(intent24h);
+      expect(refund24h.tierApplied?.refundRatio).toBe(1.0);
+
+      // Just under 24h — should get 0% refund (exclusive upper bound)
+      const startUnder24h = nowMs() + 23.9 * HOUR_MS;
+      const intentUnder24h = makeIntent({
+        professional: "prof-1",
+        startTime: startUnder24h,
+      });
+      const refundUnder24h = service.calculateRefund(intentUnder24h);
+      expect(refundUnder24h.tierApplied?.refundRatio).toBe(0.0);
+    });
   });
 });
 

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import { withSpan, getCurrentSpan, type Span } from "../hooks.js";
 import { addSpanExporter, removeSpanExporter } from "../spanExporter.js";

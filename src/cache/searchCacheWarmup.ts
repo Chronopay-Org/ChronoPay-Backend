@@ -173,7 +173,7 @@ export class SearchCacheWarmupService {
    * Taxonomy commit hook.
    * Invalidates search caches and replays top queries with low-rate pacing.
    */
-  async commitTaxonomy(taxonomyData?: unknown): Promise<WarmupResult> {
+  async commitTaxonomy(_taxonomyData?: unknown): Promise<WarmupResult> {
     this.activeSequence += 1;
     const currentSeq = this.activeSequence;
     const startTimestamp = this.clock();

@@ -613,7 +613,7 @@ describe("FileImpersonationSessionStore – error paths", () => {
     const tempFile = path.join(tempDir, "sessions.jsonl");
     // Create a file, then make it unreadable by writing corrupt content
     // and overriding readFile to simulate EACCES
-    const store = new FileImpersonationSessionStore(tempFile);
+    const _store = new FileImpersonationSessionStore(tempFile);
 
     // Monkey-patch the internal replayFile by making the file a directory
     // so readFile throws EISDIR (which is not ENOENT)

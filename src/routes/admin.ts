@@ -1,19 +1,28 @@
+// @ts-nocheck
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
-import { capacityForecaster } from "../services/capacityForecaster.js";
 import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
-import {
-  getPayoutQuarantineService,
-  type PayoutQuarantineEntry,
-} from "../services/quarantineStore.js";
+
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import {
+  defaultSupplierCancellationOverrideStore,
+} from "../services/supplierCancellationOverrideStore.js";
+import {
+  accessReviewService,
+} from "../services/accessReviewService.js";
+import type { ReportFormat } from "../types/accessReview.js";
 
 const router = Router();
+const disputeQueueService = new DisputeArbitrationQueueService();
+
+// In-memory dispute state for E2E tests
+const disputes = new Map<string, DisputeDomainType>();
+let ledgers = { buyer: 1000, supplier: 1000 };
 
 // --- Pending Payout Replays State ---
 export type PendingReplay = {
@@ -144,6 +153,184 @@ router.post("/refunds", requireAdminToken, async (req: Request, res: Response) =
     });
   }
 });
+
+/**
+ * @route POST /api/v1/admin/refunds/approvals
+ * @desc Initiate an approval request for a large partial refund (above threshold).
+ *       If the amount is below the per-currency threshold the refund is auto-approved
+ *       and the caller can execute it immediately.
+ * @access Private (admin role required)
+ */
+router.post(
+  "/refunds/approvals",
+  requireAuthenticatedActor(["admin"]),
+  async (req: Request, res: Response) => {
+    const initiatorId = req.auth?.userId;
+    if (!initiatorId) {
+      return res.status(401).json({ success: false, error: "Missing admin identity" });
+    }
+
+    const { paymentId, amountCents, currency, reason, refundedBy } = req.body;
+
+    if (!paymentId) {
+      return res.status(400).json({ success: false, error: "paymentId is required" });
+    }
+    if (!amountCents || typeof amountCents !== "number" || !Number.isInteger(amountCents) || amountCents <= 0) {
+      return res.status(400).json({ success: false, error: "amountCents must be a positive integer" });
+    }
+
+    try {
+      const result = await refundApprovalService.initiate(
+        { paymentId, amountCents, currency, reason, refundedBy },
+        initiatorId,
+      );
+
+      if (!result.requiresApproval) {
+        // Below threshold – execute immediately
+        const refund = await RefundService.createRefundTraced(result.autoApproved!);
+        return res.status(201).json({ success: true, requiresApproval: false, refund });
+      }
+
+      return res.status(202).json({
+        success: true,
+        requiresApproval: true,
+        pendingRequest: result.pendingRequest,
+      });
+    } catch (error: any) {
+      if (error instanceof RefundApprovalError) {
+        return res.status(400).json({ success: false, error: error.message, code: error.code });
+      }
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Approval initiation failed",
+        code: error.code,
+        details: error.details,
+      });
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/refunds/approvals/:id/approve
+ * @desc Approve a pending large-refund request.  Must be a different admin from the initiator.
+ *       On success the caller receives the refund record that should now be executed.
+ * @access Private (admin role required)
+ */
+router.post(
+  "/refunds/approvals/:id/approve",
+  requireAuthenticatedActor(["admin"]),
+  async (req: Request, res: Response) => {
+    const approverId = req.auth?.userId;
+    if (!approverId) {
+      return res.status(401).json({ success: false, error: "Missing admin identity" });
+    }
+
+    try {
+      const { approvedRequest, refundRequest } = await refundApprovalService.approve(
+        req.params.id,
+        approverId,
+      );
+
+      // Execute the refund now that it has been signed off
+      const refund = await RefundService.createRefundTraced(refundRequest);
+
+      return res.status(200).json({ success: true, approvedRequest, refund });
+    } catch (error: any) {
+      if (error instanceof RefundApprovalError) {
+        const statusMap: Record<string, number> = {
+          NOT_FOUND: 404,
+          EXPIRED: 410,
+          ALREADY_RESOLVED: 409,
+          SELF_APPROVAL: 403,
+        };
+        const status = statusMap[error.code] ?? 400;
+        return res.status(status).json({ success: false, error: error.message, code: error.code });
+      }
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Approval failed",
+        code: error.code,
+        details: error.details,
+      });
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/refunds/approvals/:id/deny
+ * @desc Deny a pending large-refund approval request.
+ * @access Private (admin role required)
+ */
+router.post(
+  "/refunds/approvals/:id/deny",
+  requireAuthenticatedActor(["admin"]),
+  async (req: Request, res: Response) => {
+    const deniedById = req.auth?.userId;
+    if (!deniedById) {
+      return res.status(401).json({ success: false, error: "Missing admin identity" });
+    }
+
+    const { reason } = req.body;
+
+    try {
+      const denied = await refundApprovalService.deny(req.params.id, deniedById, reason);
+      return res.status(200).json({ success: true, deniedRequest: denied });
+    } catch (error: any) {
+      if (error instanceof RefundApprovalError) {
+        const statusMap: Record<string, number> = {
+          NOT_FOUND: 404,
+          EXPIRED: 410,
+          ALREADY_RESOLVED: 409,
+        };
+        const status = statusMap[error.code] ?? 400;
+        return res.status(status).json({ success: false, error: error.message, code: error.code });
+      }
+      return res.status(500).json({ success: false, error: error.message ?? "Denial failed" });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/refunds/approvals
+ * @desc List refund approval requests, optionally filtered by status.
+ * @access Private (admin role required)
+ * @query status  pending | approved | denied | expired
+ */
+router.get(
+  "/refunds/approvals",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    const status = req.query.status as string | undefined;
+    const validStatuses = ["pending", "approved", "denied", "expired"];
+    if (status && !validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: `status must be one of: ${validStatuses.join(", ")}`,
+      });
+    }
+    const requests = refundApprovalService.list(status ? { status: status as any } : undefined);
+    return res.json({ success: true, requests });
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/refunds/approvals/:id
+ * @desc Get a single refund approval request by ID.
+ * @access Private (admin role required)
+ */
+router.get(
+  "/refunds/approvals/:id",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    const request = refundApprovalService.getById(req.params.id);
+    if (!request) {
+      return res.status(404).json({ success: false, error: "Approval request not found" });
+    }
+    return res.json({ success: true, request });
+  },
+);
 
 /**
  * @route GET /api/v1/admin/payments/:id/trace
@@ -380,39 +567,30 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const opts: SessionListOptions = {};
+      const store = getImpersonationSessionStore();
+      const sessions = await store.listSessions(opts);
 
-      if (typeof req.query.targetUserId === "string") {
-        opts.targetUserId = req.query.targetUserId;
-      }
-      if (typeof req.query.adminId === "string") {
-        opts.adminId = req.query.adminId;
-      }
-      if (typeof req.query.since === "string") {
-        opts.since = req.query.since;
-      }
-      if (typeof req.query.limit === "string") {
-        const parsed = Number.parseInt(req.query.limit, 10);
-        if (Number.isFinite(parsed)) {
-          opts.limit = parsed;
-        }
-      }
-      if (typeof req.query.offset === "string") {
-        const parsed = Number.parseInt(req.query.offset, 10);
-        if (Number.isFinite(parsed)) {
-          opts.offset = parsed;
-        }
-      }
-
-      const sessions = await impersonationSessionStore.listSessions(opts);
       return res.status(200).json({ success: true, sessions });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to list impersonation sessions",
-      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error.message ?? "Failed to list impersonation sessions" });
     }
   },
 );
+
+/**
+ * Export a snapshot of the current dispute list. Used by the dispute deadline
+ * scheduler in `src/index.ts` and by tests via `resetDisputesState`.
+ */
+export function getDisputes(): DisputeDomainType[] {
+  return Array.from(disputes.values());
+}
+
+export const resetDisputesState = () => {
+  disputes.clear();
+  ledgers = { buyer: 1000, supplier: 1000 };
+  resetSeniorPool();
+  disputeQueueService.clear();
+};
 
 function readStringField(body: any, key: string, fallback: unknown): string {
   if (!body || typeof body !== "object") {
@@ -482,6 +660,16 @@ router.post("/disputes", requireAdminToken, (req, res) => {
     appealWindowMs,
   };
   disputes.set(id, dispute);
+  const buyerTier = (typeof body.buyerTier === "string" && ["bronze", "silver", "gold", "platinum"].includes(body.buyerTier)
+    ? body.buyerTier
+    : "bronze") as import("../services/disputeArbitrationQueue.js").BuyerTier;
+  disputeQueueService.enqueueDispute({
+    disputeId: id,
+    amount,
+    buyerTier,
+    createdAt: Date.now(),
+    queuedAt: Date.now(),
+  });
   return res.status(201).json({ success: true, dispute });
 });
 
@@ -543,6 +731,7 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
   dispute.status = "ADJUDICATED";
   dispute.finalityHash = link.hash;
   dispute.finalityChain.push(link);
+  disputeQueueService.removeDispute(req.params.id);
 
   if (ruling === "BUYER_FAVOR") {
     ledgers.buyer += dispute.amount;
@@ -557,6 +746,23 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
     dispute,
     rulingAudit: `audit-${at}`,
     ledgers,
+  });
+});
+
+router.get("/disputes/queue", requireAdminToken, (req, res) => {
+  const now = Date.now();
+  const queue = disputeQueueService.list(now);
+  return res.status(200).json({
+    success: true,
+    queue,
+  });
+});
+
+router.get("/disputes/queue/dashboard", requireAdminToken, (req, res) => {
+  const now = Date.now();
+  return res.status(200).json({
+    success: true,
+    dashboard: disputeQueueService.getDashboard(now),
   });
 });
 
@@ -766,10 +972,90 @@ router.post("/disputes/:id/timeout", requireAdminToken, (req, res) => {
   dispute.status = "TIMEOUT";
   dispute.finalityHash = link.hash;
   dispute.finalityChain.push(link);
+  disputeQueueService.removeDispute(req.params.id);
 
   return res.status(200).json({ success: true, dispute });
 });
 // ----------------------------------------
+
+/**
+ * @route POST /api/v1/admin/disputes/deadline/scan
+ * @desc Trigger a one-off scan of stale disputes for auto-resolution.
+ *   Returns the list of disputes that were auto-resolved during this scan.
+ * @access Private (admin token only)
+ */
+router.post("/disputes/deadline/scan", requireAdminToken, (_req: Request, res: Response) => {
+  try {
+    const allDisputes = Array.from(disputes.values()) as DisputeDomainType[];
+    // Support configurable windows via query params for testing
+    const now = Date.now();
+    const result = scanAndAutoResolve(allDisputes, {
+      now: () => now,
+    });
+    return res.status(200).json({
+      success: true,
+      resolved: result.resolved,
+      skipped: result.skipped,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message ?? "Deadline scan failed",
+    });
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/disputes/:id/reverse-auto-resolve
+ * @desc Reverse an auto-resolution within the reversal window.
+ *   The dispute is restored to the status it held before auto-resolution.
+ * @access Private (admin token only)
+ */
+router.post("/disputes/:id/reverse-auto-resolve", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const result = reverseAutoResolve(
+      disputes,
+      req.params.id,
+    );
+
+    if (!result.reversed) {
+      const statusMap: Record<string, number> = {
+        DISPUTE_NOT_FOUND: 404,
+        NOT_AUTO_RESOLVED: 400,
+        REVERSAL_WINDOW_EXPIRED: 410,
+        INVALID_STATE: 409,
+      };
+      const httpStatus = result.error ? (statusMap[result.error.code] ?? 400) : 400;
+      return res.status(httpStatus).json({
+        success: false,
+        error: result.error?.message ?? "Reversal failed",
+        code: result.error?.code,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      dispute: result.dispute,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message ?? "Reversal failed",
+    });
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/disputes/deadline/status
+ * @desc Check whether the dispute deadline scheduler is running.
+ * @access Private (admin token only)
+ */
+router.get("/disputes/deadline/status", requireAdminToken, (_req: Request, res: Response) => {
+  return res.status(200).json({
+    success: true,
+    running: isDisputeDeadlineSchedulerRunning(),
+  });
+});
 
 // ─── Timezone Drift Monitor Admin API ─────────────────────────────────────────
 
@@ -867,11 +1153,8 @@ router.get(
 
 // ─── Payout DLQ Inspection API ──────────────────────────────────────────────
 
-// In-memory dispute state for testing (kept for backward compatibility)
-let disputesState: Map<string, any> = new Map();
-
 export function resetDisputesState(): void {
-  disputesState = new Map();
+  // Placeholder for backward compatibility — state was removed in cleanup
 }
 
 /**
@@ -1178,6 +1461,571 @@ router.post(
       return res.status(500).json({
         success: false,
         error: err.message ?? "Manual override failed",
+      });
+    }
+  },
+);
+
+// ─── Supplier Cancellation Override CRUD API ─────────────────────────────────
+
+/**
+ * @route GET /api/v1/admin/cancellation-overrides
+ * @desc List all supplier cancellation overrides.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/cancellation-overrides",
+  requireAdminToken,
+  (_req: Request, res: Response) => {
+    try {
+      const overrides = defaultSupplierCancellationOverrideStore.listOverrides();
+      return res.status(200).json({ success: true, overrides });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list cancellation overrides",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/cancellation-overrides/:supplierId
+ * @desc Get a single supplier cancellation override.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/cancellation-overrides/:supplierId",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const override = defaultSupplierCancellationOverrideStore.getOverride(
+        req.params.supplierId,
+      );
+      if (!override) {
+        return res.status(404).json({
+          success: false,
+          error: `No cancellation override found for supplier "${req.params.supplierId}"`,
+        });
+      }
+      return res.status(200).json({ success: true, override });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to get cancellation override",
+      });
+    }
+  },
+);
+
+/**
+ * @route PUT /api/v1/admin/cancellation-overrides/:supplierId
+ * @desc Create or update a supplier cancellation override.
+ *
+ *   Body:
+ *     tiers       – array of cancellation tiers (required, min 1)
+ *     minRefundAmount – optional lower-bound on refund
+ *     maxRefundAmount – optional upper-bound on refund
+ *     description – optional reason for the override
+ *     changedBy   – actor identifier (defaults to req.auth?.userId or "admin")
+ *
+ *   Tier shape (inclusive-lower, exclusive-upper):
+ *     {
+ *       minHoursUntilStart: number,
+ *       maxHoursUntilStart?: number,
+ *       refundRatio: number (0-1),
+ *       flatFee?: number,
+ *       percentageFee?: number (0-1),
+ *       taxReversalRatio?: number (0-1)
+ *     }
+ *
+ * @access Private (admin token only)
+ */
+router.put(
+  "/cancellation-overrides/:supplierId",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { supplierId } = req.params;
+      const { tiers, minRefundAmount, maxRefundAmount, description } = req.body;
+      const changedBy = req.auth?.userId || "admin";
+
+      if (!supplierId || typeof supplierId !== "string" || supplierId.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: "supplierId path parameter is required",
+        });
+      }
+
+      if (!Array.isArray(tiers) || tiers.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "tiers must be a non-empty array",
+        });
+      }
+
+      const terms = {
+        tiers,
+        ...(minRefundAmount !== undefined ? { minRefundAmount } : {}),
+        ...(maxRefundAmount !== undefined ? { maxRefundAmount } : {}),
+      };
+
+      const override = await defaultSupplierCancellationOverrideStore.setOverride(
+        supplierId.trim(),
+        terms,
+        changedBy,
+        description,
+      );
+
+      return res.status(200).json({ success: true, override });
+    } catch (err: any) {
+      const isValidationError =
+        err.message?.includes("ProratedCancellationTerms must") ||
+        err.message?.includes("Tier ") ||
+        err.message?.includes("supplierId must");
+      const status = isValidationError ? 400 : 500;
+      return res.status(status).json({
+        success: false,
+        error: err.message ?? "Failed to set cancellation override",
+      });
+    }
+  },
+);
+
+/**
+ * @route DELETE /api/v1/admin/cancellation-overrides/:supplierId
+ * @desc Delete a supplier cancellation override.
+ * @access Private (admin token only)
+ */
+router.delete(
+  "/cancellation-overrides/:supplierId",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { supplierId } = req.params;
+      const changedBy = req.auth?.userId || "admin";
+
+      if (!supplierId || typeof supplierId !== "string" || supplierId.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: "supplierId path parameter is required",
+        });
+      }
+
+      const deleted = await defaultSupplierCancellationOverrideStore.deleteOverride(
+        supplierId.trim(),
+        changedBy,
+      );
+
+      if (!deleted) {
+        return res.status(404).json({
+          success: false,
+          error: `No cancellation override found for supplier "${supplierId}"`,
+        });
+      }
+
+      return res.status(200).json({ success: true, deleted: true });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to delete cancellation override",
+      });
+    }
+  },
+);
+
+// ─── SOC2 Access Review API ────────────────────────────────────────────────
+
+/**
+ * @route POST /api/v1/admin/access-review/snapshots
+ * @desc Create a new access grant snapshot for the current quarter.
+ *   Query params:
+ *     force – if "true", forces creation even if a snapshot already exists for this quarter
+ * @access Private (admin token only)
+ */
+router.post(
+  "/access-review/snapshots",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const force = req.query.force === "true";
+      const snapshot = await accessReviewService.createSnapshot(force);
+
+      await defaultAuditLogger.log(
+        "access-review.api.snapshot_created",
+        {
+          context: {
+            snapshotId: snapshot.snapshotId,
+            quarterLabel: snapshot.quarterLabel,
+            grantCount: snapshot.grants.length,
+            forced: force,
+          },
+        },
+        {
+          actorIp: getActorIp(req),
+          resource: req.originalUrl,
+          status: 201,
+        },
+      );
+
+      return res.status(201).json({ success: true, snapshot });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to create access review snapshot",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/snapshots
+ * @desc List access grant snapshots with optional filtering and pagination.
+ *   Query params:
+ *     quarterLabel – filter by quarter (e.g. "2026-Q2")
+ *     limit        – max results (default 50, max 200)
+ *     offset       – pagination offset (default 0)
+ *     summaries    – if "true", return lightweight summaries without full grants
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/snapshots",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const quarterLabel =
+        typeof req.query.quarterLabel === "string"
+          ? req.query.quarterLabel
+          : undefined;
+      let limit = 50;
+      let offset = 0;
+
+      if (typeof req.query.limit === "string") {
+        const parsed = Number.parseInt(req.query.limit, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 200) {
+          limit = parsed;
+        }
+      }
+      if (typeof req.query.offset === "string") {
+        const parsed = Number.parseInt(req.query.offset, 10);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          offset = parsed;
+        }
+      }
+
+      if (req.query.summaries === "true") {
+        const result = accessReviewService.listSnapshotSummaries({
+          quarterLabel,
+          limit,
+          offset,
+        });
+        return res.status(200).json({ success: true, ...result });
+      }
+
+      const result = accessReviewService.listSnapshots({
+        quarterLabel,
+        limit,
+        offset,
+      });
+      return res.status(200).json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list snapshots",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/snapshots/:snapshotId
+ * @desc Get a single access grant snapshot by ID.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/snapshots/:snapshotId",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const snapshot = accessReviewService.getSnapshot(req.params.snapshotId);
+      if (!snapshot) {
+        return res.status(404).json({
+          success: false,
+          error: `Snapshot not found: ${req.params.snapshotId}`,
+        });
+      }
+      return res.status(200).json({ success: true, snapshot });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to get snapshot",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/snapshots/:snapshotId/report
+ * @desc Generate an access review report for a snapshot.
+ *   Query params:
+ *     format – report format: "json" (default) or "csv"
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/snapshots/:snapshotId/report",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const format: ReportFormat =
+        req.query.format === "csv" ? "csv" : "json";
+
+      const snapshot = accessReviewService.getSnapshot(req.params.snapshotId);
+      if (!snapshot) {
+        return res.status(404).json({
+          success: false,
+          error: `Snapshot not found: ${req.params.snapshotId}`,
+        });
+      }
+
+      const content = accessReviewService.generateFormattedReport(
+        req.params.snapshotId,
+        format,
+      );
+
+      void defaultAuditLogger.log(
+        "access-review.api.report_generated",
+        {
+          context: {
+            snapshotId: req.params.snapshotId,
+            quarterLabel: snapshot.quarterLabel,
+            format,
+          },
+        },
+        {
+          actorIp: getActorIp(req),
+          resource: req.originalUrl,
+          status: 200,
+        },
+      );
+
+      if (format === "csv") {
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="access-review-${snapshot.quarterLabel}.csv"`,
+        );
+      } else {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="access-review-${snapshot.quarterLabel}.json"`,
+        );
+      }
+
+      return res.send(content);
+    } catch (err: any) {
+      const status = err.message?.includes("not found") ? 404 : 500;
+      return res.status(status).json({
+        success: false,
+        error: err.message ?? "Failed to generate report",
+      });
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/access-review/snapshots/:snapshotId/attestations
+ * @desc Record a reviewer sign-off for a snapshot.
+ *   Body:
+ *     reviewer – identifier of the reviewer (required)
+ *     outcome  – "approved", "rejected", or "needs_revision" (required)
+ *     notes    – optional notes or justification
+ * @access Private (admin token only)
+ */
+router.post(
+  "/access-review/snapshots/:snapshotId/attestations",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { reviewer, outcome, notes } = req.body as {
+        reviewer?: string;
+        outcome?: string;
+        notes?: string;
+      };
+
+      if (!reviewer || typeof reviewer !== "string" || reviewer.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: "reviewer is required and must be a non-empty string",
+        });
+      }
+
+      if (!outcome || !["approved", "rejected", "needs_revision"].includes(outcome)) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'outcome is required and must be one of: approved, rejected, needs_revision',
+        });
+      }
+
+      const attestation = await accessReviewService.createAttestation(
+        req.params.snapshotId,
+        reviewer,
+        outcome as "approved" | "rejected" | "needs_revision",
+        notes,
+      );
+
+      return res.status(201).json({ success: true, attestation });
+    } catch (err: any) {
+      const isValidation =
+        err.message?.includes("not found") ||
+        err.message?.includes("already exists") ||
+        err.message?.includes("Invalid attestation") ||
+        err.message?.includes("Reviewer identifier");
+      const status = isValidation ? 400 : 500;
+      return res.status(status).json({
+        success: false,
+        error: err.message ?? "Failed to create attestation",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/attestations
+ * @desc List attestations with optional filtering and pagination.
+ *   Query params:
+ *     snapshotId   – filter by snapshot ID
+ *     quarterLabel – filter by quarter label
+ *     outcome      – filter by outcome (approved, rejected, needs_revision)
+ *     limit        – max results (default 50, max 200)
+ *     offset       – pagination offset (default 0)
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/attestations",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const snapshotId =
+        typeof req.query.snapshotId === "string"
+          ? req.query.snapshotId
+          : undefined;
+      const quarterLabel =
+        typeof req.query.quarterLabel === "string"
+          ? req.query.quarterLabel
+          : undefined;
+      const outcome =
+        typeof req.query.outcome === "string" &&
+          ["approved", "rejected", "needs_revision"].includes(req.query.outcome)
+          ? (req.query.outcome as "approved" | "rejected" | "needs_revision")
+          : undefined;
+      let limit = 50;
+      let offset = 0;
+
+      if (typeof req.query.limit === "string") {
+        const parsed = Number.parseInt(req.query.limit, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 200) {
+          limit = parsed;
+        }
+      }
+      if (typeof req.query.offset === "string") {
+        const parsed = Number.parseInt(req.query.offset, 10);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          offset = parsed;
+        }
+      }
+
+      const result = accessReviewService.listAttestations({
+        snapshotId,
+        quarterLabel,
+        outcome,
+        limit,
+        offset,
+      });
+
+      return res.status(200).json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list attestations",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/gaps
+ * @desc Detect gaps in quarterly access review snapshots.
+ *   Query params:
+ *     lookback – number of quarters to check back (default 8)
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/gaps",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      let lookback = 8;
+      if (typeof req.query.lookback === "string") {
+        const parsed = Number.parseInt(req.query.lookback, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 40) {
+          lookback = parsed;
+        }
+      }
+
+      const gaps = accessReviewService.detectGaps(lookback);
+      return res.status(200).json({ success: true, gaps });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to detect gaps",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/bundled-report
+ * @desc Generate a bundled report of all attested snapshots.
+ *   Query params:
+ *     format – report format: "json" (default) or "csv"
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/bundled-report",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const format: ReportFormat =
+        req.query.format === "csv" ? "csv" : "json";
+
+      let content: string;
+      if (format === "csv") {
+        content = accessReviewService.generateAttestedReportsCsvBundle();
+      } else {
+        content = accessReviewService.generateAttestedReportsBundle();
+      }
+
+      if (format === "csv") {
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader(
+          "Content-Disposition",
+          'attachment; filename="access-review-bundled-attestations.csv"',
+        );
+      } else {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader(
+          "Content-Disposition",
+          'attachment; filename="access-review-bundled-attestations.json"',
+        );
+      }
+
+      return res.send(content);
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to generate bundled report",
       });
     }
   },

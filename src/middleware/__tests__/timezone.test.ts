@@ -1,6 +1,6 @@
 import { jest, describe, it, expect } from "@jest/globals";
 import { resolveBuyerTimezone, TIMEZONE_HEADER } from "../timezone.js";
-import type { Request, Response, NextFunction } from "express";
+import type { Request, Response } from "express";
 
 function createMockReq(headers: Record<string, string> = {}): Request {
   return {
