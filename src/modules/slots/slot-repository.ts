@@ -94,6 +94,12 @@ export interface SlotRecord {
   storeId?: string;
   /** Tenant context */
   tenantId?: string;
+  /**
+   * Slot category (e.g. "medical", "fitness", "beauty").  Used to resolve
+   * the per-category no-show grace window.  When absent the system-wide
+   * default grace window applies.
+   */
+  category?: string;
 }
 
 export interface SlotRepository {
