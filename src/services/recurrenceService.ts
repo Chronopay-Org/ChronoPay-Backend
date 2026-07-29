@@ -1,7 +1,9 @@
 // @ts-nocheck
 // rrule is a CJS module; import the default export and destructure for
 // compatibility with Jest's --experimental-vm-modules ESM test environment.
+import * as rruleLib from "rrule";
 import type { RRule as RRuleType } from "rrule";
+import rruleLib from "rrule";
 import { AuditLogger, defaultAuditLogger } from "./auditLogger.js";
 import { SupplierTimezoneContext } from "../modules/slots/slot-repository.js";
 import {
@@ -173,6 +175,9 @@ export function expandRRuleWithExdate(
   const options = (rule as any).options;
   if ((options.count ?? 0) <= 0 && !options.until) {
     throw new RecurrenceError("Unbounded RRULE is not allowed; include COUNT or UNTIL");
+  }
+  if (options.interval !== undefined && options.interval < 1 || /(?:^|[;\n])INTERVAL=-?[0]+(?:;|$)/i.test(rruleText)) {
+    throw new RecurrenceError("INTERVAL must be a positive integer");
   }
 
   const rawOccurrences: Date[] = (rule as any).all(

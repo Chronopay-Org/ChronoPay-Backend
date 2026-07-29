@@ -296,6 +296,146 @@ export class HorizonInsufficientBalanceError extends Error {
   }
 }
 
+export interface StellarPayoutBalanceOptions {
+  amount?: string | number;
+  baseReserve?: number;
+  subentries?: number;
+  trustlines?: number;
+  offers?: number;
+}
+
+interface HorizonAccountResponse {
+  id?: string;
+  subentry_count?: number;
+  balances?: Array<{
+    asset_type: string;
+    balance: string;
+  }>;
+}
+
+export function computeMinBalance(subentries: number, baseReserve = 5_000_000): number {
+  if (!Number.isInteger(subentries) || subentries < 0) {
+    throw new ContractInvalidRequestError("Subentry count must be a non-negative integer");
+  }
+
+  if (!Number.isFinite(baseReserve) || baseReserve <= 0) {
+    throw new ContractInvalidRequestError("Base reserve must be a positive number");
+  }
+
+  return (2 + subentries) * baseReserve;
+}
+
+function parseStellarAmount(amount: string | number | undefined): number {
+  if (amount === undefined || amount === null) {
+    return 0;
+  }
+
+  if (typeof amount === "number") {
+    return Math.trunc(amount);
+  }
+
+  const trimmed = amount.trim();
+  if (trimmed === "") {
+    return 0;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return Number.parseInt(trimmed, 10);
+  }
+
+  const match = trimmed.match(/^(\d+)(?:\.(\d{1,7}))?$/);
+  if (!match) {
+    throw new ContractInvalidRequestError(`Invalid Stellar amount: ${amount}`);
+  }
+
+  const whole = Number.parseInt(match[1], 10);
+  const fractional = match[2] ?? "";
+  return whole * 10_000_000 + Number.parseInt(fractional.padEnd(7, "0"), 10);
+}
+
+export class HorizonInsufficientBalanceError extends Error {
+  constructor(
+    public readonly accountId: string,
+    public readonly balance: number,
+    public readonly minimumBalance: number,
+  ) {
+    super(
+      `Account ${accountId} does not have enough balance to cover the Stellar reserve minimum: ${balance} < ${minimumBalance}`,
+    );
+    this.name = "HorizonInsufficientBalanceError";
+  }
+}
+
+export interface StellarPayoutBalanceOptions {
+  amount?: string | number;
+  baseReserve?: number;
+  subentries?: number;
+  trustlines?: number;
+  offers?: number;
+}
+
+interface HorizonAccountResponse {
+  id?: string;
+  subentry_count?: number;
+  balances?: Array<{
+    asset_type: string;
+    balance: string;
+  }>;
+}
+
+export function computeMinBalance(subentries: number, baseReserve = 5_000_000): number {
+  if (!Number.isInteger(subentries) || subentries < 0) {
+    throw new ContractInvalidRequestError("Subentry count must be a non-negative integer");
+  }
+
+  if (!Number.isFinite(baseReserve) || baseReserve <= 0) {
+    throw new ContractInvalidRequestError("Base reserve must be a positive number");
+  }
+
+  return (2 + subentries) * baseReserve;
+}
+
+function parseStellarAmount(amount: string | number | undefined): number {
+  if (amount === undefined || amount === null) {
+    return 0;
+  }
+
+  if (typeof amount === "number") {
+    return Math.trunc(amount);
+  }
+
+  const trimmed = amount.trim();
+  if (trimmed === "") {
+    return 0;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return Number.parseInt(trimmed, 10);
+  }
+
+  const match = trimmed.match(/^(\d+)(?:\.(\d{1,7}))?$/);
+  if (!match) {
+    throw new ContractInvalidRequestError(`Invalid Stellar amount: ${amount}`);
+  }
+
+  const whole = Number.parseInt(match[1], 10);
+  const fractional = match[2] ?? "";
+  return whole * 10_000_000 + Number.parseInt(fractional.padEnd(7, "0"), 10);
+}
+
+export class HorizonInsufficientBalanceError extends Error {
+  constructor(
+    public readonly accountId: string,
+    public readonly balance: number,
+    public readonly minimumBalance: number,
+  ) {
+    super(
+      `Account ${accountId} does not have enough balance to cover the Stellar reserve minimum: ${balance} < ${minimumBalance}`,
+    );
+    this.name = "HorizonInsufficientBalanceError";
+  }
+}
+
 /**
  * Options for paginated Horizon endpoint queries.
  */
@@ -455,6 +595,70 @@ export class HorizonContractClient implements IContractClient {
       return false;
     }
   }
+  /**
+   * Checks the account balance against the Stellar minimum reserve before submitting a payout.
+   * The reserve is derived from the effective subentry count, including trustlines and offers.
+   */
+  async submitPayout(accountId: string, xdr: string, options: StellarPayoutBalanceOptions = {}): Promise<TransactionResult> {
+    const accountResponse = await this.call<HorizonAccountResponse>({
+      address: accountId,
+      abi: null,
+      method: "getAccount",
+      args: [accountId],
+    });
+
+    const account = accountResponse.data;
+    const baseReserve = options.baseReserve ?? 5_000_000;
+    const effectiveSubentries = (options.subentries ?? account.subentry_count ?? 0) + (options.trustlines ?? 0) + (options.offers ?? 0);
+    const minimumBalance = computeMinBalance(effectiveSubentries, baseReserve);
+    const payoutAmount = parseStellarAmount(options.amount);
+    const nativeBalance = account.balances?.find((balance) => balance.asset_type === "native")?.balance;
+    const balanceInStroops = nativeBalance === undefined ? 0 : parseStellarAmount(nativeBalance);
+
+    if (balanceInStroops < minimumBalance + payoutAmount) {
+      throw new HorizonInsufficientBalanceError(accountId, balanceInStroops, minimumBalance + payoutAmount);
+    }
+
+    return this.sendTransaction({
+      address: accountId,
+      abi: null,
+      method: "submitTransaction",
+      args: [xdr],
+    });
+  }
+
+  /**
+   * Checks the account balance against the Stellar minimum reserve before submitting a payout.
+   * The reserve is derived from the effective subentry count, including trustlines and offers.
+   */
+  async submitPayout(accountId: string, xdr: string, options: StellarPayoutBalanceOptions = {}): Promise<TransactionResult> {
+    const accountResponse = await this.call<HorizonAccountResponse>({
+      address: accountId,
+      abi: null,
+      method: "getAccount",
+      args: [accountId],
+    });
+
+    const account = accountResponse.data;
+    const baseReserve = options.baseReserve ?? 5_000_000;
+    const effectiveSubentries = (options.subentries ?? account.subentry_count ?? 0) + (options.trustlines ?? 0) + (options.offers ?? 0);
+    const minimumBalance = computeMinBalance(effectiveSubentries, baseReserve);
+    const payoutAmount = parseStellarAmount(options.amount);
+    const nativeBalance = account.balances?.find((balance) => balance.asset_type === "native")?.balance;
+    const balanceInStroops = nativeBalance === undefined ? 0 : parseStellarAmount(nativeBalance);
+
+    if (balanceInStroops < minimumBalance + payoutAmount) {
+      throw new HorizonInsufficientBalanceError(accountId, balanceInStroops, minimumBalance + payoutAmount);
+    }
+
+    return this.sendTransaction({
+      address: accountId,
+      abi: null,
+      method: "submitTransaction",
+      args: [xdr],
+    });
+  }
+
   /**
    * Checks the account balance against the Stellar minimum reserve before submitting a payout.
    * The reserve is derived from the effective subentry count, including trustlines and offers.
