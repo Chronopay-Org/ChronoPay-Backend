@@ -8,33 +8,34 @@ import { InMemoryImpersonationSessionStore } from "../services/impersonationSess
 
 
 import { _settlements } from "../services/settlementReconciler.js";
-import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
+import { AUDIT_SCHEMA_VERSION } from "../types/auditEvent.js";
 import {
-  PartialRefundApprovalService,
-  RefundApprovalError,
-} from "../services/partialRefundApprovalService.js";
-
-// Singleton approval service – per-currency thresholds can be overridden via
-// environment variables using the format REFUND_APPROVAL_THRESHOLD_<CURRENCY>.
-function buildApprovalThresholds(): Record<string, number> | undefined {
-  const overrides: Record<string, number> = {};
-  for (const [key, val] of Object.entries(process.env)) {
-    const match = key.match(/^REFUND_APPROVAL_THRESHOLD_([A-Z]+)$/);
-    if (match && val) {
-      const parsed = parseInt(val, 10);
-      if (!isNaN(parsed) && parsed >= 0) {
-        overrides[match[1]] = parsed;
-      }
-    }
-  }
-  return Object.keys(overrides).length > 0 ? overrides : undefined;
-}
-
-export const refundApprovalService = new PartialRefundApprovalService({
-  thresholds: buildApprovalThresholds(),
-});
+  canTransition,
+  appendFinalityLink,
+  isWithinAppealWindow,
+  selectSeniorPanel,
+  getSeniorPool,
+  SENIOR_PANEL_MIN_SIZE,
+  validateSeniorDecision,
+  decideByMajority,
+  resetSeniorPool,
+} from "../services/disputeAppeals.js";
+import { getPayoutDlqStore } from "../services/payoutDlqStore.js";
+import type { PayoutDlqStatus } from "../services/payoutDlqStore.js";
+import { getImpersonationSessionStore } from "../services/impersonationSessionStore.js";
+import type { SessionListOptions } from "../types/impersonation.types.js";
+import type { SeniorPanelVote } from "../types/dispute.js";
+import type { LocalIntentStatus } from "../services/escrowDriftReconciler.js";
+import { getTzDriftMetricsSnapshot } from "../metrics/tzDriftMetrics.js";
+import { getLastScanFindings } from "../scheduler/tzDriftMonitor.js";
 
 const router = Router();
+const disputeQueueService = new DisputeArbitrationQueueService();
+
+// In-memory dispute state for E2E tests
+const disputes = new Map<string, any>();
+let ledgers = { buyer: 1000, supplier: 1000 };
 
 // --- Pending Payout Replays State ---
 export type PendingReplay = {
@@ -578,38 +579,23 @@ router.get(
   requireAdminToken,
   async (req: Request, res: Response) => {
     try {
-      const opts: SessionListOptions = {};      if (typeof req.query.targetUserId === "string") {
-        opts.targetUserId = req.query.targetUserId;
-      }
-      if (typeof req.query.adminId === "string") {
-        opts.adminId = req.query.adminId;
-      }
-      if (typeof req.query.since === "string") {
-        opts.since = req.query.since;
-      }
-      if (typeof req.query.limit === "string") {
-        const parsed = Number.parseInt(req.query.limit, 10);
-        if (Number.isFinite(parsed)) {
-          opts.limit = parsed;
-        }
-      }
-      if (typeof req.query.offset === "string") {
-        const parsed = Number.parseInt(req.query.offset, 10);
-        if (Number.isFinite(parsed)) {
-          opts.offset = parsed;
-        }
-      }
+      const opts: SessionListOptions = {};
+      const store = getImpersonationSessionStore();
+      const sessions = await store.listSessions(opts);
 
-      const sessions = await impersonationSessionStore.listSessions(opts);
       return res.status(200).json({ success: true, sessions });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to list impersonation sessions",
-      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error.message ?? "Failed to list impersonation sessions" });
     }
   },
 );
+
+export const resetDisputesState = () => {
+  disputes.clear();
+  ledgers = { buyer: 1000, supplier: 1000 };
+  resetSeniorPool();
+  disputeQueueService.clear();
+};
 
 function readStringField(body: any, key: string, fallback: unknown): string {
   if (!body || typeof body !== "object") {
@@ -679,6 +665,16 @@ router.post("/disputes", requireAdminToken, (req, res) => {
     appealWindowMs,
   };
   disputes.set(id, dispute);
+  const buyerTier = (typeof body.buyerTier === "string" && ["bronze", "silver", "gold", "platinum"].includes(body.buyerTier)
+    ? body.buyerTier
+    : "bronze") as import("../services/disputeArbitrationQueue.js").BuyerTier;
+  disputeQueueService.enqueueDispute({
+    disputeId: id,
+    amount,
+    buyerTier,
+    createdAt: Date.now(),
+    queuedAt: Date.now(),
+  });
   return res.status(201).json({ success: true, dispute });
 });
 
@@ -740,6 +736,7 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
   dispute.status = "ADJUDICATED";
   dispute.finalityHash = link.hash;
   dispute.finalityChain.push(link);
+  disputeQueueService.removeDispute(req.params.id);
 
   if (ruling === "BUYER_FAVOR") {
     ledgers.buyer += dispute.amount;
@@ -754,6 +751,23 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
     dispute,
     rulingAudit: `audit-${at}`,
     ledgers,
+  });
+});
+
+router.get("/disputes/queue", requireAdminToken, (req, res) => {
+  const now = Date.now();
+  const queue = disputeQueueService.list(now);
+  return res.status(200).json({
+    success: true,
+    queue,
+  });
+});
+
+router.get("/disputes/queue/dashboard", requireAdminToken, (req, res) => {
+  const now = Date.now();
+  return res.status(200).json({
+    success: true,
+    dashboard: disputeQueueService.getDashboard(now),
   });
 });
 
@@ -963,6 +977,7 @@ router.post("/disputes/:id/timeout", requireAdminToken, (req, res) => {
   dispute.status = "TIMEOUT";
   dispute.finalityHash = link.hash;
   dispute.finalityChain.push(link);
+  disputeQueueService.removeDispute(req.params.id);
 
   return res.status(200).json({ success: true, dispute });
 });
@@ -1063,13 +1078,6 @@ router.get(
 );
 
 // ─── Payout DLQ Inspection API ──────────────────────────────────────────────
-
-// In-memory dispute state for testing (kept for backward compatibility)
-let _disputesState: Map<string, any> = new Map();
-
-export function resetDisputesState(): void {
-  _disputesState = new Map();
-}
 
 /**
  * Validated PayoutDlqStatus values.

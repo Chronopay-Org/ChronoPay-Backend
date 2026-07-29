@@ -546,6 +546,38 @@ export const escrowDriftOverridesApplied = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Reputation transparency metrics ───────────────────────────────────────────
+
+/**
+ * Counter tracking reputation query outcomes.
+ */
+export const reputationQueries = createBudgetedCounter({
+  name: "reputation_queries_total",
+  help: "Total number of reputation queries, labeled by tenant and result",
+  labels: ["tenant", "result"],
+  budget: 64,
+  registers: [register],
+});
+
+/**
+ * Counter tracking small-cell suppression events for differential privacy.
+ */
+export const reputationSmallCellSuppressions = createBudgetedCounter({
+  name: "reputation_small_cell_suppressions_total",
+  help: "Total number of small-cell suppressed reputation queries",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+export function recordReputationQuery(tenant: string, result: string): void {
+  reputationQueries.labels(tenant, result).inc();
+}
+
+export function recordSmallCellSuppression(): void {
+  reputationSmallCellSuppressions.inc();
+}
+
 /**
  * Express middleware to track HTTP request duration.
  */
