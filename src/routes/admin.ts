@@ -10,20 +10,70 @@ import { InMemoryImpersonationSessionStore } from "../services/impersonationSess
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 import {
-  DsrSlaService,
-  dsrSlaService as defaultDsrSlaService,
-  type DsrStatus,
-  type DsrRequestType,
-} from "../services/dsrSlaService.js";
+  CancellationReversalService,
+  CancellationReversalCurrencyMismatchError,
+  isSupportedCurrency,
+  setTenantPausedResolver as setReversalTenantPausedResolver,
+} from "../modules/cancellation/cancellation-reversal-service.js";
+import { PgCancellationReversalRepository } from "../modules/cancellation/pg-cancellation-reversal-repository.js";
+import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
+import { query } from "../db/pool.js";
 
-// Allows tests to inject a mock DsrSlaService
-let _dsrSlaService: DsrSlaService = defaultDsrSlaService;
-export function setDsrSlaService(svc: DsrSlaService): void {
-  _dsrSlaService = svc;
+/**
+ * Singleton cancellation-reversal service. The route handlers reuse
+ * the same instance across requests so the in-memory ledger state stays
+ * consistent within a process.
+ *
+ * Production bootstrap is responsible for calling
+ * `setReversalTenantPausedResolver(fn)` to wire a real tenant-paused
+ * source (e.g. one that consults the live `SchedulingService`). Until
+ * that hook is wired, all requests pass through the tenant gate
+ * without restriction — the failure mode is "tenant-pause never fires"
+ * (fail-open) rather than "every accepted-paused silently means denied".
+ */
+const _checkoutSessionRepoForReversal = new PgCheckoutSessionRepository(query);
+
+function buildReversalService(): CancellationReversalService {
+  return new CancellationReversalService({
+    repo: new PgCancellationReversalRepository(query),
+    checkoutSessionLookup: {
+      async getCurrency(paymentId: string) {
+        const session = await _checkoutSessionRepoForReversal.findById(paymentId);
+        if (!session) return null;
+        return isSupportedCurrency(session.payment.currency)
+          ? session.payment.currency
+          : null;
+      },
+    },
+    // No tenant-paused resolver is wired at module-load. The admin
+    // route's tenant-paused check falls-through to "no tenant is
+    // paused" until `setReversalTenantPausedResolver(fn)` is wired
+    // by production bootstrap.
+    netRefundLookup: {
+      async getNetRefund() {
+        // The netRefund is provided by the prorated cancellation policy.
+        // Returning `null` here triggers the strict-mode
+        // CancellationReversalNetRefundNotRegisteredError on
+        // append, surfacing the missing wiring at runtime. Production
+        // must wire a real lookup at bootstrap.
+        return null;
+      },
+    },
+  });
 }
-export function getDsrSlaService(): DsrSlaService {
-  return _dsrSlaService;
+
+let _cancellationReversalService: CancellationReversalService =
+  buildReversalService();
+
+/** Test/production hook to swap the entire service. */
+export function setCancellationReversalService(
+  service: CancellationReversalService,
+): void {
+  _cancellationReversalService = service;
 }
+
+// Re-export for route-level test convenience.
+export { setReversalTenantPausedResolver };
 
 const router = Router();
 const disputeQueueService = new DisputeArbitrationQueueService();
@@ -163,192 +213,223 @@ router.post("/refunds", requireAdminToken, async (req: Request, res: Response) =
 });
 
 /**
- * @route POST /api/v1/admin/refunds/approvals
- * @desc Initiate an approval request for a large partial refund (above threshold).
- *       If the amount is below the per-currency threshold the refund is auto-approved
- *       and the caller can execute it immediately.
- * @access Private (admin role required)
- */
-router.post(
-  "/refunds/approvals",
-  requireAuthenticatedActor(["admin"]),
-  async (req: Request, res: Response) => {
-    const initiatorId = req.auth?.userId;
-    if (!initiatorId) {
-      return res.status(401).json({ success: false, error: "Missing admin identity" });
-    }
-
-    const { paymentId, amountCents, currency, reason, refundedBy } = req.body;
-
-    if (!paymentId) {
-      return res.status(400).json({ success: false, error: "paymentId is required" });
-    }
-    if (!amountCents || typeof amountCents !== "number" || !Number.isInteger(amountCents) || amountCents <= 0) {
-      return res.status(400).json({ success: false, error: "amountCents must be a positive integer" });
-    }
-
-    try {
-      const result = await refundApprovalService.initiate(
-        { paymentId, amountCents, currency, reason, refundedBy },
-        initiatorId,
-      );
-
-      if (!result.requiresApproval) {
-        // Below threshold – execute immediately
-        const refund = await RefundService.createRefundTraced(result.autoApproved!);
-        return res.status(201).json({ success: true, requiresApproval: false, refund });
-      }
-
-      return res.status(202).json({
-        success: true,
-        requiresApproval: true,
-        pendingRequest: result.pendingRequest,
-      });
-    } catch (error: any) {
-      if (error instanceof RefundApprovalError) {
-        return res.status(400).json({ success: false, error: error.message, code: error.code });
-      }
-      const status = error.status ?? 500;
-      return res.status(status).json({
-        success: false,
-        error: error.message ?? "Approval initiation failed",
-        code: error.code,
-        details: error.details,
-      });
-    }
-  },
-);
-
-/**
- * @route POST /api/v1/admin/refunds/approvals/:id/approve
- * @desc Approve a pending large-refund request.  Must be a different admin from the initiator.
- *       On success the caller receives the refund record that should now be executed.
- * @access Private (admin role required)
- */
-router.post(
-  "/refunds/approvals/:id/approve",
-  requireAuthenticatedActor(["admin"]),
-  async (req: Request, res: Response) => {
-    const approverId = req.auth?.userId;
-    if (!approverId) {
-      return res.status(401).json({ success: false, error: "Missing admin identity" });
-    }
-
-    try {
-      const { approvedRequest, refundRequest } = await refundApprovalService.approve(
-        req.params.id,
-        approverId,
-      );
-
-      // Execute the refund now that it has been signed off
-      const refund = await RefundService.createRefundTraced(refundRequest);
-
-      return res.status(200).json({ success: true, approvedRequest, refund });
-    } catch (error: any) {
-      if (error instanceof RefundApprovalError) {
-        const statusMap: Record<string, number> = {
-          NOT_FOUND: 404,
-          EXPIRED: 410,
-          ALREADY_RESOLVED: 409,
-          SELF_APPROVAL: 403,
-        };
-        const status = statusMap[error.code] ?? 400;
-        return res.status(status).json({ success: false, error: error.message, code: error.code });
-      }
-      const status = error.status ?? 500;
-      return res.status(status).json({
-        success: false,
-        error: error.message ?? "Approval failed",
-        code: error.code,
-        details: error.details,
-      });
-    }
-  },
-);
-
-/**
- * @route POST /api/v1/admin/refunds/approvals/:id/deny
- * @desc Deny a pending large-refund approval request.
- * @access Private (admin role required)
- */
-router.post(
-  "/refunds/approvals/:id/deny",
-  requireAuthenticatedActor(["admin"]),
-  async (req: Request, res: Response) => {
-    const deniedById = req.auth?.userId;
-    if (!deniedById) {
-      return res.status(401).json({ success: false, error: "Missing admin identity" });
-    }
-
-    const { reason } = req.body;
-
-    try {
-      const denied = await refundApprovalService.deny(req.params.id, deniedById, reason);
-      return res.status(200).json({ success: true, deniedRequest: denied });
-    } catch (error: any) {
-      if (error instanceof RefundApprovalError) {
-        const statusMap: Record<string, number> = {
-          NOT_FOUND: 404,
-          EXPIRED: 410,
-          ALREADY_RESOLVED: 409,
-        };
-        const status = statusMap[error.code] ?? 400;
-        return res.status(status).json({ success: false, error: error.message, code: error.code });
-      }
-      return res.status(500).json({ success: false, error: error.message ?? "Denial failed" });
-    }
-  },
-);
-
-/**
- * @route GET /api/v1/admin/refunds/approvals
- * @desc List refund approval requests, optionally filtered by status.
- * @access Private (admin role required)
- * @query status  pending | approved | denied | expired
- */
-router.get(
-  "/refunds/approvals",
-  requireAuthenticatedActor(["admin"]),
-  (req: Request, res: Response) => {
-    const status = req.query.status as string | undefined;
-    const validStatuses = ["pending", "approved", "denied", "expired"];
-    if (status && !validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        error: `status must be one of: ${validStatuses.join(", ")}`,
-      });
-    }
-    const requests = refundApprovalService.list(status ? { status: status as any } : undefined);
-    return res.json({ success: true, requests });
-  },
-);
-
-/**
- * @route GET /api/v1/admin/refunds/approvals/:id
- * @desc Get a single refund approval request by ID.
- * @access Private (admin role required)
- */
-router.get(
-  "/refunds/approvals/:id",
-  requireAuthenticatedActor(["admin"]),
-  (req: Request, res: Response) => {
-    const request = refundApprovalService.getById(req.params.id);
-    if (!request) {
-      return res.status(404).json({ success: false, error: "Approval request not found" });
-    }
-    return res.json({ success: true, request });
-  },
-);
-
-/**
- * @route GET /api/v1/admin/payments/:id/trace
- * @desc Retrieve a payment trace including the original payment and all linked refund entries.
+ * @route POST /api/v1/admin/payments/:paymentId/reversals
+ * @desc Record a prorated-cancellation reversal entry against a payment.
+ *       Body: { bookingIntentId, amountCents (sign-aware), currency,
+ *               originalRefundId?, escrowReleased?, escrowReleasedAmountCents?,
+ *               escrowReleaseTxId?, reason, policyVersionId, idempotencyKey, metadata? }.
+ *       Errors:
+ *         422 INVALID_CURRENCY    — entry currency != payment currency
+ *         409 invariant violation — sum across booking + amount != -netRefund
+ *         422 TenantPausedError  — metadata.tenantId resolves to a paused tenant
  * @access Private (admin token only)
  */
+router.post(
+  "/payments/:paymentId/reversals",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentId } = req.params;
+      const body = req.body ?? {};
+
+      const required = [
+        "bookingIntentId",
+        "amountCents",
+        "currency",
+        "reason",
+        "policyVersionId",
+        "idempotencyKey",
+      ];
+      for (const k of required) {
+        if (body[k] === undefined || body[k] === null || body[k] === "") {
+          return res
+            .status(400)
+            .json({ success: false, error: `${k} is required` });
+        }
+      }
+      if (typeof body.amountCents !== "number" || !Number.isInteger(body.amountCents) || body.amountCents === 0) {
+        return res
+          .status(400)
+          .json({ success: false, error: "amountCents must be a non-zero integer" });
+      }
+      if (
+        typeof body.escrowReleasedAmountCents === "number" &&
+        body.escrowReleasedAmountCents < 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "escrowReleasedAmountCents must be >= 0",
+        });
+      }
+      if (typeof body.escrowReleased !== "boolean") {
+        return res.status(400).json({
+          success: false,
+          error: "escrowReleased must be a boolean",
+        });
+      }
+
+      const entry = await _cancellationReversalService.appendEntry({
+        bookingIntentId: String(body.bookingIntentId),
+        paymentId: String(paymentId),
+        originalRefundId:
+          body.originalRefundId === undefined || body.originalRefundId === null
+            ? undefined
+            : String(body.originalRefundId),
+        amountCents: body.amountCents,
+        currency: body.currency,
+        escrowReleased: body.escrowReleased,
+        escrowReleasedAmountCents: body.escrowReleasedAmountCents ?? 0,
+        escrowReleaseTxId:
+          body.escrowReleaseTxId === undefined || body.escrowReleaseTxId === null
+            ? undefined
+            : String(body.escrowReleaseTxId),
+        reason: String(body.reason),
+        idempotencyKey: String(body.idempotencyKey),
+        policyVersionId: String(body.policyVersionId),
+        actor: req.auth?.userId ?? "admin",
+        metadata:
+          body.metadata && typeof body.metadata === "object"
+            ? (body.metadata as Record<string, unknown>)
+            : undefined,
+      });
+
+      return res.status(201).json({ success: true, entry });
+    } catch (error: any) {
+      if (
+        error instanceof CancellationReversalCurrencyMismatchError
+      ) {
+        return res.status(422).json({
+          success: false,
+          code: "CURRENCY_MISMATCH",
+          error: error.message,
+          details: error.details,
+        });
+      }
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Reversal recording failed",
+        code: error.code,
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/booking-intents/:bookingIntentId/invariant
+ * @desc Compute the per-(bookingIntentId, currency) reversal invariant. The
+ *       `currency` query parameter is required. Returns 200 with
+ *       `{ valid, sumReversalCents, expectedNegationOfNetRefund, reason? }`.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/booking-intents/:bookingIntentId/invariant",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const currency = String(req.query.currency ?? "");
+      const validCurrencies = ["USD", "EUR", "GBP", "XLM"];
+      if (!validCurrencies.includes(currency)) {
+        return res.status(400).json({
+          success: false,
+          error: `currency query parameter is required (one of ${validCurrencies.join(", ")})`,
+        });
+      }
+      const result = await _cancellationReversalService.checkInvariantForBooking(
+        req.params.bookingIntentId,
+        currency,
+      );
+      const chain = await _cancellationReversalService.verifyChainForPayment(
+        // The invariant endpoint is per-booking; the chain walk is keyed
+        // off paymentId which the caller may pass as `?paymentId=`.
+        String(req.query.paymentId ?? ""),
+      );
+      return res.json({
+        success: true,
+        invariant: result,
+        chain: chain.valid
+          ? { valid: true, entriesChecked: chain.entriesChecked }
+          : { valid: false, ...chain },
+      });
+    } catch (error: any) {
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Invariant check failed",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/booking-intents/:bookingIntentId/reversal-chain
+ * @desc Walk the hash chain for a paymentId and report integrity. The
+ *       `paymentId` query parameter is required.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/booking-intents/:bookingIntentId/reversal-chain",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const paymentId = String(req.query.paymentId ?? "");
+      if (!paymentId) {
+        return res.status(400).json({
+          success: false,
+          error: "paymentId query parameter is required",
+        });
+      }
+      const chain = await _cancellationReversalService.verifyChainForPayment(
+        paymentId,
+      );
+      return res.json({ success: true, chain });
+    } catch (error: any) {
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Chain verification failed",
+      });
+    }
+  },
+);
 router.get("/payments/:id/trace", requireAdminToken, async (req: Request, res: Response) => {
   try {
     const trace = await RefundService.getPaymentTraceTraced(req.params.id);
-    return res.json({ success: true, trace });
+
+    const includeReversals = String(req.query.include ?? "")
+      .toLowerCase()
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+      .includes("reversals");
+
+    if (!includeReversals) {
+      return res.json({ success: true, trace });
+    }
+
+    const reversalTrace = await _cancellationReversalService.buildPaymentReversalTrace({
+      paymentId: trace.payment.id,
+      paymentsCurrency: trace.payment.currency,
+      refunds: trace.refunds.map((r) => ({
+        id: r.id,
+        amountCents: r.amountCents,
+        reason: r.reason,
+        status: r.status,
+        createdAt: r.createdAt,
+      })),
+    });
+
+    return res.json({
+      success: true,
+      trace: {
+        ...trace,
+        reversals: reversalTrace.reversals,
+        invariantStatus: reversalTrace.invariantStatus,
+        invariantValid: reversalTrace.invariantValid,
+        netAcrossOriginalAndReversalCents:
+          reversalTrace.netAcrossOriginalAndReversalCents,
+      },
+    });
   } catch (error: any) {
     const status = error.status ?? 500;
     return res.status(status).json({

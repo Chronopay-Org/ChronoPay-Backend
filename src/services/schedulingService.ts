@@ -37,34 +37,33 @@ export class EscrowPausedError extends Error {
   }
 }
 
+/**
+ * Thrown when a tenant has been administratively paused and any new
+ * reservation work (slot or bundle) targeting that tenant must fail fast.
+ *
+ * Distinct from EscrowPausedError so that operators can distinguish a
+ * tenant-level kill-switch from a global escrow migration pause.
+ */
 export class TenantPausedError extends Error {
-  constructor(tenantId: string) {
+  constructor(readonly tenantId: string) {
     super(`Tenant ${tenantId} is paused`);
     this.name = "TenantPausedError";
   }
 }
 
+/**
+ * Aggregate error thrown if any leg of a bundle reservation fails. The
+ * `cause` exposes the underlying error so callers can branch on the
+ * specific cause (not bookable, expired, etc.) without losing the bundle
+ * context.
+ */
 export class BundleReservationError extends Error {
-  constructor(bundleId: string, public readonly cause: Error) {
-    super(`Bundle ${bundleId} reservation failed: ${cause.message}`);
+  constructor(
+    readonly bundleId: string,
+    readonly cause: Error,
+  ) {
+    super(`Failed to reserve bundle ${bundleId}: ${cause.message}`);
     this.name = "BundleReservationError";
-  }
-}
-
-export class CancellationAfterSlotStartError extends Error {
-  constructor(bookingIntentId: string, slotStartTime: number, cancellationTime: number) {
-    super(
-      `Booking intent ${bookingIntentId} cannot be cancelled by supplier after slot start ` +
-      `(slot_start=${new Date(slotStartTime).toISOString()}, cancelled_at=${new Date(cancellationTime).toISOString()})`,
-    );
-    this.name = "CancellationAfterSlotStartError";
-  }
-}
-
-export class EscrowRefundLedgerIntegrityError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "EscrowRefundLedgerIntegrityError";
   }
 }
 
@@ -167,9 +166,12 @@ export class SchedulingService {
 
   // ── Reservation ───────────────────────────────────────────────────────────
 
-  reserveSlot(slotId: string, now?: number): void {
+  reserveSlot(slotId: string, now?: number, tenantId?: string): void {
     if (escrowMigrationState.isPaused()) {
       throw new EscrowPausedError();
+    }
+    if (tenantId && this.pausedTenants.has(tenantId)) {
+      throw new TenantPausedError(tenantId);
     }
     const slot = this.slotRepository.findById(slotId);
     if (!slot) {
@@ -185,6 +187,28 @@ export class SchedulingService {
       }
     }
     this.slotRepository.updateBookable(slotId, false);
+  }
+
+  /**
+   * Read-only accessor for the per-tenant paused kill switch. Returns
+   * `true` when new reservations / cancellations targeting this tenant
+   * must fail fast. Used by the cancellation-reversal service.
+   */
+  isTenantPaused(tenantId: string): boolean {
+    return this.pausedTenants.has(tenantId);
+  }
+
+  /**
+   * Toggle the paused flag for a tenant. Equivalent to
+   * `pausedTenants` Set mutation but exposed as a method so callers
+   * don't need to reach into the instance.
+   */
+  setTenantPaused(tenantId: string, paused: boolean): void {
+    if (paused) {
+      this.pausedTenants.add(tenantId);
+    } else {
+      this.pausedTenants.delete(tenantId);
+    }
   }
 
   releaseSlot(slotId: string): void {
