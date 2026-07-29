@@ -114,8 +114,11 @@ export function createAuthAwareRateLimiter(
     keyGenerator: generateRateLimitKey,
     // @ts-expect-error - Auto-fixed by script
     store: rateLimitRedisStore,
-    // Skip rate limiting in test environment to avoid flaky tests
+    // Skip rate limiting in test environment to avoid flaky tests.
+    // Also skip when a valid internal fair-queue bypass has been granted
+    // (req.internalBypassActor is set by the fairQueueBypass middleware).
     skip: (req: Request) => {
+      if ((req as any).internalBypassActor) return true;
       if ((req as any)._skipRateLimit === false) return false;
       return process.env.NODE_ENV === 'test';
     },

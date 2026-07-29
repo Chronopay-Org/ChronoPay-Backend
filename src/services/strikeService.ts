@@ -22,9 +22,34 @@ export interface Strike {
   status: StrikeStatus;
   appealedAt?: number;
   appealReason?: string;
+  /** Evidence references uploaded with the appeal (URLs or file references). */
+  appealEvidence?: string[];
+  /** Timestamp when the appeal was escalated to the arbitration queue. */
+  escalatedToArbitrationAt?: number;
+  /** Decision from the arbitration review. */
+  arbitrationDecision?: "UPHELD" | "OVERTURNED";
+  /** Admin who made the arbitration decision. */
+  arbitrationDecidedBy?: string;
+  /** Timestamp of the arbitration decision. */
+  arbitrationDecidedAt?: number;
   rescindedAt?: number;
   rescindedReason?: string;
   rescindedBy?: string;
+}
+
+export interface ArbitrationQueueItem {
+  strikeId: string;
+  buyerId: string;
+  intentId?: string;
+  slotId?: string;
+  appealReason: string;
+  appealEvidence: string[];
+  appealedAt: number;
+  escalatedAt: number;
+  status: "pending" | "decided";
+  decision?: "UPHELD" | "OVERTURNED";
+  decidedBy?: string;
+  decidedAt?: number;
 }
 
 export interface BuyerSuspensionRecord {
@@ -59,6 +84,7 @@ export class StrikeService {
   private buyerStrikesIndex: Map<string, string[]> = new Map(); // buyerId -> strikeId[]
   private suspensions: Map<string, BuyerSuspensionRecord> = new Map(); // buyerId -> BuyerSuspensionRecord
   private locks: Map<string, Promise<void>> = new Map(); // buyerId -> lock promise for atomic updates
+  private arbitrationQueue: ArbitrationQueueItem[] = []; // Arbitration queue for operator escalation
 
   constructor(config: Partial<StrikeConfig> = {}) {
     this.config = { ...DEFAULT_STRIKE_CONFIG, ...config };
@@ -269,12 +295,24 @@ export class StrikeService {
   }
 
   /**
-   * Appeals a strike. If the appeal is successful and active strikes drop below threshold,
+   * Get a strike by its ID.
+   */
+  public getStrike(strikeId: string): Strike | undefined {
+    return this.strikes.get(strikeId);
+  }
+
+  /**
+   * Appeals a no-show penalty strike with optional evidence references.
+   * If the appeal is successful and active strikes drop below threshold,
    * any active automated suspension is automatically lifted.
+   *
+   * The appeal automatically pauses penalty enforcement by changing the
+   * strike status from "active" to "appealed".
    */
   public async appealStrike(
     strikeId: string,
     appealReason: string,
+    evidence?: string[],
     now: number = Date.now(),
   ): Promise<{ strike: Strike; buyerSuspension: BuyerSuspensionRecord; suspensionLifted: boolean }> {
     if (!strikeId || typeof strikeId !== "string" || strikeId.trim() === "") {
@@ -299,6 +337,9 @@ export class StrikeService {
       strike.status = "appealed";
       strike.appealedAt = now;
       strike.appealReason = appealReason.trim();
+      if (evidence && evidence.length > 0) {
+        strike.appealEvidence = evidence;
+      }
 
       const activeStrikes = this.getActiveStrikesInternal(buyerId, now);
       const activeCount = activeStrikes.length;
@@ -346,6 +387,7 @@ export class StrikeService {
               buyerId,
               strikeId,
               appealReason: strike.appealReason,
+              appealEvidence: strike.appealEvidence,
               activeStrikesCount: activeCount,
               suspensionLifted,
             },
@@ -356,6 +398,147 @@ export class StrikeService {
 
       return { strike, buyerSuspension: suspension, suspensionLifted };
     });
+  }
+
+  // ─── Arbitration Queue ──────────────────────────────────────────────
+
+  /**
+   * Escalate an appealed strike to the arbitration queue for operator review.
+   * Only strikes with status "appealed" can be escalated.
+   */
+  public escalateToArbitration(
+    strikeId: string,
+    now: number = Date.now(),
+  ): ArbitrationQueueItem {
+    const strike = this.strikes.get(strikeId);
+    if (!strike) {
+      throw new Error(`Strike '${strikeId}' not found`);
+    }
+    if (strike.status !== "appealed") {
+      throw new Error(
+        `Cannot escalate strike '${strikeId}' with status '${strike.status}'. Only appealed strikes can be escalated.`,
+      );
+    }
+    if (strike.escalatedToArbitrationAt) {
+      throw new Error(`Strike '${strikeId}' has already been escalated to arbitration.`);
+    }
+
+    strike.escalatedToArbitrationAt = now;
+
+    const queueItem: ArbitrationQueueItem = {
+      strikeId: strike.id,
+      buyerId: strike.buyerId,
+      intentId: strike.intentId,
+      slotId: strike.slotId,
+      appealReason: strike.appealReason ?? "",
+      appealEvidence: strike.appealEvidence ?? [],
+      appealedAt: strike.appealedAt ?? now,
+      escalatedAt: now,
+      status: "pending",
+    };
+
+    this.arbitrationQueue.push(queueItem);
+
+    void defaultAuditLogger
+      .log(
+        "buyer.strike.escalated_to_arbitration",
+        {
+          context: {
+            strikeId,
+            buyerId: strike.buyerId,
+            appealReason: strike.appealReason,
+            escalatedAt: now,
+          },
+        },
+        { resource: `strike:${strikeId}`, status: 200 },
+      )
+      .catch((err) => logger.error({ err }, "Audit log failed for arbitration escalation"));
+
+    return queueItem;
+  }
+
+  /**
+   * Decide an arbitration case — either uphold or overturn the strike.
+   */
+  public decideArbitration(
+    strikeId: string,
+    decision: "UPHELD" | "OVERTURNED",
+    decidedBy: string,
+    now: number = Date.now(),
+  ): { strike: Strike; queueItem: ArbitrationQueueItem } {
+    const strike = this.strikes.get(strikeId);
+    if (!strike) {
+      throw new Error(`Strike '${strikeId}' not found`);
+    }
+    if (!strike.escalatedToArbitrationAt) {
+      throw new Error(`Strike '${strikeId}' has not been escalated to arbitration.`);
+    }
+
+    const queueItem = this.arbitrationQueue.find((item) => item.strikeId === strikeId);
+    if (!queueItem) {
+      throw new Error(`Arbitration queue item for strike '${strikeId}' not found.`);
+    }
+    if (queueItem.status === "decided") {
+      throw new Error(`Arbitration for strike '${strikeId}' has already been decided.`);
+    }
+
+    strike.arbitrationDecision = decision;
+    strike.arbitrationDecidedBy = decidedBy;
+    strike.arbitrationDecidedAt = now;
+
+    queueItem.status = "decided";
+    queueItem.decision = decision;
+    queueItem.decidedBy = decidedBy;
+    queueItem.decidedAt = now;
+
+    // If overturned, reinstate the buyer and rescind the strike
+    if (decision === "OVERTURNED") {
+      const buyerSuspension = this.suspensions.get(strike.buyerId);
+      if (buyerSuspension?.isSuspended) {
+        this.suspensions.set(strike.buyerId, {
+          ...buyerSuspension,
+          isSuspended: false,
+          reinstatedAt: now,
+          reinstatedBy: decidedBy,
+          reinstatementReason: `Strike overturned by arbitration (${decidedBy})`,
+        });
+      }
+    }
+
+    void defaultAuditLogger
+      .log(
+        "buyer.strike.arbitration_decided",
+        {
+          context: {
+            strikeId,
+            buyerId: strike.buyerId,
+            decision,
+            decidedBy,
+            decidedAt: now,
+          },
+        },
+        { resource: `strike:${strikeId}`, status: 200 },
+      )
+      .catch((err) => logger.error({ err }, "Audit log failed for arbitration decision"));
+
+    return { strike, queueItem };
+  }
+
+  /**
+   * Get the arbitration queue.
+   */
+  public getArbitrationQueue(status?: "pending" | "decided"): ArbitrationQueueItem[] {
+    if (status) {
+      return this.arbitrationQueue.filter((item) => item.status === status);
+    }
+    return [...this.arbitrationQueue];
+  }
+
+  /**
+   * Get arbitration queue items for a specific buyer.
+   */
+  public getBuyerArbitrationItems(buyerId: string): ArbitrationQueueItem[] {
+    return this.arbitrationQueue.filter((item) => item.buyerId === buyerId);
   }
 
   /**
@@ -431,6 +614,7 @@ export class StrikeService {
     this.buyerStrikesIndex.clear();
     this.suspensions.clear();
     this.locks.clear();
+    this.arbitrationQueue = [];
     this.config = { ...DEFAULT_STRIKE_CONFIG };
   }
 }
