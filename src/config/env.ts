@@ -1,3 +1,5 @@
+import os from "os";
+
 export type NodeEnv = "development" | "test" | "production";
 
 export interface EncryptionKey {
@@ -37,6 +39,25 @@ export interface EnvConfig {
   networkPassphrase?: string;
   /** Pinned hash for the current active escrow contract */
   escrowContractHash?: string;
+
+  // ── Signing-key revocation ────────────────────────────────────────────────
+  /**
+   * Unique identifier for this replica, used in revocation ack messages.
+   * Required when the revocation broadcast feature is active.
+   * Defaults to the hostname or "unknown-replica".
+   */
+  replicaId: string;
+  /**
+   * Minimum fraction of replicas [0.0 – 1.0] that must acknowledge a
+   * revocation within the alarm window before the alarm is suppressed.
+   * Defaults to 0.8.
+   */
+  revocationAckThreshold: number;
+  /**
+   * Duration in milliseconds after which the AlarmService checks ack rate.
+   * Defaults to 60 000 ms.
+   */
+  revocationAlarmWindowMs: number;
 }
 
 export class EnvValidationError extends Error {
@@ -74,6 +95,21 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   const networkPassphrase = parseOptionalString(env.STELLAR_NETWORK_PASSPHRASE);
   const escrowContractHash = parseOptionalString(env.ESCROW_CONTRACT_HASH);
 
+  // Revocation settings
+  const replicaId = parseReplicaId(env.REPLICA_ID);
+  const revocationAckThreshold = parseFloat01(
+    env.REVOCATION_ACK_THRESHOLD,
+    "REVOCATION_ACK_THRESHOLD",
+    0.8,
+    issues,
+  );
+  const revocationAlarmWindowMs = parsePositiveInteger(
+    env.REVOCATION_ALARM_WINDOW_MS,
+    "REVOCATION_ALARM_WINDOW_MS",
+    60_000,
+    issues,
+  );
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -93,6 +129,9 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     horizonUrl,
     networkPassphrase,
     escrowContractHash,
+    replicaId,
+    revocationAckThreshold,
+    revocationAlarmWindowMs,
   };
 }
 
@@ -238,4 +277,32 @@ function parseOptionalUrl(rawValue: string | undefined, key: string, issues: str
     issues.push(`${key} must be a valid URL.`);
     return undefined;
   }
+}
+
+function parseReplicaId(rawValue: string | undefined): string {
+  if (rawValue === undefined || rawValue.trim().length === 0) {
+    // Fall back to the OS hostname so each pod/container gets a distinct ID
+    // without requiring explicit config.
+    try {
+      return os.hostname();
+    } catch {
+      return "unknown-replica";
+    }
+  }
+  return rawValue.trim();
+}
+
+function parseFloat01(rawValue: string | undefined, key: string, defaultValue: number, issues: string[]): number {
+  if (rawValue === undefined) return defaultValue;
+  const value = rawValue.trim();
+  if (value.length === 0) {
+    issues.push(`${key} must be a number between 0 and 1.`);
+    return defaultValue;
+  }
+  const parsed = Number(value);
+  if (isNaN(parsed) || parsed < 0 || parsed > 1) {
+    issues.push(`${key} must be a number between 0.0 and 1.0.`);
+    return defaultValue;
+  }
+  return parsed;
 }
