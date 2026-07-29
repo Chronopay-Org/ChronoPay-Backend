@@ -80,7 +80,11 @@ export interface BookingIntentRecord {
   tokenAsset?: string;
   mintTxHash?: string;
   createdAt: string;
-  /** Present when the slot had a pricing strategy configured at intent creation. */
+  bookingType: BookingType;
+  holdUntilMs?: number;
+  holdPlacedAt?: string;
+  refundedAt?: string;
+  refundMetadata?: RefundMetadata;
   pricingSnapshot?: PricingSnapshot;
   /**
    * Cancellation policy version captured at booking creation time.
@@ -91,22 +95,20 @@ export interface BookingIntentRecord {
   cancellationPolicySnapshot?: CancellationPolicySnapshot;
 }
 
-
 export interface BookingIntentRepository {
   create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord>;
   findById(id: string): BookingIntentRecord | undefined;
   findBySlotId(slotId: string): BookingIntentRecord | undefined;
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
-  /**
-   * Indexed lookup for the most recent intent (regardless of status) for a
-   * slot. Returns undefined when no intent exists. Optional — implementations
-   * that omit it will fall back to a listAll scan (only safe for in-memory).
-   */
   findLatestBySlotId?(slotId: string): BookingIntentRecord | undefined;
   listByCustomer(customerId: string): BookingIntentRecord[];
   listAll(): BookingIntentRecord[];
   updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord;
+  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord;
+  findExpiredHolds(nowMs: number): BookingIntentRecord[];
 }
+
+const ACTIVE_HOLD_STATUSES: BookingIntentStatus[] = ["pending", "hold_placed"];
 
 export class InMemoryBookingIntentRepository implements BookingIntentRepository {
   private readonly intents: BookingIntentRecord[] = [];
@@ -115,6 +117,7 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
   async create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> {
     const created: BookingIntentRecord = {
       id: `intent-${this.sequence++}`,
+      bookingType: "standard",
       ...intent,
     };
 
@@ -124,14 +127,17 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
 
   findBySlotId(slotId: string): BookingIntentRecord | undefined {
     const intent = this.intents.find(
-      (entry) => entry.slotId === slotId && entry.status === "pending",
+      (entry) => entry.slotId === slotId && ACTIVE_HOLD_STATUSES.includes(entry.status),
     );
     return intent ? { ...intent } : undefined;
   }
 
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined {
     const intent = this.intents.find(
-      (entry) => entry.slotId === slotId && entry.customerId === customerId && entry.status === "pending",
+      (entry) =>
+        entry.slotId === slotId &&
+        entry.customerId === customerId &&
+        ACTIVE_HOLD_STATUSES.includes(entry.status),
     );
     return intent ? { ...intent } : undefined;
   }
@@ -164,5 +170,26 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
     }
     this.intents[index] = { ...this.intents[index], status };
     return { ...this.intents[index] };
+  }
+
+  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord {
+    const index = this.intents.findIndex((entry) => entry.id === id);
+    if (index === -1) {
+      throw new Error(`BookingIntent with id "${id}" not found`);
+    }
+    this.intents[index] = { ...this.intents[index], ...updates };
+    return { ...this.intents[index] };
+  }
+
+  findExpiredHolds(nowMs: number): BookingIntentRecord[] {
+    return this.intents
+      .filter(
+        (entry) =>
+          entry.bookingType === "refundable_hold" &&
+          entry.status === "hold_placed" &&
+          entry.holdUntilMs !== undefined &&
+          entry.holdUntilMs <= nowMs,
+      )
+      .map((i) => ({ ...i }));
   }
 }

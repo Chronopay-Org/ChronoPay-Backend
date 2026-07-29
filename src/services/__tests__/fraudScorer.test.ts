@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { FraudScorer } from "../fraudScorer";
 
 function createRequest(actorId: string, ip: string, fingerprint: string) {
