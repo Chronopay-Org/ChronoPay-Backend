@@ -85,3 +85,38 @@ export const CreateBookingIntentBodySchema = z
   .strip();
 
 export type CreateBookingIntentBody = z.infer<typeof CreateBookingIntentBodySchema>;
+
+// ─── Conflict Preview ────────────────────────────────────────────────────────
+
+/**
+ * Schema for POST /api/v1/slots/conflicts/preview body.
+ *
+ * Fields:
+ *   - rrule           non-empty RRULE string (must be bounded: COUNT or UNTIL)
+ *   - professional    non-empty string identifying the professional
+ *   - slotDurationMs  positive finite number (slot duration in milliseconds)
+ *   - timezone        optional IANA timezone for DST-ambiguity detection
+ *   - horizonDays     optional number 1-365, defaults to 90
+ *
+ * Unknown fields are stripped.
+ */
+export const ConflictPreviewBodySchema = z
+  .object({
+    rrule: z.string().min(1, { message: "rrule must be a non-empty string" }),
+    professional: z.string().min(1, { message: "professional must be a non-empty string" }),
+    slotDurationMs: z
+      .number()
+      .finite({ message: "slotDurationMs must be a finite number" })
+      .positive({ message: "slotDurationMs must be positive" }),
+    timezone: z.string().min(1, { message: "timezone must not be empty" }).optional(),
+    horizonDays: z
+      .number()
+      .finite({ message: "horizonDays must be a finite number" })
+      .int({ message: "horizonDays must be an integer" })
+      .min(1, { message: "horizonDays must be at least 1" })
+      .max(365, { message: "horizonDays must be at most 365" })
+      .optional(),
+  })
+  .strip();
+
+export type ConflictPreviewBody = z.infer<typeof ConflictPreviewBodySchema>;

@@ -40,7 +40,7 @@ describe("fraudTrafficRouter.hashTenantToBucket", () => {
 
   it("throws on empty / invalid input", () => {
     expect(() => fraudTrafficRouter.hashTenantToBucket("")).toThrow();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(() => fraudTrafficRouter.hashTenantToBucket(undefined as any)).toThrow();
   });
 });
@@ -160,7 +160,7 @@ describe("fraudTrafficRouter.routeRequest", () => {
   });
 
   it("returns the last cumulative version when bucket equals BUCKET_SPACE - 1", () => {
-    const models = makeModels(["v1", "v2"]);
+    const _models = makeModels(["v1", "v2"]);
     const cumulative = previewCumulative({ v1: 99, v2: 1 });
     expect(cumulative[cumulative.length - 1].upper).toBe(BUCKET_SPACE);
   });
@@ -195,7 +195,7 @@ describe("fraudTrafficRouter.routeRequest", () => {
       snapshotId: "snap-1",
     });
     expect(() => fraudTrafficRouter.routeRequest("", snap)).toThrow();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(() => fraudTrafficRouter.routeRequest(undefined as any, snap)).toThrow();
   });
 });

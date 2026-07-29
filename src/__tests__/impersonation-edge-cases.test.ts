@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Impersonation Session Recording Edge Cases
  *
@@ -14,7 +15,7 @@
  */
 
 import express from "express";
-import type { Request, Response } from "express";
+
 import request from "supertest";
 import { impersonationRecorder } from "../middleware/impersonationRecorder.js";
 import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";

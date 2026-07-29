@@ -4,8 +4,7 @@ import {
   type BalanceProvider,
   type FloorThreshold,
   type PollerConfig,
-  type TreasuryBalanceEntry,
-  type AlarmSeverity,
+  type TreasuryBalanceEntry 
 } from "../treasuryBalancePoller.js";
 
 // ─── Unit tests for evaluateSeverity ────────────────────────────────────────

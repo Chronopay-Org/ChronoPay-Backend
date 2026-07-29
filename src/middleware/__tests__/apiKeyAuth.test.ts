@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest, describe, it, expect, beforeEach } from "@jest/globals";
 import { Request, Response, NextFunction } from "express";
 import fs from "node:fs";

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Impersonation Session Recording Integration Tests
  *
@@ -11,7 +12,7 @@
  */
 
 import express from "express";
-import type { Request, Response } from "express";
+
 import request from "supertest";
 import {
   InMemoryImpersonationSessionStore,

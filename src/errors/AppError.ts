@@ -325,6 +325,23 @@ export class ServiceUnavailableError extends AppError {
   }
 }
 
+export class QueryBudgetExceededError extends AppError {
+  constructor(
+    message: string = "Query budget exceeded — the request consumed too much database time",
+    details?: unknown,
+    messageKey: I18nMessageKey = "errors.budget.query_budget_exceeded" as I18nMessageKey,
+  ) {
+    super(
+      message,
+      ERROR_CODES.QUERY_BUDGET_EXCEEDED.status,
+      ERROR_CODES.QUERY_BUDGET_EXCEEDED.code,
+      true,
+      details,
+      messageKey,
+    );
+  }
+}
+
 export class ConfigurationError extends AppError {
   constructor(message: string) {
     super(

@@ -20,7 +20,7 @@ import { Migration } from "../migrationRunner.js";
  *    outbox is a cross-aggregate bus.
  */
 export const migration: Migration = {
-  id: "011",
+  id: "014",
   name: "create_outbox_table",
 
   async up(client: PoolClient): Promise<void> {
