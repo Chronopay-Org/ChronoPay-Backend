@@ -456,6 +456,20 @@ export function recordDependencyFault(
   dependencyFaults.labels(dependency, fault).inc();
 }
 
+// ─── Residency egress guard metrics ───────────────────────────────────────────
+
+/**
+ * Counter incremented each time a cross-region egress attempt is blocked
+ * because no active waiver was found.
+ */
+export const residencyEgressBreachAttempts = createBudgetedCounter({
+  name: "residency_egress_breach_attempts_total",
+  help: "Total number of cross-region egress attempts blocked by the residency guard",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
 export function recordReputationQuery(
   tenantId: string,
   result: "success" | "unauthorized" | "not_found" | "forbidden",
