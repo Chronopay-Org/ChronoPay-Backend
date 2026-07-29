@@ -56,6 +56,10 @@ export const ERROR_CODES = {
   CONFLICT: { status: 409, code: "CONFLICT" },
   UNPROCESSABLE_ENTITY: { status: 422, code: "UNPROCESSABLE_ENTITY" },
   BUNDLE_EXPIRED: { status: 422, code: "BUNDLE_EXPIRED" },
+  BUNDLE_NOT_TRANSFERABLE: { status: 422, code: "BUNDLE_NOT_TRANSFERABLE" },
+
+  // --- Query budget (503) ---
+  QUERY_BUDGET_EXCEEDED: { status: 503, code: "QUERY_BUDGET_EXCEEDED" },
 
   // --- Infrastructure (500 / 503) ---
   INTERNAL_ERROR: { status: 500, code: "INTERNAL_ERROR" },

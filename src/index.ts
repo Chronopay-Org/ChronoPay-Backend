@@ -1,8 +1,20 @@
 import { loadEnvConfig } from "./config/env.js";
 import { createApp } from "./app.js";
 import { getFraudDriftDetector } from "./services/fraudDriftDetector.js";
+import { escrowMigrationState } from "./services/escrowMigrationState.js";
 
 const config = loadEnvConfig();
+
+// Validate pinned escrow contract hash on startup
+const pinnedHash = escrowMigrationState.getPinnedHash();
+if (pinnedHash) {
+  if (!/^C[A-Z0-9]{55}$/.test(pinnedHash) && !/^[0-9a-fA-F]{64}$/.test(pinnedHash)) {
+    console.error(`[FATAL] Invalid escrow contract hash pin format: ${pinnedHash}`);
+    process.exit(1);
+  }
+  console.log(`[STARTUP] Escrow contract pinned to hash: ${pinnedHash}`);
+}
+
 const app = createApp({
   enableDocs: true,
   enableTestRoutes: config.nodeEnv !== "production",

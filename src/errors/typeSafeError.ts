@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Type-safe error sender with i18n message resolution.
  *

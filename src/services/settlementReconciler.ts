@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { HorizonContractClient } from "../clients/horizon-contract-client.js";
 import { settlementsPendingFinality } from "../metrics.js";
+import { getPayoutQuarantineService } from "./quarantineStore.js";
 import { logger } from "../utils/logger.js";
 
 export interface Settlement {
@@ -123,6 +124,12 @@ export class SettlementReconciler {
         if (!tx.successful) {
           // If transaction exists but failed, mark settlement as failed immediately
           settlement.status = "failed";
+          getPayoutQuarantineService().recordFailure({
+            payoutId: settlement.transactionId,
+            errorClass: "SETTLEMENT",
+            errorMessage: "Settlement transaction was rejected by the network",
+            threshold: Number(process.env.PAYOUT_QUARANTINE_THRESHOLD ?? 3),
+          });
           _settlements.set(settlement.transactionId, settlement);
           continue;
         }
@@ -164,6 +171,12 @@ export class SettlementReconciler {
             settlement.attempts += 1;
             if (settlement.attempts >= this.maxAttempts) {
               settlement.status = "failed";
+              getPayoutQuarantineService().recordFailure({
+                payoutId: settlement.transactionId,
+                errorClass: "SETTLEMENT",
+                errorMessage: "Settlement failed after reaching the maximum reconciliation attempts",
+                threshold: Number(process.env.PAYOUT_QUARANTINE_THRESHOLD ?? 3),
+              });
             }
             _settlements.set(settlement.transactionId, settlement);
           }
