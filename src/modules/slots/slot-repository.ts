@@ -95,11 +95,11 @@ export interface SlotRecord {
   /** Tenant context */
   tenantId?: string;
   /**
-   * Whether this slot's bundle is transferable in the secondary market.
-   * Defaults to true for backward compatibility. When false, resale listing
-   * via createIntent is blocked unless overridden by an admin.
+   * Slot category (e.g. "medical", "fitness", "beauty").  Used to resolve
+   * the per-category no-show grace window.  When absent the system-wide
+   * default grace window applies.
    */
-  transferable?: boolean;
+  category?: string;
 }
 
 export interface SlotRepository {
