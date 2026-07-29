@@ -1,0 +1,31 @@
+{
+  "permissions": [
+    "bookings:create",
+    "bookings:read",
+    "bookings:update",
+    "bookings:delete",
+    "bookings:cancel",
+    "bookings:list",
+    "slots:create",
+    "slots:read",
+    "slots:update",
+    "slots:delete",
+    "slots:list",
+    "users:create",
+    "users:read",
+    "users:update",
+    "users:delete",
+    "users:list",
+    "users:impersonate",
+    "payments:create",
+    "payments:read",
+    "payments:refund",
+    "payments:list",
+    "audit:read",
+    "audit:export",
+    "system:configure",
+    "system:maintain",
+    "reports:generate",
+    "reports:read"
+  ]
+}

@@ -2,8 +2,11 @@ import request from "supertest";
 import { createApp } from "../../app.js";
 import { resetDisputesState } from "../admin.js";
 
+const ADMIN_TOKEN = "test-admin-token";
+process.env.CHRONOPAY_ADMIN_TOKEN = ADMIN_TOKEN;
+
 const app = createApp({ enableTestRoutes: true });
-const adminHeaders = { "x-chronopay-admin-token": "test-admin-token" };
+const adminHeaders = { "x-chronopay-admin-token": ADMIN_TOKEN };
 
 describe("E2E Dispute Smoke Suite", () => {
   beforeEach(() => {
@@ -155,6 +158,27 @@ describe("E2E Dispute Smoke Suite", () => {
     expect(evidenceRes.status).toBe(500);
     expect(evidenceRes.body.success).toBe(false);
     expect(evidenceRes.body.error).toBe("Evidence upload failed");
+  });
+
+  it("should expose the dispute queue and dashboard ordering", async () => {
+    const first = await request(app)
+      .post("/api/v1/admin/disputes")
+      .set(adminHeaders)
+      .send({ buyerId: "b1", supplierId: "s1", amount: 100, buyerTier: "bronze" });
+    const second = await request(app)
+      .post("/api/v1/admin/disputes")
+      .set(adminHeaders)
+      .send({ buyerId: "b2", supplierId: "s2", amount: 100, buyerTier: "platinum" });
+
+    const queueRes = await request(app).get("/api/v1/admin/disputes/queue").set(adminHeaders).send();
+    const dashboardRes = await request(app).get("/api/v1/admin/disputes/queue/dashboard").set(adminHeaders).send();
+
+    expect(queueRes.status).toBe(200);
+    expect(queueRes.body.queue[0].disputeId).toBe(second.body.dispute.id);
+    expect(dashboardRes.status).toBe(200);
+    expect(dashboardRes.body.dashboard.total).toBe(2);
+    expect(dashboardRes.body.dashboard.depthByTier.platinum).toBe(1);
+    expect(dashboardRes.body.dashboard.next.disputeId).toBe(second.body.dispute.id);
   });
 
   it("should return 404 for non-existent disputes", async () => {
