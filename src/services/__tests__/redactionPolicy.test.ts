@@ -1,5 +1,5 @@
 import {
-  getCurrentPolicy,
+  
   getCurrentPolicyVersion,
   isFieldRedacted,
   getPolicyFields,

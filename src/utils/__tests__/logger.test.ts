@@ -1,5 +1,5 @@
 import { addTraceCorrelationToLog } from "../logger.js";
-import { getTraceContext, runWithTraceContext } from "../../tracing/context.js";
+import {  runWithTraceContext } from "../../tracing/context.js";
 
 describe("Logger trace correlation helper", () => {
   it("should copy traceId and spanId from active trace context into log object", () => {

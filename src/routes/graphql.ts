@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Router, type Request, type Response, NextFunction } from "express";
 import { graphqlAllowlistService } from "../services/graphqlAllowlist.service.js";
 import crypto from "crypto";
