@@ -66,7 +66,7 @@ class FakeKms implements KeyManagementService {
     return Buffer.from(s.slice(prefix.length), "utf8");
   }
 
-  async wrapDek(dek: Buffer, kek: KekVersion): Promise<Buffer> {
+  async wrapDek(_dek: Buffer, _kek: KekVersion): Promise<Buffer> {
     this.wrapCalls++;
     if (this.failWrapTimes > 0) {
       this.failWrapTimes--;

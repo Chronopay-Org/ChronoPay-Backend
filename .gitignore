@@ -16,3 +16,6 @@ task*.md
 test-full-suite.ipynb
 .venv*/
 .venv*
+
+# Generated SBOM output (produced by `npm run sbom` / CI; not committed)
+sbom*.cyclonedx.json

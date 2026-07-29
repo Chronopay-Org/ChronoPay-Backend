@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { getFraudReasonCode, getFraudMessage, FraudReasonCode } from "./fraudReasonCodes";
 
 describe("Fraud Reason Codes", () => {

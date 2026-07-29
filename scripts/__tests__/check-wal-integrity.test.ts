@@ -42,7 +42,7 @@ function makeReport(
 
 describe("check-wal-integrity CLI", () => {
   let checkSpy: ReturnType<typeof jest.spyOn>;
-  let stdoutSpy: ReturnType<typeof jest.spyOn>;
+  let _stdoutSpy: ReturnType<typeof jest.spyOn>;
   let stderrSpy: ReturnType<typeof jest.spyOn>;
 
   beforeEach(() => {
