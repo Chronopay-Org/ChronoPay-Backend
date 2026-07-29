@@ -20,6 +20,11 @@ import {
   createDefaultRegistry,
   VersionedPolicyRegistry,
 } from "../../services/cancellationPolicy.js";
+import {
+  HoldFeePolicyService,
+  createEmptyHoldFeeRegistry,
+  HoldFeePolicyRegistry,
+} from "../../services/holdFeePolicy.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -75,6 +80,8 @@ export class BookingIntentError extends AppError {
 export class BookingIntentService {
   private cancellationPolicyService: CancellationPolicyService;
   private getPolicyRegistrySync: () => VersionedPolicyRegistry;
+  private holdFeePolicyService: HoldFeePolicyService;
+  private holdFeeRegistry: HoldFeePolicyRegistry;
 
   constructor(
     private readonly bookingIntentRepository: BookingIntentRepository,
@@ -82,13 +89,19 @@ export class BookingIntentService {
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly nowMs: () => number = () => Date.now(),
     policyRegistry?: VersionedPolicyRegistry,
+    holdFeeRegistry?: HoldFeePolicyRegistry,
   ) {
-    const registry = policyRegistry ?? createDefaultRegistry();
-    this.getPolicyRegistrySync = () => registry;
+    const reg = policyRegistry ?? createDefaultRegistry();
+    this.getPolicyRegistrySync = () => reg;
     this.cancellationPolicyService = new CancellationPolicyService({
       getPolicyRegistrySync: this.getPolicyRegistrySync,
       nowMs: this.nowMs,
       nowIso: this.now,
+    });
+    this.holdFeeRegistry = holdFeeRegistry ?? createEmptyHoldFeeRegistry();
+    this.holdFeePolicyService = new HoldFeePolicyService({
+      getRegistry: () => this.holdFeeRegistry,
+      nowMs: this.nowMs,
     });
   }
 
@@ -102,6 +115,10 @@ export class BookingIntentService {
 
   private captureCancellationPolicySnapshot(): CancellationPolicySnapshot {
     return this.cancellationPolicyService.snapshotCurrentPolicy();
+  }
+
+  private captureHoldFeePolicySnapshot(professionalId: string) {
+    return this.holdFeePolicyService.snapshotForSupplier(professionalId);
   }
 
   async createIntent(
@@ -193,6 +210,7 @@ export class BookingIntentService {
     }
 
     const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
+    const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
     const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
@@ -208,6 +226,7 @@ export class BookingIntentService {
       holdPlacedAt,
       pricingSnapshot,
       cancellationPolicySnapshot,
+      holdFeePolicySnapshot,
     });
 
     this.schedulingService.reserveSlot(input.slotId);
@@ -282,6 +301,7 @@ export class BookingIntentService {
       }
 
       const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
+      const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
       const intent = await this.bookingIntentRepository.create({
         slotId: slot.id,
@@ -293,6 +313,7 @@ export class BookingIntentService {
         note: input.note,
         createdAt: this.now(),
         cancellationPolicySnapshot,
+        holdFeePolicySnapshot,
       });
 
       // Reserve slot
