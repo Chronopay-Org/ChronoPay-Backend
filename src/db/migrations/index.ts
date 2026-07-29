@@ -32,6 +32,7 @@ import { migration as migration014a } from "./014_add_reputation_bootstrap_colum
 import { migration as migration014b } from "./014_create_reputation_events.js";
 import { migration as migration015 } from "./015_create_reputation_snapshots.js";
 import { migration as migration016 } from "./016_add_grace_window_config.js";
+import { migration as migration017 } from "./017_add_residency_waivers_table.js";
 
 export const migrations: Migration[] = [
   migration001,
@@ -56,6 +57,7 @@ export const migrations: Migration[] = [
   migration014b,
   migration015,
   migration016,
+  migration017,
 ];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────
