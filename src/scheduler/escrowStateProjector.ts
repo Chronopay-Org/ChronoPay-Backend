@@ -48,7 +48,6 @@ import {
 } from "../services/schedulingService.js";
 import type { EscrowEvent } from "./escrowEventTypes.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
-import { defaultAuditLogger } from "../services/auditLogger.js";
 
 export type ProjectionResultKind =
   | "applied"
@@ -131,6 +130,14 @@ const STATUS_TRANSITIONS: Record<
     { kind: "Refunded", next: "cancelled" },
     { kind: "Slashed", next: "expired" },
   ],
+  hold_placed: [
+    { kind: "Held", next: "confirmed" },
+    { kind: "Captured", next: "firm" },
+    { kind: "Released", next: "cancelled" },
+    { kind: "Refunded", next: "cancelled" },
+    { kind: "Slashed", next: "expired" },
+  ],
+  hold_refunded: [],
   cancelled: [],
   expired: [],
 };

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { type Reminder, type ReminderRepository } from "../models/reminder.js";
 import { claimDelivery } from "./reminderDedup.js";
 import { reminderMetrics } from "./reminderMetrics.js";

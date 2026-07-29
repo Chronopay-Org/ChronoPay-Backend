@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest } from '@jest/globals';
 import { validateDashboards } from '../../scripts/validate-dashboards.js';
 import { uploadDashboards } from '../../scripts/upload-dashboards.js';

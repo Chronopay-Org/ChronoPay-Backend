@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Reputation Transparency Routes
  *

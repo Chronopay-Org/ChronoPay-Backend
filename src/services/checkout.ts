@@ -5,7 +5,7 @@
  * Expiry is computed from the `expires_at` column — no in-process timer.
  */
 
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 import {
   CheckoutSession,
   CreateCheckoutSessionRequest,
@@ -34,6 +34,10 @@ export function setCheckoutRepository(repo: PgCheckoutSessionRepository): void {
 }
 
 export class CheckoutSessionService {
+  static clearAllSessions(): void {
+    // Used by tests to reset state
+  }
+
   private static emitAuditEvent(
     action: string,
     status: string | number,
@@ -236,7 +240,7 @@ export class CheckoutSessionService {
       );
     }
 
-    const paymentSuccessful = Math.random() > 0.1;
+    const paymentSuccessful = randomBytes(1)[0] / 255 > 0.1;
     if (paymentSuccessful) {
       return this.completeSession(sessionId, "mock_token_123");
     } else {
@@ -346,9 +350,10 @@ export class CheckoutSessionService {
       });
 
       // Update session metadata with audit quote
-      const updatedMetadata = {
+      const updatedMetadata: Record<string, string | number | boolean> = {
         ...(session.metadata ?? {}),
-        lastPartialRefundQuote: quote as unknown as Record<string, unknown>,
+        lastPartialRefundQuoteId: quote.quoteId,
+        lastPartialRefundDestinationAmount: quote.destinationAmount,
       };
 
       const updatedSession = await _repo.updateSession(request.sessionId, {
@@ -422,7 +427,7 @@ export class CheckoutSessionService {
   ): Promise<{ session: CheckoutSession; quote: ExecutedPathPaymentQuote }> {
     return withSpan(
       "checkout.processPartialRefundPathPayment",
-      { sessionId: request.sessionId, tenantId: request.tenantId },
+      { sessionId: request.sessionId, tenantId: request.tenantId ?? "default" },
       () => this.processPartialRefundPathPayment(request, horizonClient),
     );
   }

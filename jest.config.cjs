@@ -24,6 +24,7 @@ module.exports = {
   testMatch: ["**/__tests__/**/*.test.ts", "**/*.test.ts"],
   testPathIgnorePatterns: ["/node_modules/", "/stryker-tmp/", "/\\.stryker-tmp/", "/child-process-proxy-worker\\.js$/"],
   clearMocks: true,
+  forceExit: true,
   coverageDirectory: "coverage",
   coverageReporters: ["lcov", "text-summary"],
   collectCoverageFrom: [

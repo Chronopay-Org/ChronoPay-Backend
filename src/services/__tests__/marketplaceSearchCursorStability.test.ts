@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
 import { MarketplaceSearchService, MarketplaceSearchError } from "../marketplaceSearchService.js";
-import { MarketplaceSearchQuery } from "../../validation/marketplaceSearchSchema.js";
+import { MarketplaceSearchQuery, validateSearchQuery } from "../../validation/marketplaceSearchSchema.js";
 import { Slot } from "../../types.js";
 
 interface DbSlotRow {
@@ -300,11 +300,11 @@ describe("Marketplace Search Cursor Stability", () => {
     it("should traverse entire slot dataset using nextCursor deterministically", async () => {
       pool.slots = createSampleSlots(35);
 
-      const query: MarketplaceSearchQuery = {
+      const query: MarketplaceSearchQuery = validateSearchQuery({
         page: 1,
         limit: 10,
         sortBy: "relevance",
-      };
+      });
 
       const accumulatedSlots: Slot[] = [];
       let currentCursor: string | undefined | null = undefined;

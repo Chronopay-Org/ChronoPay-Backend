@@ -25,7 +25,6 @@ import {
   recordPromotion,
   initiateRollback,
   approveRollback,
-  getPriorPromotion,
   ROLLBACK_TTL_MS,
 } from "../../services/fraudModelRollback.js";
 
