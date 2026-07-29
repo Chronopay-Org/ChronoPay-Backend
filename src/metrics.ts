@@ -546,37 +546,32 @@ export const escrowDriftOverridesApplied = createBudgetedCounter({
   registers: [register],
 });
 
-// ─── Reputation transparency metrics ───────────────────────────────────────────
+// ─── Query Budget Metrics ─────────────────────────────────────────────────────
 
 /**
- * Counter tracking reputation query outcomes.
+ * Counter incremented when a SQL query exceeds its per-request budget.
+ * Label is the Express route pattern.
  */
-export const reputationQueries = createBudgetedCounter({
-  name: "reputation_queries_total",
-  help: "Total number of reputation queries, labeled by tenant and result",
-  labels: ["tenant", "result"],
-  budget: 64,
+export const queryBudgetBreaches = createBudgetedCounter({
+  name: "query_budget_breaches_total",
+  help: "Total number of SQL queries that exceeded their per-request budget (statement_timeout)",
+  labels: ["route"],
+  budget: 128,
   registers: [register],
 });
 
 /**
- * Counter tracking small-cell suppression events for differential privacy.
+ * Histogram tracking per-request SQL wall-clock time in milliseconds.
+ * Labels: route, outcome (ok | breached).
  */
-export const reputationSmallCellSuppressions = createBudgetedCounter({
-  name: "reputation_small_cell_suppressions_total",
-  help: "Total number of small-cell suppressed reputation queries",
-  labels: [],
-  budget: 0,
+export const queryBudgetSqlTimeMs = createBudgetedHistogram({
+  name: "query_budget_sql_time_ms",
+  help: "Per-request SQL execution time in milliseconds broken down by route and outcome",
+  labels: ["route", "outcome"],
+  budget: 256,
+  buckets: [1, 5, 10, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000],
   registers: [register],
 });
-
-export function recordReputationQuery(tenant: string, result: string): void {
-  reputationQueries.labels(tenant, result).inc();
-}
-
-export function recordSmallCellSuppression(): void {
-  reputationSmallCellSuppressions.inc();
-}
 
 /**
  * Express middleware to track HTTP request duration.
