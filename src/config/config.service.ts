@@ -37,13 +37,13 @@ export class ConfigService {
     void this.loadSecretsFromProvider();
 
     // listen for rotation events
-    this.secretsProvider.on("rotate", (key?: string) => {
+    this.secretsProvider.on("rotate", (_key?: string) => {
       // when rotation occurs, refresh the in-memory secrets
       try {
         void this.loadSecretsFromProvider();
       } catch (err) {
         // swallow - keep existing secrets if refresh fails
-        // eslint-disable-next-line no-console
+
         console.error("Failed to refresh secrets on rotation:", err);
       }
     });
@@ -115,7 +115,7 @@ export class ConfigService {
           primary: versions[0],
           previous: versions[1] || undefined,
         });
-      } catch (err) {
+      } catch (_err) {
         // ignore missing keys from provider
       }
     }

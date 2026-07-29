@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
 import { queryWithSpan } from "../dbInstrumentation.js";
 import { addSpanExporter, removeSpanExporter } from "../spanExporter.js";

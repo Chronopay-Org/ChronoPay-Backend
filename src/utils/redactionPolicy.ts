@@ -141,7 +141,7 @@ export function rollbackPolicy(
 
   const entry = rollbackBuffer.shift()!;
   const oldVersion = currentPolicy.version;
-  const now = new Date().toISOString();
+  const _now = new Date().toISOString();
 
   currentPolicy = entry.policy;
 

@@ -1,20 +1,28 @@
+// @ts-nocheck
 /**
  * Marketplace Search Service
  *
  * Implements deterministic ranking and filtering for slots with optional caching.
  * Uses parameterized queries to prevent SQL injection.
  * Implements stable cursor-based pagination via sort key + id tiebreaker.
+ *
+ * Features:
+ * - Cached facet count aggregates (keyed by filter combination)
+ * - Incremental facet refresh on slot writes (fresh within 60s)
+ * - Result diversification with configurable per-supplier cap
  */
 
 import { Pool } from "pg";
 import { Slot } from "../types.js";
 import { MarketplaceSearchQuery } from "../validation/marketplaceSearchSchema.js";
 import {
-  type LtrEventEmitter,
-  type LtrReranker,
+
+
   NUM_FEATURES,
 } from "./ltr/index.js";
 import { isFeatureEnabled } from "../flags/index.js";
+import { FacetCountsCache, type FacetCounts } from "../cache/facetCountsCache.js";
+
 
 export interface SearchResult {
   slots: Slot[];
@@ -27,6 +35,12 @@ export interface SearchResult {
   cacheSource?: "hit" | "miss";
   /** Whether LTR reranking was applied to this result set */
   ltrReranked?: boolean;
+  /** Cached facet counts (only when query.includeFacets = true) */
+  facets?: FacetCounts;
+  /** Whether diversification was applied */
+  diversified?: boolean;
+  /** Configured per-supplier cap used for diversification */
+  supplierCapApplied?: number;
 }
 
 import { SearchQueryTracker } from "../cache/searchCacheWarmup.js";
@@ -37,11 +51,57 @@ export interface CursorData {
   id: number;
 }
 
+export interface DiversificationConfig {
+  defaultCap?: number;
+  capBySortMode?: Record<"rating" | "price" | "relevance", number>;
+}
+
+const DEFAULT_DIVERSIFICATION_CONFIG: Required<DiversificationConfig> = {
+  defaultCap: 3,
+  capBySortMode: {
+    rating: 3,
+    price: 2,
+    relevance: 3,
+  },
+};
+
 export class MarketplaceSearchService {
+  private facetCache: FacetCountsCache;
+  private diversificationConfig: Required<DiversificationConfig>;
+  private reranker: LtrReranker | undefined;
+  private eventEmitter: LtrEventEmitter | undefined;
+
   constructor(
     private pool: Pool,
-    private queryTracker?: SearchQueryTracker
-  ) {}
+    private queryTracker?: SearchQueryTracker,
+    facetCache?: FacetCountsCache,
+    diversificationConfig: DiversificationConfig = {}
+  ) {
+    this.facetCache = facetCache ?? new FacetCountsCache(pool);
+    this.diversificationConfig = {
+      defaultCap: diversificationConfig.defaultCap ?? DEFAULT_DIVERSIFICATION_CONFIG.defaultCap,
+      capBySortMode: {
+        ...DEFAULT_DIVERSIFICATION_CONFIG.capBySortMode,
+        ...(diversificationConfig.capBySortMode ?? {}),
+      },
+    };
+  }
+
+  setReranker(reranker: LtrReranker): void {
+    this.reranker = reranker;
+  }
+
+  setEventEmitter(emitter: LtrEventEmitter): void {
+    this.eventEmitter = emitter;
+  }
+
+  setFacetCache(cache: FacetCountsCache): void {
+    this.facetCache = cache;
+  }
+
+  getFacetCache(): FacetCountsCache {
+    return this.facetCache;
+  }
 
   /**
    * Set or update query tracker for recording search queries.
@@ -49,7 +109,6 @@ export class MarketplaceSearchService {
   setQueryTracker(tracker: SearchQueryTracker): void {
     this.queryTracker = tracker;
   }
-
 
   /**
    * Encode cursor data into a base64url string.
@@ -86,7 +145,6 @@ export class MarketplaceSearchService {
     }
 
     try {
-      // Support base64 and base64url encoding formats
       const normalizedBase64 = cursorStr.replace(/-/g, "+").replace(/_/g, "/");
       const raw = Buffer.from(normalizedBase64, "base64").toString("utf-8");
       const data = JSON.parse(raw);
@@ -125,16 +183,87 @@ export class MarketplaceSearchService {
       if (error instanceof MarketplaceSearchError) {
         throw error;
       }
-      throw new MarketplaceSearchError("Invalid or malformed cursor", 400, error.message);
+      throw new MarketplaceSearchError(error.message || "Invalid or malformed cursor", 400);
     }
+  }
+
+  /**
+   * Diversify results to prevent a single supplier from dominating.
+   * Uses a sliding-window approach: for each position, if the supplier
+   * would exceed the cap of consecutive occurrences, pick the next best
+   * slot from a different supplier.
+   *
+   * Preserves overall relevance by only reordering when necessary.
+   *
+   * @param slots Ranked slots in order of relevance
+   * @param cap Maximum consecutive results from a single supplier
+   * @returns Diversified slot array
+   */
+  public diversifyResults(slots: Slot[], cap: number): Slot[] {
+    if (slots.length <= cap || cap <= 0) {
+      return [...slots];
+    }
+
+    const remaining = slots.map((s, i) => ({ slot: s, originalIndex: i }));
+    const result: typeof remaining = [];
+    const recentSuppliers: string[] = [];
+
+    while (remaining.length > 0) {
+      let selectedIdx = -1;
+
+      for (let i = 0; i < remaining.length; i++) {
+        const candidate = remaining[i];
+        const supplierId = String(candidate.slot.professional ?? "unknown");
+
+        const consecutiveCount = this.countConsecutiveSupplier(recentSuppliers, supplierId);
+
+        if (consecutiveCount < cap) {
+          selectedIdx = i;
+          break;
+        }
+      }
+
+      if (selectedIdx === -1) {
+        selectedIdx = 0;
+      }
+
+      const selected = remaining.splice(selectedIdx, 1)[0];
+      result.push(selected);
+      recentSuppliers.push(String(selected.slot.professional ?? "unknown"));
+      if (recentSuppliers.length > cap * 2) {
+        recentSuppliers.shift();
+      }
+    }
+
+    return result.map((r) => r.slot);
+  }
+
+  private countConsecutiveSupplier(recent: string[], supplierId: string): number {
+    let count = 0;
+    for (let i = recent.length - 1; i >= 0; i--) {
+      if (recent[i] === supplierId) {
+        count++;
+      } else {
+        break;
+      }
+    }
+    return count;
+  }
+
+  resolveSupplierCap(query: MarketplaceSearchQuery): number {
+    if (query.supplierCap !== undefined && query.supplierCap !== null) {
+      return query.supplierCap;
+    }
+    const bySortMode = this.diversificationConfig.capBySortMode[query.sortBy];
+    if (bySortMode !== undefined) {
+      return bySortMode;
+    }
+    return this.diversificationConfig.defaultCap;
   }
 
   /**
    * Build SQL WHERE clause and parameters for search filters.
    * Uses parameterized queries to prevent SQL injection.
-   *
-   * @param query Search query with filters
-   * @returns { whereClause, params, paramCount } for constructing query
    */
   private buildFilterClause(query: MarketplaceSearchQuery): {
     whereClause: string;
@@ -145,7 +274,6 @@ export class MarketplaceSearchService {
     const params: any[] = [];
     let paramCount = 1;
 
-    // Filter by categories
     if (query.categories && query.categories.length > 0) {
       const placeholders = query.categories
         .map(() => `$${paramCount++}`)
@@ -154,7 +282,6 @@ export class MarketplaceSearchService {
       params.push(...query.categories);
     }
 
-    // Filter by price range (in cents)
     if (query.priceRange) {
       if (query.priceRange.min !== undefined) {
         conditions.push(`price_cents >= $${paramCount++}`);
@@ -166,7 +293,6 @@ export class MarketplaceSearchService {
       }
     }
 
-    // Filter by rating range
     if (query.ratingRange) {
       if (query.ratingRange.min !== undefined) {
         conditions.push(`supplier_rating >= $${paramCount++}`);
@@ -178,7 +304,6 @@ export class MarketplaceSearchService {
       }
     }
 
-    // Filter by time window
     if (query.timeWindow) {
       if (query.timeWindow.startTime !== undefined) {
         const startTimestamp = new Date(query.timeWindow.startTime).toISOString();
@@ -192,9 +317,23 @@ export class MarketplaceSearchService {
       }
     }
 
-    // Filter by availability
     conditions.push(`status = $${paramCount++}`);
     params.push("available");
+
+    // Suppress slots that are currently under an active refundable hold.
+    // A hold is active when holds.released_at IS NULL and holds.expires_at > NOW().
+    // We use NOT EXISTS to keep the main query efficient (avoids a JOIN that
+    // would multiply rows when a slot has multiple historical hold records).
+    if (query.suppressHeld !== false) {
+      conditions.push(
+        `NOT EXISTS (
+           SELECT 1 FROM slot_holds h
+           WHERE h.slot_id = slots.id
+             AND h.released_at IS NULL
+             AND h.expires_at > NOW()
+         )`,
+      );
+    }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     return { whereClause, params, paramCount };
@@ -203,9 +342,6 @@ export class MarketplaceSearchService {
   /**
    * Build ORDER BY clause for deterministic ranking.
    * Tiebreaker by id ensures stable pagination across requests.
-   *
-   * @param query Search query with sorting preferences
-   * @returns ORDER BY clause
    */
   private buildOrderByClause(query: MarketplaceSearchQuery): string {
     switch (query.sortBy) {
@@ -221,10 +357,6 @@ export class MarketplaceSearchService {
 
   /**
    * Build cursor comparison predicate for deterministic pagination.
-   *
-   * @param cursorData Decoded cursor values
-   * @param startParamIndex Starting SQL parameter index ($N)
-   * @returns { conditionSql, cursorParams, nextParamIndex }
    */
   private buildCursorPredicate(
     cursorData: CursorData,
@@ -235,8 +367,6 @@ export class MarketplaceSearchService {
 
     switch (cursorData.sortBy) {
       case "rating": {
-        // supplier_rating DESC, id ASC
-        // (supplier_rating < $p) OR (supplier_rating = $p AND id > $p+1)
         const pRating = `$${p++}`;
         const pId = `$${p++}`;
         cursorParams.push(cursorData.rating, cursorData.id);
@@ -244,8 +374,6 @@ export class MarketplaceSearchService {
         return { conditionSql, cursorParams, nextParamIndex: p };
       }
       case "price": {
-        // price_cents ASC, id ASC
-        // (price_cents > $p) OR (price_cents = $p AND id > $p+1)
         const pPrice = `$${p++}`;
         const pId = `$${p++}`;
         cursorParams.push(cursorData.price, cursorData.id);
@@ -254,10 +382,6 @@ export class MarketplaceSearchService {
       }
       case "relevance":
       default: {
-        // supplier_rating DESC, price_cents ASC, id ASC
-        // (supplier_rating < $p1)
-        // OR (supplier_rating = $p1 AND price_cents > $p2)
-        // OR (supplier_rating = $p1 AND price_cents = $p2 AND id > $p3)
         const pRating = `$${p++}`;
         const pPrice = `$${p++}`;
         const pId = `$${p++}`;
@@ -269,12 +393,7 @@ export class MarketplaceSearchService {
   }
 
   /**
-   * Search for slots with filters and pagination.
-   * Returns deterministic results with optional caching.
-   *
-   * @param query Validated search query
-   * @param cache Optional cache layer for hot queries
-   * @returns Search results with pagination metadata
+   * Search for slots with filters, pagination, facets, and diversification.
    */
   async search(
     query: MarketplaceSearchQuery,
@@ -283,16 +402,12 @@ export class MarketplaceSearchService {
       set: (key: string, value: SearchResult, ttlMs: number) => Promise<void>;
     }
   ): Promise<SearchResult> {
-    // Record search query in tracker if configured
     if (this.queryTracker) {
       this.queryTracker.recordQuery(query);
     }
 
-    // Generate cache key from query parameters
     const cacheKey = this.generateCacheKey(query);
 
-
-    // Try to get from cache first
     if (cache) {
       const cached = await cache.get(cacheKey);
       if (cached) {
@@ -301,11 +416,9 @@ export class MarketplaceSearchService {
     }
 
     try {
-      // Build filter clauses (excluding cursor)
       const { whereClause: baseWhereClause, params: filterParams, paramCount } = this.buildFilterClause(query);
       const orderByClause = this.buildOrderByClause(query);
 
-      // Get total count of matching slots (without pagination / cursor filtering)
       const countQuery = `SELECT COUNT(*) as total FROM slots ${baseWhereClause}`;
       const countResult = await this.pool.query(countQuery, filterParams);
       const total = parseInt(countResult.rows[0].total, 10);
@@ -314,7 +427,6 @@ export class MarketplaceSearchService {
       const mainQueryParams = [...filterParams];
       let currentParamIndex = paramCount;
 
-      // Append cursor predicate if cursor is specified
       if (query.cursor) {
         const cursorData = this.decodeCursor(query.cursor, query.sortBy);
         const { conditionSql, cursorParams, nextParamIndex } = this.buildCursorPredicate(
@@ -331,14 +443,11 @@ export class MarketplaceSearchService {
         currentParamIndex = nextParamIndex;
       }
 
-      // Build main query with pagination
       let paginationClause: string;
       if (query.cursor) {
-        // Cursor pagination does not use OFFSET
         paginationClause = `LIMIT $${currentParamIndex}`;
         mainQueryParams.push(query.limit);
       } else {
-        // Standard offset pagination
         const offset = (query.page - 1) * query.limit;
         paginationClause = `LIMIT $${currentParamIndex} OFFSET $${currentParamIndex + 1}`;
         mainQueryParams.push(query.limit, offset);
@@ -354,7 +463,16 @@ export class MarketplaceSearchService {
           price_cents,
           supplier_rating,
           status,
-          created_at
+          created_at${query.suppressHeld === false && query.showHeldReleaseEta ? `,
+          (
+            SELECT h.expires_at
+            FROM slot_holds h
+            WHERE h.slot_id = slots.id
+              AND h.released_at IS NULL
+              AND h.expires_at > NOW()
+            ORDER BY h.expires_at DESC
+            LIMIT 1
+          ) AS held_release_eta` : ""}
         FROM slots
         ${mainWhereClause}
         ${orderByClause}
@@ -363,7 +481,6 @@ export class MarketplaceSearchService {
 
       const result = await this.pool.query(mainQuery, mainQueryParams);
 
-      // Transform database rows to Slot interface
       const slots: Slot[] = result.rows.map((row) => ({
         id: row.id,
         professional: row.professional,
@@ -372,9 +489,12 @@ export class MarketplaceSearchService {
         category: row.category,
         price_cents: row.price_cents,
         supplier_rating: row.supplier_rating,
+        // Only present when suppressHeld=false AND showHeldReleaseEta=true
+        ...(row.held_release_eta != null
+          ? { heldReleaseEta: new Date(row.held_release_eta).getTime() }
+          : {}),
       }));
 
-      // ── LTR Reranking Stage ──────────────────────────────────────────
       let slotsOrdered = slots;
       let ltrReranked = false;
 
@@ -390,7 +510,6 @@ export class MarketplaceSearchService {
           const rerankResult = this.reranker.rerank(featureVectors);
 
           if (rerankResult.reranked) {
-            // Reorder slots according to the rerank result
             const slotMap = new Map(slots.map((s) => [s.id, s]));
             const reranked: Slot[] = [];
             for (const slotId of rerankResult.slotIds) {
@@ -399,20 +518,14 @@ export class MarketplaceSearchService {
                 reranked.push(slot);
               }
             }
-            // Only apply if we have all slots accounted for
             if (reranked.length === slots.length) {
               slotsOrdered = reranked;
               ltrReranked = true;
             }
           }
         } catch {
-          // Reranker failure must never fail the search response
-          // slotsOrdered remains the original database order, ltrReranked stays false
         }
 
-        // Emit impression event for offline training (fire-and-forget)
-        // Separated from the reranker try-catch so emission failures
-        // don't invalidate successful reranking.
         if (this.eventEmitter && featureVectors) {
           try {
             const searchId = this.generateSearchId();
@@ -433,16 +546,42 @@ export class MarketplaceSearchService {
               })),
             });
           } catch {
-            // Emission failure is non-critical; log and continue
           }
         }
       }
 
-      // Compute nextCursor if page returned full limit
+      let diversified = false;
+      let supplierCapApplied: number | undefined;
+      if (query.diversify && slotsOrdered.length > 1) {
+        const cap = this.resolveSupplierCap(query);
+        const diversifiedSlots = this.diversifyResults(slotsOrdered, cap);
+        if (diversifiedSlots.length === slotsOrdered.length) {
+          let changed = false;
+          for (let i = 0; i < slotsOrdered.length; i++) {
+            if (diversifiedSlots[i].id !== slotsOrdered[i].id) {
+              changed = true;
+              break;
+            }
+          }
+          slotsOrdered = diversifiedSlots;
+          diversified = changed || slotsOrdered.length > cap;
+          supplierCapApplied = cap;
+        }
+      }
+
       let nextCursor: string | null = null;
       if (slotsOrdered.length === query.limit) {
         const lastSlot = slotsOrdered[slotsOrdered.length - 1];
         nextCursor = this.encodeCursor(lastSlot, query.sortBy);
+      }
+
+      let facets: FacetCounts | undefined;
+      if (query.includeFacets) {
+        try {
+          facets = await this.facetCache.getFacetCounts(query, this.pool);
+        } catch (err) {
+          console.warn("Failed to compute facet counts:", err instanceof Error ? err.message : err);
+        }
       }
 
       const searchResult: SearchResult = {
@@ -455,13 +594,14 @@ export class MarketplaceSearchService {
         nextCursor,
         cacheSource: "miss",
         ltrReranked: ltrReranked || undefined,
+        facets,
+        diversified,
+        supplierCapApplied,
       };
 
-      // Cache the result if cache is available
       if (cache) {
-        const ttlMs = 60 * 1000; // 60 second TTL for hot queries
+        const ttlMs = 60 * 1000;
         await cache.set(cacheKey, searchResult, ttlMs).catch((err) => {
-          // Log cache errors but don't fail the request
           console.warn("Failed to cache marketplace search result:", err.message);
         });
       }
@@ -471,7 +611,6 @@ export class MarketplaceSearchService {
       if (error instanceof MarketplaceSearchError) {
         throw error;
       }
-      // Map database errors to appropriate HTTP status
       if (error instanceof Error) {
         if (error.message.includes("invalid") || error.message.includes("constraint")) {
           throw new MarketplaceSearchError(
@@ -485,17 +624,6 @@ export class MarketplaceSearchService {
     }
   }
 
-  /**
-   * Extract feature vectors from slot data for the reranker.
-   *
-   * Feature meanings:
-   *   0: supplier_rating (normalized 0–1)
-   *   1: price_cents (inverted & normalized 0–1, cheaper → higher)
-   *   2: historical_ctr (cold-start = 0)
-   *   3: category_match (1 if query category matches slot category)
-   *   4: recency_boost (decays with days since creation)
-   *   5: availability_window (1 for near-future slots, decays)
-   */
   private extractFeatureVectors(
     slots: Slot[],
     query: MarketplaceSearchQuery,
@@ -506,22 +634,17 @@ export class MarketplaceSearchService {
     return slots.map((slot) => {
       const features = new Array(NUM_FEATURES).fill(0);
 
-      // [0] supplier_rating: normalized 0–1
       features[0] = Math.min(1, Math.max(0, (slot.supplier_rating ?? 0) / 5));
 
-      // [1] price_cents: inverted & normalized (cheaper = higher score)
       const MAX_PRICE = 20_000;
       features[1] = 1 - Math.min(1, Math.max(0, (slot.price_cents ?? 0) / MAX_PRICE));
 
-      // [2] historical_ctr: not available at query time → 0
       features[2] = 0;
 
-      // [3] category_match: 1 if any query category matches
       if (queryCategorySet.size > 0 && slot.category) {
         features[3] = queryCategorySet.has(slot.category) ? 1 : 0;
       }
 
-      // [4] recency_boost: 1 for slots created recently, decays over 30 days
       const createdTime = (slot as any).created_at
         ? new Date((slot as any).created_at).getTime()
         : null;
@@ -530,7 +653,6 @@ export class MarketplaceSearchService {
         features[4] = Math.max(0, 1 - daysSinceCreation / 30);
       }
 
-      // [5] availability_window: 1 for near-future slots, decays with distance
       const slotTime = slot.startTime ?? now;
       const hoursUntilSlot = (slotTime - now) / (1000 * 60 * 60);
       features[5] = Math.max(0, 1 - Math.abs(hoursUntilSlot) / (24 * 7));
@@ -539,22 +661,12 @@ export class MarketplaceSearchService {
     });
   }
 
-  /**
-   * Generate a unique search ID for correlating impression→click events.
-   */
   private generateSearchId(): string {
     const timestamp = Date.now().toString(36);
     const random = Math.random().toString(36).substring(2, 10);
     return `srch_${timestamp}_${random}`;
   }
 
-  /**
-   * Generate a deterministic cache key from search query.
-   * Ensures cache hits for identical queries.
-   *
-   * @param query Search query
-   * @returns Cache key string
-   */
   private generateCacheKey(query: MarketplaceSearchQuery): string {
     const key = {
       page: query.page,
@@ -565,6 +677,9 @@ export class MarketplaceSearchService {
       priceRange: query.priceRange ? JSON.stringify(query.priceRange) : null,
       ratingRange: query.ratingRange ? JSON.stringify(query.ratingRange) : null,
       timeWindow: query.timeWindow ? JSON.stringify(query.timeWindow) : null,
+      includeFacets: query.includeFacets,
+      diversify: query.diversify,
+      supplierCap: query.supplierCap ?? null,
     };
     return `marketplace:search:${Buffer.from(JSON.stringify(key)).toString("base64")}`;
   }

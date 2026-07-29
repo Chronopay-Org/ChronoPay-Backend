@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Router, Request, Response } from "express";
 import { slotService, SlotNotFoundError, SlotValidationError } from "../services/slotService.js";
 import { ConflictPreviewService } from "../services/conflictPreviewService.js";

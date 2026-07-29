@@ -114,7 +114,7 @@ function skipTransactionRaw(buf: Buffer, offset: number): number | null {
   }
 
   if (buf.length < pos + 4) return null;
-  const extV = readInt32BE(buf, pos);
+  const _extV = readInt32BE(buf, pos);
   pos += 4;
 
   return pos;
