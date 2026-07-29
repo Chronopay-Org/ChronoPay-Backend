@@ -161,6 +161,7 @@ describe("E2E Dispute Smoke Suite", () => {
   });
 
   it("should expose the dispute queue and dashboard ordering", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
     const first = await request(app)
       .post("/api/v1/admin/disputes")
       .set(adminHeaders)

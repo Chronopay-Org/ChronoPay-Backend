@@ -25,8 +25,8 @@
     "sbom:upload": "tsx scripts/upload-sbom.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-kms": "3.840.0",
-    "@google-cloud/kms": "5.7.0",
+    "@aws-sdk/client-kms": "^3.1097.0",
+    "@google-cloud/kms": "^5.7.0",
     "cors": "^2.8.5",
     "dataloader": "^2.2.3",
     "dotenv": "^17.4.2",
@@ -50,7 +50,8 @@
     "ws": "^8.21.0",
     "ethers": {
       "ws": "^8.21.0"
-    }
+    },
+    "fast-xml-parser": "^5.0.9"
   },
   "devDependencies": {
     "@cyclonedx/cyclonedx-npm": "^1.19.3",

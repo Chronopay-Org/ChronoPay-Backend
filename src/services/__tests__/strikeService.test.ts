@@ -1,4 +1,4 @@
-import { StrikeService, strikeService, DEFAULT_STRIKE_CONFIG } from "../strikeService.js";
+import { StrikeService, strikeService } from "../strikeService.js";
 
 describe("StrikeService Unit Tests", () => {
   let service: StrikeService;
@@ -85,6 +85,7 @@ describe("StrikeService Unit Tests", () => {
 
       const t0 = 1000;
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
       const { strike } = await service.issueStrike({ buyerId, issuedAt: t0 });
 
       // Before decay boundary (t0 + 9999ms): Active
@@ -133,7 +134,9 @@ describe("StrikeService Unit Tests", () => {
       service.updateConfig({ maxStrikesThreshold: 3 });
 
       const t0 = 1000;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
       const s1 = await service.issueStrike({ buyerId, issuedAt: t0 });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
       const s2 = await service.issueStrike({ buyerId, issuedAt: t0 + 100 });
       const s3 = await service.issueStrike({ buyerId, issuedAt: t0 + 200 });
 

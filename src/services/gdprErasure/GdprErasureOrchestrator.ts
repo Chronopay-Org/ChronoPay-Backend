@@ -39,11 +39,10 @@
 
 import crypto from "node:crypto";
 import pool from "../../db/pool.js";
-import type { Pool, PoolClient } from "pg";
+import type { PoolClient } from "pg";
 import { LegalHoldService } from "../legalHoldService.js";
 import { AuditLogger, defaultAuditLogger } from "../auditLogger.js";
-import type { TableNode } from "./dependencyGraph.js";
-import { getSortedGraph } from "./dependencyGraph.js";
+import { getSortedGraph, type TableNode } from "./dependencyGraph.js";
 import { tombstoneTable, type TableTombstoneResult } from "./tombstone.js";
 import {
   type ErasureEventLog,

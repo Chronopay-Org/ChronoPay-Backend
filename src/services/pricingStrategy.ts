@@ -23,7 +23,7 @@ import {
 // ─── Core types ───────────────────────────────────────────────────────────────
 
 /** Identifier for a registered pricing strategy. */
-export type StrategyId = "fixed" | "time_decay" | "demand_based";
+export type StrategyId = "fixed" | "time_decay" | "demand_based" | "flat-rate";
 
 /** Inputs that every strategy receives. */
 export interface PricingInput {
@@ -213,6 +213,7 @@ export const demandBasedStrategy: PricingStrategy = (input) => {
 
 const REGISTRY: Record<StrategyId, PricingStrategy> = {
   fixed: fixedStrategy,
+  "flat-rate": fixedStrategy,
   time_decay: timeDecayStrategy,
   demand_based: demandBasedStrategy,
 };

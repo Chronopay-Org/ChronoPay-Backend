@@ -9,16 +9,16 @@ describe("RBAC Permission Middleware", () => {
 
   beforeEach(() => {
     mockRequest = {
-      header: jest.fn(),
+      header: jest.fn<any>(),
       ip: "192.168.1.1",
       originalUrl: "/api/test",
       method: "GET",
     };
 
     mockResponse = {
-      status: jest.fn().mockReturnThis(),
-      json: jest.fn().mockReturnThis(),
-      setHeader: jest.fn().mockReturnThis(),
+      status: jest.fn<any>().mockReturnThis(),
+      json: jest.fn<any>().mockReturnThis(),
+      setHeader: jest.fn<any>().mockReturnThis(),
     };
 
     mockNext = jest.fn();

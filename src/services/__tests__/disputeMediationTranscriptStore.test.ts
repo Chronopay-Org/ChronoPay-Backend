@@ -1,4 +1,4 @@
-import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { jest, describe, it, expect, beforeEach } from "@jest/globals";
 import { Pool } from "pg";
 import {
   DisputeMediationTranscriptStore,
@@ -438,7 +438,7 @@ describe("voice transcript segments store diarised speakers correctly", () => {
     });
 
     await store.appendSegment(segment);
-    const roundtrip = await store.getSegment(segment.id)!;
+    const roundtrip = (await store.getSegment(segment.id))!;
     expect(roundtrip.kind).toBe("voice");
     expect(roundtrip.body.startsWith("[00:00:03] Mediator:")).toBe(true);
     expect(roundtrip.metadata!.transcriptionConfidence).toBe(0.94);

@@ -1,7 +1,16 @@
 import type { StrategyId, StrategyConfig } from "../../services/pricingStrategy.js";
 import type { HoldFeePolicySnapshot } from "../../services/holdFeePolicy.js";
 
-export type BookingIntentStatus = "pending" | "confirmed" | "firm" | "cancelled" | "expired";
+export type BookingIntentStatus =
+  | "pending"
+  | "confirmed"
+  | "firm"
+  | "cancelled"
+  | "expired"
+  | "hold_placed"
+  | "hold_refunded";
+
+export type BookingType = "standard" | "refundable_hold";
 
 export interface PricingSnapshot {
   strategyId: StrategyId;
@@ -52,6 +61,20 @@ export interface BookingIntentRecord {
   tokenAsset?: string;
   mintTxHash?: string;
   createdAt: string;
+  slotIds?: string[];
+  bundleId?: string;
+  supplierId?: string;
+  buyerId?: string;
+  escrowHoldId?: string;
+  bookingType?: BookingType;
+  holdUntilMs?: number;
+  holdPlacedAt?: string;
+  refundedAt?: string;
+  refundMetadata?: {
+    refundedAt: string;
+    refundedAmountCents: number;
+    refundReason: string;
+  };
   pricingSnapshot?: PricingSnapshot;
   cancellationPolicySnapshot?: CancellationPolicySnapshot;
   holdFeePolicySnapshot?: HoldFeePolicySnapshot;

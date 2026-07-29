@@ -10,8 +10,7 @@
  * is visible in the refund breakdown (see RefundBreakdown.holdFee).
  */
 
-import type { AuditLogger } from "./auditLogger.js";
-import { defaultAuditLogger } from "./auditLogger.js";
+import { defaultAuditLogger, type AuditLogger } from "./auditLogger.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 

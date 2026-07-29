@@ -6,21 +6,18 @@
  *   and RotateKeyOnDemandCommand behaviour
  */
 
-import { describe, it, expect, jest, beforeEach } from "@jest/globals";
+import { describe, it, expect, jest } from "@jest/globals";
 import {
   KMSClient,
   NotFoundException,
-  AccessDeniedException,
   DisabledException,
   InvalidKeyUsageException,
   KMSInvalidSignatureException,
   KMSServiceException,
   SigningAlgorithmSpec,
 } from "@aws-sdk/client-kms";
-import { AwsKmsAdapter } from "../aws-kms-adapter.js";
-import { HsmError } from "../types.js";
-import type { IHsmAdapter } from "../hsm-adapter.interface.js";
-import type { SigningAlgorithm } from "../types.js";
+import { AwsKmsAdapter, AccessDeniedException } from "../aws-kms-adapter.js";
+import { HsmError, type SigningAlgorithm } from "../types.js";
 import { runHsmAdapterContractTests } from "./hsm-adapter.contract.js";
 
 // ---------------------------------------------------------------------------
@@ -30,6 +27,7 @@ import { runHsmAdapterContractTests } from "./hsm-adapter.contract.js";
 const KEY_ID = "arn:aws:kms:us-east-1:123456789012:key/test-key-id";
 const TEST_MSG = new Uint8Array([1, 2, 3]);
 const TEST_SIG = new Uint8Array([10, 20, 30]);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
 const ALGORITHM: SigningAlgorithm = "ECDSA_SHA_256";
 
 /** Build a mock KMSClient whose `send` resolves/rejects as specified. */
@@ -90,6 +88,7 @@ runHsmAdapterContractTests("AwsKmsAdapter", {
   },
 
   makeFailoverAdapter() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
     let callCount = 0;
     // First client (first region) throws PROVIDER_ERROR; second succeeds
     const failClient = makeMockClient(async () => {

@@ -10,7 +10,6 @@ import {
   DsrSlaService,
   DSR_SLA_DAYS,
   ALERT_THRESHOLDS,
-  type DsrRecord,
   type QueryFn,
 } from "../dsrSlaService.js";
 import type { AuditLogger } from "../auditLogger.js";
@@ -50,6 +49,7 @@ function makeQueryFn(rows: unknown[] = [], rowCount = 1): QueryFn {
   return async () => ({ rows, rowCount, command: "", oid: 0, fields: [] } as any);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
 function makeQueryFnSequence(responses: { rows: unknown[]; rowCount?: number }[]): QueryFn {
   let call = 0;
   return async () => {

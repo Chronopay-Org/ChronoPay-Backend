@@ -35,11 +35,8 @@ import {
 import {
   InMemoryCancellationReversalRepository,
   PgCancellationReversalRepository,
+  type QueryFn,
 } from "../pg-cancellation-reversal-repository.js";
-
-// QueryFn signature imported for test mocks so the Pg repository's
-// constructor accepts our `jest.fn()` without `as unknown as never`.
-import type { QueryFn } from "../pg-cancellation-reversal-repository.js";
 
 type Currency = "USD" | "EUR" | "GBP" | "XLM";
 

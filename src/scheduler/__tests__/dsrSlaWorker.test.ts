@@ -33,6 +33,7 @@ function makeRecord(overrides: Partial<DsrRecord> = {}): DsrRecord {
 }
 
 /** Minimal spy — records calls, resolves with undefined by default. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
 function makeSpy<T extends unknown[] = unknown[], R = void>(
   impl?: (...args: T) => Promise<R>,
 ) {

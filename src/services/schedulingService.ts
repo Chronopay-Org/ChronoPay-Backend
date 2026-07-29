@@ -1,5 +1,5 @@
 // @ts-nocheck
-import type { BookingIntentRecord, BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
+import type { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import type { SlotRepository } from "../modules/slots/slot-repository.js";
 import { GraceWindowService, getGraceWindowService } from "./graceWindowService.js";
 import { EventEmitter } from "node:events";
@@ -279,6 +279,8 @@ export class SchedulingService {
   private refundLedgerByRequestId = new Map<string, EscrowRefundLedgerEntry>();
   private refundLedgerByIntentId = new Map<string, EscrowRefundLedgerEntry[]>();
 
+  private readonly graceWindowService: GraceWindowService;
+
   constructor(
     private readonly slotRepository: SlotRepository,
     private readonly bookingIntentRepository: BookingIntentRepository,
@@ -286,6 +288,18 @@ export class SchedulingService {
   ) {
     // Accept an injected instance (for testing) or fall back to the singleton.
     this.graceWindowService = graceWindowService ?? getGraceWindowService();
+  }
+
+  resolveGraceWindow(slotId: string): number {
+    const slot = this.slotRepository.findById(slotId);
+    return this.graceWindowService.resolveGraceWindow(slot?.category);
+  }
+
+  noShowDeadlineMs(slotId: string): number {
+    const slot = this.slotRepository.findById(slotId);
+    if (!slot) throw new SlotNotFoundError(slotId);
+    const windowSec = this.resolveGraceWindow(slotId);
+    return slot.startTime + windowSec * 1000;
   }
 
   // ── Reservation ───────────────────────────────────────────────────────────

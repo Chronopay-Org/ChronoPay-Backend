@@ -173,7 +173,7 @@ describe("GdprErasureOrchestrator — transaction management", () => {
 
     // Override the client's query to throw on SELECT of bad_table.
     const { client, queries } = spy;
-    (client.query as jest.Mock).mockImplementation(async (sql: string, params: unknown[] = []) => {
+    (client.query as jest.Mock<any>).mockImplementation(async (sql: string, params: unknown[] = []) => {
       queries.push({ sql: sql.trim(), params });
       if (sql.includes("bad_table")) {
         throw new Error("DB failure");
@@ -206,7 +206,7 @@ describe("GdprErasureOrchestrator — transaction management", () => {
       dependsOn: [],
     };
 
-    (spy.client.query as jest.Mock).mockImplementation(async (sql: string) => {
+    (spy.client.query as jest.Mock<any>).mockImplementation(async (sql: string) => {
       if (sql.includes("fail")) throw new Error("oops");
       return { rows: [] };
     });
@@ -459,15 +459,15 @@ describe("GdprErasureOrchestrator — audit logging", () => {
 
     // Make the connect().query throw immediately
     const fakeClient = {
-      query: jest.fn(async (sql: string) => {
+      query: jest.fn<any>(async (sql: string) => {
         if (sql.includes("fail") || sql.trim() === "BEGIN") {
           throw new Error("connection lost");
         }
         return { rows: [] };
       }),
-      release: jest.fn(),
+      release: jest.fn<any>(),
     };
-    (pool.connect as jest.Mock).mockResolvedValue(fakeClient);
+    (pool.connect as jest.Mock).mockResolvedValue(fakeClient as never);
 
     const orchestrator = new GdprErasureOrchestrator({
       pool,

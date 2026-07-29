@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach } from "@jest/globals";
 import { MarketplaceSearchService } from "../marketplaceSearchService.js";
 import { MarketplaceSearchQuery } from "../../validation/marketplaceSearchSchema.js";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
 const NOW_ISO = new Date("2026-07-28T12:00:00Z").toISOString();
 const HOLD_EXPIRES_ISO = new Date("2026-07-28T13:00:00Z").toISOString();
 
@@ -70,6 +71,8 @@ function makeQuery(overrides: Partial<MarketplaceSearchQuery> = {}): Marketplace
     sortBy: "relevance",
     suppressHeld: true,
     showHeldReleaseEta: false,
+    includeFacets: false,
+    diversify: false,
     ...overrides,
   };
 }

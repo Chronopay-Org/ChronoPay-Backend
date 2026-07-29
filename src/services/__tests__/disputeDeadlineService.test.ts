@@ -20,7 +20,6 @@ import {
   DEFAULT_INACTIVITY_TIMEOUT_MS,
   DEFAULT_SENIOR_REVIEW_TIMEOUT_MS,
   DEFAULT_AUTO_RESOLVE_REVERSAL_WINDOW_MS,
-  type AutoResolvedDispute,
 } from "../disputeDeadlineService.js";
 import { defaultAuditLogger } from "../auditLogger.js";
 import type { Dispute, DisputeStatus } from "../../types/dispute.js";
@@ -349,7 +348,7 @@ describe("reverseAutoResolve", () => {
     const result = reverseAutoResolve(map, dispute.id, { now: () => now + 1000 });
 
     expect(result.reversed).toBe(true);
-    expect(result.dispute.status).toBe("ADJUDICATED");
+    expect(result.dispute!.status).toBe("ADJUDICATED");
     // auto-resolve fields should be cleared
     expect((result.dispute as any).autoResolvedAt).toBeUndefined();
     expect((result.dispute as any).autoResolveWindowMs).toBeUndefined();
@@ -366,7 +365,7 @@ describe("reverseAutoResolve", () => {
     const result = reverseAutoResolve(map, dispute.id, { now: () => now + 1000 });
 
     expect(result.reversed).toBe(true);
-    expect(result.dispute.status).toBe("OPEN");
+    expect(result.dispute!.status).toBe("OPEN");
   });
 
   it("reverses an APPEALED→CLOSED auto-resolution back to APPEALED", () => {
@@ -382,7 +381,7 @@ describe("reverseAutoResolve", () => {
     const result = reverseAutoResolve(map, dispute.id, { now: () => now + 1000 });
 
     expect(result.reversed).toBe(true);
-    expect(result.dispute.status).toBe("APPEALED");
+    expect(result.dispute!.status).toBe("APPEALED");
   });
 
   it("rejects reversal after the window has expired", () => {
@@ -539,8 +538,8 @@ describe("dispute deadline edge cases", () => {
     const result = reverseAutoResolve(map, dispute.id, { now: () => now + 1000 });
 
     expect(result.reversed).toBe(true);
-    expect(result.dispute.finalityHash).not.toBe(hashBeforeReversal);
-    expect(result.dispute.finalityChain.length).toBe(chainLengthBefore + 1);
+    expect(result.dispute!.finalityHash).not.toBe(hashBeforeReversal);
+    expect(result.dispute!.finalityChain.length).toBe(chainLengthBefore + 1);
   });
 
   it("uses custom senior review timeout when provided", () => {

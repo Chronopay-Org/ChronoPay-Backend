@@ -18,7 +18,6 @@ if (pinnedHash) {
 const app = createApp({
   enableDocs: true,
   enableTestRoutes: config.nodeEnv !== "production",
-  horizonContractService,
 });
 
 // Optional fraud score drift detector. Operators opt in via env so unit tests

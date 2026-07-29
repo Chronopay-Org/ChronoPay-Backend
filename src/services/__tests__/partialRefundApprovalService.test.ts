@@ -30,16 +30,17 @@ function makeLargeRequest(overrides: Partial<CreateRefundRequest> = {}): CreateR
 
 function makeAuditLogger(): { logger: AuditLogger; events: Array<{ action: string; ctx: unknown }> } {
   const events: Array<{ action: string; ctx: unknown }> = [];
-  const logger: AuditLogger = {
+  const logger = {
     log: async (action: any, ctx?: any, _opts?: any) => {
       const eventAction = typeof action === "string" ? action : action?.action ?? "";
       events.push({ action: eventAction, ctx });
     },
-  };
+  } as unknown as AuditLogger;
   return { logger, events };
 }
 
 let tick = 0;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
 function makeClock(startMs = 1_000_000) {
   return () => startMs + tick * 1000;
 }
@@ -248,6 +249,7 @@ describe("PartialRefundApprovalService – #478", () => {
 
     it("filters by status correctly", async () => {
       const { pendingRequest: r1 } = await service.initiate(makeLargeRequest({ paymentId: "pay-1" }), "admin-a");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
       const { pendingRequest: r2 } = await service.initiate(makeLargeRequest({ paymentId: "pay-2" }), "admin-a");
 
       await service.approve(r1!.id, "admin-b");

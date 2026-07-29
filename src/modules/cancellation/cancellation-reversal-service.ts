@@ -61,7 +61,7 @@
  */
 
 import { createHash } from "crypto";
-import type { Currency } from "../../types/checkout.js";
+import { CheckoutError, CheckoutErrorCode, type Currency } from "../../types/checkout.js";
 import type {
   CancellationReversalEntry,
   CancellationReversalReason,
@@ -71,15 +71,18 @@ import type {
   ReversalEscrowState,
   ReversalVerificationResult,
 } from "../../types/cancellationReversal.js";
-import { CheckoutError, CheckoutErrorCode } from "../../types/checkout.js";
 import { defaultAuditLogger } from "../../services/auditLogger.js";
+
+import {
+  TenantPausedError,
+  BundleReservationError,
+} from "../../services/schedulingService.js";
 
 // Re-export the scheduling errors so a single import surface covers them.
 export {
   TenantPausedError,
   BundleReservationError,
-} from "../../services/schedulingService.js";
-import { TenantPausedError } from "../../services/schedulingService.js";
+};
 
 // ─── Repository contract ─────────────────────────────────────────────────────
 

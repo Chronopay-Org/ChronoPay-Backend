@@ -7,7 +7,7 @@ import type {
   PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
-import { SchedulingService, SlotExpiredError, BundleNotTransferableError } from "../../services/schedulingService.js";
+import { SchedulingService, BundleNotTransferableError } from "../../services/schedulingService.js";
 import { BundleTransferabilityService } from "../../services/bundleTransferabilityService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
@@ -422,6 +422,32 @@ export class BookingIntentService {
 
     this.schedulingService.releaseSlot(intent.slotId);
 
+    return updated;
+  }
+
+  private resolveIntentPrice(intent: BookingIntentRecord): number {
+    if (intent.pricingSnapshot) {
+      return intent.pricingSnapshot.resolvedPrice;
+    }
+    return 0;
+  }
+
+  autoRefundHold(intentId: string): BookingIntentRecord {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+    const refundAmount = this.resolveIntentPrice(intent);
+    const updated = this.bookingIntentRepository.update(intentId, {
+      status: "hold_refunded",
+      refundedAt: this.now(),
+      refundMetadata: {
+        refundedAt: this.now(),
+        refundedAmountCents: refundAmount,
+        refundReason: "hold_auto_refund",
+      },
+    });
+    this.schedulingService.releaseSlot(intent.slotId);
     return updated;
   }
 

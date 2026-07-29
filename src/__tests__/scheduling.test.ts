@@ -417,7 +417,7 @@ function makeIntentWithPricing(overrides: Partial<BookingIntentRecord> = {}): Bo
     nowMs: Date.now(),
     activeBookings: 0,
     capacity: 1,
-    config: {},
+    config: { strategy: "fixed" },
   };
   return {
     id: "intent-escrow-1",
