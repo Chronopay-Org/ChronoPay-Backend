@@ -7,7 +7,8 @@ import type {
   PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
-import { SchedulingService } from "../../services/schedulingService.js";
+import { SchedulingService, SlotExpiredError, BundleNotTransferableError } from "../../services/schedulingService.js";
+import { BundleTransferabilityService } from "../../services/bundleTransferabilityService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
@@ -28,18 +29,28 @@ import {
 export interface CreateBookingIntentInput {
   slotId: string;
   note?: string;
-  /**
-   * Optional pricing strategy to apply. When provided, the resolved price and
-   * all inputs are snapshotted onto the created intent for auditability.
-   */
   pricingStrategyId?: StrategyId;
-  /** Base price in the smallest currency unit. Required when pricingStrategyId is set. */
   basePrice?: number;
+  bookingType?: BookingType;
+  holdDeadlineMs?: number;
 }
 
 export interface CreateRecurringBookingInput {
   rrule: string;
   note?: string;
+  bookingType?: BookingType;
+  holdDeadlineMs?: number;
+}
+
+export interface AutoRefundResult {
+  intentId: string;
+  success: boolean;
+  refundedAmountCents: number;
+  error?: string;
+}
+
+export interface SupplierPolicies {
+  getHoldPolicy(professionalId: string): SupplierHoldPolicy;
 }
 
 export class BookingIntentError extends AppError {
@@ -98,6 +109,10 @@ export class BookingIntentService {
     return new SchedulingService(this.slotRepository, this.bookingIntentRepository);
   }
 
+  private get bundleTransferabilityService(): BundleTransferabilityService {
+    return new BundleTransferabilityService(this.slotRepository);
+  }
+
   private captureCancellationPolicySnapshot(): CancellationPolicySnapshot {
     return this.cancellationPolicyService.snapshotCurrentPolicy();
   }
@@ -130,6 +145,21 @@ export class BookingIntentService {
       }
     }
 
+    // Enforce bundle transferability — non-transferable bundles cannot be
+    // listed for resale unless the actor is an admin (override path).
+    try {
+      this.bundleTransferabilityService.assertBundleTransferable(slot, actor);
+    } catch (err) {
+      if (err instanceof BundleNotTransferableError) {
+        throw new BookingIntentError(
+          422,
+          err.message,
+          ERROR_CODES.BUNDLE_NOT_TRANSFERABLE.code,
+        );
+      }
+      throw err;
+    }
+
     if (slot.professional === actor.userId) {
       throw new BookingIntentError(403, "You cannot create a booking intent for your own slot.");
     }
@@ -147,7 +177,6 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
 
-    // ── Resolve pricing snapshot (if the slot has a strategy configured) ──────
     let pricingSnapshot: PricingSnapshot | undefined;
     if (slot.pricingStrategy) {
       const ps = slot.pricingStrategy;
@@ -189,9 +218,12 @@ export class BookingIntentService {
       customerId: actor.userId,
       startTime: slot.startTime,
       endTime: slot.endTime,
-      status: "pending",
+      status,
       note: input.note,
       createdAt: this.now(),
+      bookingType,
+      holdUntilMs,
+      holdPlacedAt,
       pricingSnapshot,
       cancellationPolicySnapshot,
       holdFeePolicySnapshot,
@@ -228,6 +260,17 @@ export class BookingIntentService {
       if (!slot) {
         failures.push({ date: occ.toISOString(), reason: "No available slot at this time" });
         continue;
+      }
+
+      // Enforce bundle transferability
+      try {
+        this.bundleTransferabilityService.assertBundleTransferable(slot, actor);
+      } catch (err) {
+        if (err instanceof BundleNotTransferableError) {
+          failures.push({ date: occ.toISOString(), reason: err.message });
+          continue;
+        }
+        throw err;
       }
 
       // Basic conflicts and checks similar to single-create
@@ -295,7 +338,8 @@ export class BookingIntentService {
       );
     }
 
-    if (intent.status !== "pending") {
+    const canConfirm = intent.status === "pending" || intent.status === "hold_placed";
+    if (!canConfirm) {
       throw new BookingIntentError(409, `Cannot confirm intent with status "${intent.status}".`);
     }
 
@@ -312,11 +356,29 @@ export class BookingIntentService {
       throw new BookingIntentError(403, "You are not authorized to cancel this booking intent.");
     }
 
-    if (intent.status !== "pending") {
+    const canCancel = intent.status === "pending" || intent.status === "hold_placed";
+    if (!canCancel) {
       throw new BookingIntentError(409, `Cannot cancel intent with status "${intent.status}".`);
     }
 
-    const updated = this.bookingIntentRepository.updateStatus(intentId, "cancelled");
+    const isHold = intent.bookingType === "refundable_hold" && intent.status === "hold_placed";
+    const refundAmount = isHold ? this.resolveIntentPrice(intent) : 0;
+
+    const updates: Partial<BookingIntentRecord> = isHold
+      ? {
+          status: "hold_refunded",
+          refundedAt: this.now(),
+          refundMetadata: {
+            refundedAt: this.now(),
+            refundedAmountCents: refundAmount,
+            refundReason: actor.role === "admin" ? "admin_action" : "customer_cancel",
+          },
+        }
+      : {
+          status: "cancelled",
+        };
+
+    const updated = this.bookingIntentRepository.update(intentId, updates);
 
     this.schedulingService.releaseSlot(intent.slotId);
 
@@ -346,7 +408,8 @@ export class BookingIntentService {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
 
-    if (intent.status !== "pending") {
+    const canExpire = intent.status === "pending" || intent.status === "hold_placed";
+    if (!canExpire) {
       throw new BookingIntentError(409, `Cannot expire intent with status "${intent.status}".`);
     }
 
@@ -377,7 +440,13 @@ export function parseCreateBookingIntentBody(
     throw new BookingIntentError(400, "Booking intent payload must be a JSON object.");
   }
 
-  const { slotId, note, rrule } = body as { slotId?: unknown; note?: unknown; rrule?: unknown };
+  const { slotId, note, rrule, bookingType, holdDeadlineMs } = body as {
+    slotId?: unknown;
+    note?: unknown;
+    rrule?: unknown;
+    bookingType?: unknown;
+    holdDeadlineMs?: unknown;
+  };
 
   // If an RRULE is provided, treat this as a recurring booking request
   if (rrule !== undefined) {
@@ -385,25 +454,40 @@ export function parseCreateBookingIntentBody(
       throw new BookingIntentError(400, "rrule must be a non-empty string.");
     }
     const normalizedRRule = rrule.trim();
-
-    if (note === undefined) {
-      return { rrule: normalizedRRule };
+    
+    // Assert error for ambiguous inputs without explicit offset
+    if (normalizedRRule.includes("DTSTART")) {
+      const dtstartMatch = normalizedRRule.match(/DTSTART(?:;[^:]*)?:(.*)(?:\n|$)/);
+      if (dtstartMatch) {
+        const dtstartVal = dtstartMatch[1];
+        const hasZ = dtstartVal.endsWith("Z");
+        const hasTzid = normalizedRRule.includes("TZID=");
+        if (!hasZ && !hasTzid) {
+          throw new BookingIntentError(400, "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)");
+        }
+      }
     }
 
-    if (typeof note !== "string") {
-      throw new BookingIntentError(400, "note must be a string when provided.");
+    let sanitizedNote: string | undefined;
+    if (note !== undefined) {
+      if (typeof note !== "string") {
+        throw new BookingIntentError(400, "note must be a string when provided.");
+      }
+      sanitizedNote = sanitizeNote(note) ?? undefined;
+      if (sanitizedNote === null || sanitizedNote === undefined) {
+        throw new BookingIntentError(400, "note cannot be empty when provided.");
+      }
+      if (sanitizedNote.length > 500) {
+        throw new BookingIntentError(400, "note must be 500 characters or fewer.");
+      }
     }
 
-    const sanitizedNote = sanitizeNote(note);
-    if (sanitizedNote === null) {
-      throw new BookingIntentError(400, "note cannot be empty when provided.");
-    }
-
-    if (sanitizedNote.length > 500) {
-      throw new BookingIntentError(400, "note must be 500 characters or fewer.");
-    }
-
-    return { rrule: normalizedRRule, note: sanitizedNote };
+    return {
+      rrule: normalizedRRule,
+      note: sanitizedNote,
+      bookingType: parsedBookingType,
+      holdDeadlineMs: parsedHoldDeadlineMs,
+    };
   }
 
   if (typeof slotId !== "string" || slotId.trim().length === 0) {
@@ -415,21 +499,24 @@ export function parseCreateBookingIntentBody(
     throw new BookingIntentError(400, "slotId format is invalid.");
   }
 
-  if (typeof note !== "string") {
-    throw new BookingIntentError(400, "note must be a string when provided.");
-  }
-
-  const sanitizedNote = sanitizeNote(note);
-  if (sanitizedNote === null) {
-    throw new BookingIntentError(400, "note cannot be empty when provided.");
-  }
-
-  if (sanitizedNote.length > 500) {
-    throw new BookingIntentError(400, "note must be 500 characters or fewer.");
+  let sanitizedNote: string | undefined;
+  if (note !== undefined) {
+    if (typeof note !== "string") {
+      throw new BookingIntentError(400, "note must be a string when provided.");
+    }
+    sanitizedNote = sanitizeNote(note) ?? undefined;
+    if (sanitizedNote === null || sanitizedNote === undefined) {
+      throw new BookingIntentError(400, "note cannot be empty when provided.");
+    }
+    if (sanitizedNote.length > 500) {
+      throw new BookingIntentError(400, "note must be 500 characters or fewer.");
+    }
   }
 
   return {
     slotId: normalizedSlotId,
     note: sanitizedNote,
+    bookingType: parsedBookingType,
+    holdDeadlineMs: parsedHoldDeadlineMs,
   };
 }

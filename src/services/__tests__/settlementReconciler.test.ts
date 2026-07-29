@@ -1,6 +1,8 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import { SettlementReconciler, _settlements, settlementEvents } from "../settlementReconciler.js";
 import { settlementsPendingFinality } from "../../metrics.js";
+import { payoutRetryRollup } from "../../scheduler/payoutRetryMetrics.js";
+import { providerRetryRegistry } from "../../scheduler/payoutRetryPolicy.js";
 
 describe("SettlementReconciler Worker & Service", () => {
   let mockHorizonClient: any;
@@ -11,6 +13,8 @@ describe("SettlementReconciler Worker & Service", () => {
     _settlements.clear();
     settlementEvents.removeAllListeners();
     jest.clearAllMocks();
+    payoutRetryRollup.reset();
+    providerRetryRegistry.clear();
 
     mockHorizonClient = {
       call: jest.fn() as any,
@@ -121,8 +125,26 @@ describe("SettlementReconciler Worker & Service", () => {
     expect((await settlementsPendingFinality.get()).values[0]?.value ?? 0).toBe(1);
   });
 
-  it("respects exponential backoff delay before polling Horizon again", async () => {
-    const lastPolledAt = Date.now();
+  it("respects jittered backoff delay before polling Horizon again", async () => {
+    // Use _now and _random overrides so the backoff gate is deterministic.
+    // alwaysMax random (0.9999) → delayMs ≈ capMs for attempt 2 with base=1000, mult=2:
+    //   cap = min(30000, 1000 * 2^2) = 4000ms; delay ≈ 4000ms
+    // We set _now to return a fixed timestamp 100ms after lastPolledAt,
+    // so elapsed (100ms) < delay (~4000ms) → gate must skip the poll.
+    const lastPolledAt = 1_000_000;
+    const fixedNow = lastPolledAt + 100; // only 100ms elapsed
+    const alwaysMax = () => 0.9999;
+
+    // Rebuild reconciler with deterministic clock and random
+    reconciler.stop();
+    reconciler = new SettlementReconciler(mockHorizonClient as any, {
+      minConfirmations: 3,
+      maxAttempts: 5,
+      pollIntervalMs: 5000,
+      _now: () => fixedNow,
+      _random: alwaysMax,
+    });
+
     _settlements.set(transactionId, {
       transactionId,
       eventType: "settlement_completed",
@@ -130,7 +152,7 @@ describe("SettlementReconciler Worker & Service", () => {
       timestamp: Date.now(),
       status: "pending_finality",
       confirmations: 0,
-      attempts: 2, // backoff = 2^2 * 1000 = 4000ms
+      attempts: 2,
       lastPolledAt,
     });
 
@@ -144,7 +166,7 @@ describe("SettlementReconciler Worker & Service", () => {
 
     await reconciler.reconcile();
 
-    // Latest ledger was queried, but backoff prevents querying getTransaction
+    // Latest ledger was queried, but the backoff gate skips getTransaction
     expect(mockHorizonClient.call).toHaveBeenCalledTimes(1);
     expect(mockHorizonClient.call.mock.calls[0][0].method).toBe("getLatestLedger");
     const settlement = _settlements.get(transactionId);
@@ -258,5 +280,264 @@ describe("SettlementReconciler Worker & Service", () => {
     expect(alertEmitted.type).toBe("FORK_DETECTED");
     expect(alertEmitted.settlementId).toBe(transactionId);
     expect(alertEmitted.message).toContain("vanished from the chain");
+  });
+});
+
+// ─── Per-provider ceiling enforcement ────────────────────────────────────────
+
+describe("SettlementReconciler — per-provider ceiling", () => {
+  let mockHorizonClient: any;
+  let reconciler: SettlementReconciler;
+  const txId = "txn-ceiling-test";
+
+  // Fixed clock: lastPolledAt=0, _now always returns far-future so backoff
+  // gate never skips (elapsed = huge >> any delay).
+  const alwaysZero = () => 0; // jitter=0 → delayMs=0, gate always passes
+
+  beforeEach(() => {
+    _settlements.clear();
+    settlementEvents.removeAllListeners();
+    jest.clearAllMocks();
+    payoutRetryRollup.reset();
+    providerRetryRegistry.clear();
+
+    mockHorizonClient = { call: jest.fn() as any };
+  });
+
+  afterEach(() => {
+    reconciler?.stop();
+  });
+
+  function ledgerResponse(sequence = 1008) {
+    return { data: { _embedded: { records: [{ sequence }] } } };
+  }
+
+  function notFoundError() {
+    const e = new Error("Horizon HTTP 404: transaction not found");
+    (e as any).statusCode = 404;
+    return e;
+  }
+
+  it("honours a tight provider ceiling — capMs is bounded by the registered ceiling", async () => {
+    providerRetryRegistry.set("ach", {
+      providerId: "ach",
+      baseDelayMs: 1_000,
+      multiplier: 2,
+      maxDelayCeilingMs: 3_000,   // tight ceiling
+      maxRetries: 10,
+    });
+
+    reconciler = new SettlementReconciler(mockHorizonClient as any, {
+      minConfirmations: 3,
+      _now: () => Date.now() + 1_000_000, // far future → always past backoff
+      _random: alwaysZero,
+    });
+
+    _settlements.set(txId, {
+      transactionId: txId,
+      eventType: "settlement_completed",
+      amount: 100,
+      timestamp: Date.now(),
+      status: "pending_finality",
+      confirmations: 0,
+      attempts: 5,        // without ceiling: cap = 1000*2^5 = 32_000 >> 3_000
+      providerId: "ach",
+    });
+
+    mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
+    mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+
+    await reconciler.reconcile();
+
+    // Ceiling_hit should have been recorded because cap was clamped to 3_000
+    const snap = payoutRetryRollup.snapshot();
+    expect(snap.ceilingHits).toBe(1);
+    expect(snap.attempts).toBe(1);
+  });
+
+  it("records 'scheduled' outcome when cap is below the ceiling", async () => {
+    providerRetryRegistry.set("sepa", {
+      providerId: "sepa",
+      baseDelayMs: 500,
+      multiplier: 2,
+      maxDelayCeilingMs: 60_000,
+      maxRetries: 10,
+    });
+
+    reconciler = new SettlementReconciler(mockHorizonClient as any, {
+      minConfirmations: 3,
+      _now: () => Date.now() + 1_000_000,
+      _random: alwaysZero,
+    });
+
+    _settlements.set(txId, {
+      transactionId: txId,
+      eventType: "settlement_completed",
+      amount: 100,
+      timestamp: Date.now(),
+      status: "pending_finality",
+      confirmations: 0,
+      attempts: 1,    // cap = 500*2^1 = 1_000 << ceiling of 60_000
+      providerId: "sepa",
+    });
+
+    mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
+    mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+
+    await reconciler.reconcile();
+
+    const snap = payoutRetryRollup.snapshot();
+    expect(snap.scheduled).toBe(1);
+    expect(snap.ceilingHits).toBe(0);
+    expect(snap.exhausted).toBe(0);
+  });
+
+  it("records 'exhausted' and marks settlement failed when maxRetries reached", async () => {
+    providerRetryRegistry.set("wire", {
+      providerId: "wire",
+      baseDelayMs: 1_000,
+      multiplier: 2,
+      maxDelayCeilingMs: 30_000,
+      maxRetries: 3,
+    });
+
+    reconciler = new SettlementReconciler(mockHorizonClient as any, {
+      minConfirmations: 3,
+      _now: () => Date.now() + 1_000_000,
+      _random: alwaysZero,
+    });
+
+    _settlements.set(txId, {
+      transactionId: txId,
+      eventType: "settlement_completed",
+      amount: 100,
+      timestamp: Date.now(),
+      status: "pending_finality",
+      confirmations: 0,
+      attempts: 3,    // nextAttempt=4 > maxRetries=3 → exhausted
+      providerId: "wire",
+    });
+
+    mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
+    mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+
+    await reconciler.reconcile();
+
+    const settlement = _settlements.get(txId);
+    expect(settlement?.status).toBe("failed");
+    expect(settlement?.attempts).toBe(4);
+
+    const snap = payoutRetryRollup.snapshot();
+    expect(snap.exhausted).toBe(1);
+    expect(snap.attempts).toBe(1);
+  });
+
+  it("ceiling < base: ceiling is still honoured from the very first retry", async () => {
+    // ceiling (200ms) < base (1_000ms) → cap is always 200ms regardless of attempt
+    providerRetryRegistry.set("fast-rail", {
+      providerId: "fast-rail",
+      baseDelayMs: 1_000,
+      multiplier: 2,
+      maxDelayCeilingMs: 200,
+      maxRetries: 10,
+    });
+
+    reconciler = new SettlementReconciler(mockHorizonClient as any, {
+      minConfirmations: 3,
+      _now: () => Date.now() + 1_000_000,
+      _random: alwaysZero,
+    });
+
+    _settlements.set(txId, {
+      transactionId: txId,
+      eventType: "settlement_completed",
+      amount: 100,
+      timestamp: Date.now(),
+      status: "pending_finality",
+      confirmations: 0,
+      attempts: 0,
+      providerId: "fast-rail",
+    });
+
+    mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
+    mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+
+    await reconciler.reconcile();
+
+    // ceiling < base → cap was clamped → ceiling_hit
+    const snap = payoutRetryRollup.snapshot();
+    expect(snap.ceilingHits).toBe(1);
+  });
+
+  it("multiple 404s accumulate attempts and emit one metric per reconcile call", async () => {
+    providerRetryRegistry.set("ach", {
+      providerId: "ach",
+      baseDelayMs: 1_000,
+      multiplier: 2,
+      maxDelayCeilingMs: 30_000,
+      maxRetries: 10,
+    });
+
+    let callCount = 0;
+    // _now increments so each call appears as a new time slice past any delay
+    reconciler = new SettlementReconciler(mockHorizonClient as any, {
+      minConfirmations: 3,
+      _now: () => 1_000_000 + callCount++ * 1_000_000,
+      _random: alwaysZero,
+    });
+
+    _settlements.set(txId, {
+      transactionId: txId,
+      eventType: "settlement_completed",
+      amount: 100,
+      timestamp: Date.now(),
+      status: "pending_finality",
+      confirmations: 0,
+      attempts: 0,
+      providerId: "ach",
+    });
+
+    // Three reconcile loops, each returning 404
+    for (let i = 0; i < 3; i++) {
+      mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
+      mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+      await reconciler.reconcile();
+    }
+
+    const settlement = _settlements.get(txId);
+    expect(settlement?.attempts).toBe(3);
+
+    const snap = payoutRetryRollup.snapshot();
+    expect(snap.attempts).toBe(3);
+  });
+
+  it("falls back to default provider config when providerId is not in registry", async () => {
+    // No entry registered for "unknown-provider" — should use defaults
+    reconciler = new SettlementReconciler(mockHorizonClient as any, {
+      minConfirmations: 3,
+      maxAttempts: 5,
+      _now: () => Date.now() + 1_000_000,
+      _random: alwaysZero,
+    });
+
+    _settlements.set(txId, {
+      transactionId: txId,
+      eventType: "settlement_completed",
+      amount: 100,
+      timestamp: Date.now(),
+      status: "pending_finality",
+      confirmations: 0,
+      attempts: 1,
+      providerId: "unknown-provider",
+    });
+
+    mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
+    mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+
+    // Should not throw — defaults kick in
+    await expect(reconciler.reconcile()).resolves.not.toThrow();
+
+    const snap = payoutRetryRollup.snapshot();
+    expect(snap.attempts).toBe(1);
   });
 });

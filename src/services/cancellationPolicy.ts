@@ -287,6 +287,12 @@ export interface CancellationPolicyServiceDeps {
   auditLogger?: AuditLogger;
   nowMs?: () => number;
   nowIso?: () => string;
+  /**
+   * Optional supplier cancellation override store.
+   * When provided, {@link calculateRefund} checks for a per-supplier override
+   * before falling back to the global policy.
+   */
+  supplierOverrideStore?: SupplierCancellationOverrideStore;
 }
 
 export class CancellationPolicyService {
@@ -295,6 +301,7 @@ export class CancellationPolicyService {
   private readonly auditLogger: AuditLogger;
   private readonly nowMs: () => number;
   private readonly nowIso: () => string;
+  private readonly supplierOverrideStore?: SupplierCancellationOverrideStore;
 
   constructor(deps: CancellationPolicyServiceDeps = {}) {
     const defaultRegistry = createDefaultRegistry();
@@ -303,6 +310,7 @@ export class CancellationPolicyService {
     this.auditLogger = deps.auditLogger ?? defaultAuditLogger;
     this.nowMs = deps.nowMs ?? (() => Date.now());
     this.nowIso = deps.nowIso ?? (() => new Date().toISOString());
+    this.supplierOverrideStore = deps.supplierOverrideStore;
   }
 
   snapshotCurrentPolicy(overrideTerms?: ProratedCancellationTerms): CancellationPolicySnapshot {
@@ -364,6 +372,21 @@ export class CancellationPolicyService {
     let policyVersionId: string;
     let terms: ProratedCancellationTerms;
 
+    // 1. Check for per-supplier override first
+    if (intent.professional) {
+      const supplierOverride = this.resolveTermsForSupplier(intent.professional);
+      if (supplierOverride) {
+        validateProratedCancellationTerms(supplierOverride.terms);
+        return computeRefundWithTerms(
+          supplierOverride.terms,
+          price,
+          hoursUntilStart,
+          supplierOverride.policyVersionId,
+        );
+      }
+    }
+
+    // 2. Fall back to grandfathered or global policy
     if (intent.cancellationPolicySnapshot) {
       policyVersionId = intent.cancellationPolicySnapshot.policyVersionId;
       terms = intent.cancellationPolicySnapshot.policyTerms;

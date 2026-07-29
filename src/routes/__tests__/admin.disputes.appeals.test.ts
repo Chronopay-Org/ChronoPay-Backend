@@ -23,8 +23,11 @@ import {
   SENIOR_PANEL_MIN_SIZE,
 } from "../../services/disputeAppeals.js";
 
+const ADMIN_TOKEN = "test-admin-token";
+process.env.CHRONOPAY_ADMIN_TOKEN = ADMIN_TOKEN;
+
 const app = createApp({ enableTestRoutes: true });
-const adminHeaders = { "x-chronopay-admin-token": "test-admin-token" };
+const adminHeaders = { "x-chronopay-admin-token": ADMIN_TOKEN };
 
 function poolOfFour(): void {
   // Five distinct senior arbiters in tiers of unrelated tenants, plus
