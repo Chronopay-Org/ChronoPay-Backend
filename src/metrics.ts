@@ -488,22 +488,28 @@ export const webhookHmacVerified = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Partner token quota metrics ───────────────────────────────────────────────
+
 /**
- * Counter tracking outcomes of internal fair-queue bypass header verification.
- *
- * Label `result` values:
- *   - `valid`       — signature matched, bypass granted
- *   - `missing`     — no bypass headers present (request treated normally)
- *   - `expired`     — timestamp outside tolerance window (replay blocked)
- *   - `wrong_route` — signed route does not match actual request path
- *   - `invalid_sig` — HMAC mismatch against all known secrets
- *   - `bad_format`  — header values could not be parsed
+ * Counter incremented each time a partner token's quota usage crosses the
+ * approaching-limit threshold (>= 80 % of daily or monthly limit).
  */
-export const fairQueueBypassAttempts = createBudgetedCounter({
-  name: "fair_queue_bypass_attempts_total",
-  help: "Total number of internal fair-queue rate-limit bypass attempts by result",
-  labels: ["result"],
-  budget: 8,
+export const partnerQuotaApproachingLimit = createBudgetedCounter({
+  name: "partner_quota_approaching_limit_total",
+  help: "Total number of approaching-quota notifications emitted per token",
+  labels: ["token_id"],
+  budget: 512,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time a request is blocked because a quota was exceeded.
+ */
+export const partnerQuotaExceededTotal = createBudgetedCounter({
+  name: "partner_quota_exceeded_total",
+  help: "Total number of blocked requests due to quota exhaustion per token",
+  labels: ["token_id"],
+  budget: 512,
   registers: [register],
 });
 
