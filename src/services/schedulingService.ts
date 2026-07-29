@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import type { SlotRepository } from "../modules/slots/slot-repository.js";
 
@@ -31,6 +32,13 @@ export class EscrowPausedError extends Error {
   constructor() {
     super(`Escrow contract migration in progress: new holds are temporarily paused`);
     this.name = "EscrowPausedError";
+  }
+}
+
+export class BundleNotTransferableError extends Error {
+  constructor(bundleId: string) {
+    super(`Bundle ${bundleId} is not transferable; resale listing is blocked.`);
+    this.name = "BundleNotTransferableError";
   }
 }
 

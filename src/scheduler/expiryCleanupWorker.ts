@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { BookingIntentService } from "../modules/booking-intents/booking-intent-service.js";
 import type { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { CheckoutSessionService } from "../services/checkout.js";

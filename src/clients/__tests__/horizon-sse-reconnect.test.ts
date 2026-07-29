@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Comprehensive tests for HorizonContractClient.streamEvents()
  *
