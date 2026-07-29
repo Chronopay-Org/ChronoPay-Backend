@@ -6,6 +6,14 @@ import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
+import {
+  HolidayCalendarService,
+  InMemoryHolidayCalendarRepository,
+  HolidayCalendarNotFoundError,
+  HolidayCalendarConflictError,
+  HolidayCalendarValidationError,
+  type IHolidayCalendarRepository,
+} from "../services/holidayCalendarService.js";
 
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
@@ -1555,251 +1563,305 @@ router.post(
   },
 );
 
+// ─── Holiday Calendar Admin API ───────────────────────────────────────────────
+//
+// All routes require the x-chronopay-admin-token header.
+// The service instance can be replaced via setHolidayCalendarRepository()
+// to inject an in-memory repo in tests without a live database.
+//
+// Routes:
+//   GET    /api/v1/admin/holiday-calendars
+//   POST   /api/v1/admin/holiday-calendars
+//   GET    /api/v1/admin/holiday-calendars/:id
+//   PATCH  /api/v1/admin/holiday-calendars/:id
+//   DELETE /api/v1/admin/holiday-calendars/:id
+//   POST   /api/v1/admin/holiday-calendars/:id/entries
+//   DELETE /api/v1/admin/holiday-calendars/:id/entries/:entryId
+//   POST   /api/v1/admin/holiday-calendars/import/yaml
+//   GET    /api/v1/admin/holiday-calendars/:id/revisions
+//   GET    /api/v1/admin/holiday-calendars/:id/revisions/:version
+//   POST   /api/v1/admin/holiday-calendars/:id/rollback/:version
+
+let _holidayCalendarRepo: IHolidayCalendarRepository = new InMemoryHolidayCalendarRepository();
+
+export function setHolidayCalendarRepository(repo: IHolidayCalendarRepository): void {
+  _holidayCalendarRepo = repo;
+}
+
+function getHolidayCalendarService(): HolidayCalendarService {
+  return new HolidayCalendarService(_holidayCalendarRepo);
+}
+
+function handleHolidayCalendarError(err: unknown, res: Response): Response {
+  if (err instanceof HolidayCalendarNotFoundError) {
+    return res.status(404).json({ success: false, error: err.message });
+  }
+  if (err instanceof HolidayCalendarConflictError) {
+    return res.status(409).json({ success: false, error: err.message });
+  }
+  if (err instanceof HolidayCalendarValidationError) {
+    return res.status(422).json({ success: false, error: err.message, details: err.details });
+  }
+  const message = err instanceof Error ? err.message : "Internal server error";
+  return res.status(500).json({ success: false, error: message });
+}
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars
+ * @desc List all holiday calendars.
+ * @access Private (admin token only)
+ */
+router.get("/holiday-calendars", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const calendars = await getHolidayCalendarService().listCalendars();
+    return res.status(200).json({ success: true, calendars });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/holiday-calendars
+ * @desc Create a new holiday calendar for a region.
+ * @access Private (admin token only)
+ *
+ * Body:
+ *   region       {string} — unique region identifier (e.g. "us-east", "eu-west")
+ *   name         {string} — display name for the calendar
+ *   description  {string} — optional description
+ */
+router.post("/holiday-calendars", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { region, name, description } = req.body ?? {};
+
+    if (!region || typeof region !== "string" || region.trim() === "") {
+      return res.status(400).json({ success: false, error: "region is required" });
+    }
+    if (!name || typeof name !== "string" || name.trim() === "") {
+      return res.status(400).json({ success: false, error: "name is required" });
+    }
+
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const calendar = await getHolidayCalendarService().createCalendar({
+      region,
+      name,
+      description,
+      changedBy,
+    });
+    return res.status(201).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars/:id
+ * @desc Retrieve a single holiday calendar by ID.
+ * @access Private (admin token only)
+ */
+router.get("/holiday-calendars/:id", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const calendar = await getHolidayCalendarService().getCalendar(req.params.id);
+    return res.status(200).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route PATCH /api/v1/admin/holiday-calendars/:id
+ * @desc Update calendar metadata (name / description). Saves a new revision.
+ * @access Private (admin token only)
+ *
+ * Body:
+ *   name         {string} — new display name (optional)
+ *   description  {string} — new description (optional)
+ */
+router.patch("/holiday-calendars/:id", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { name, description } = req.body ?? {};
+    if (name !== undefined && (typeof name !== "string" || name.trim() === "")) {
+      return res.status(400).json({ success: false, error: "name must be a non-empty string" });
+    }
+
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const calendar = await getHolidayCalendarService().updateCalendar(req.params.id, {
+      name,
+      description,
+      changedBy,
+    });
+    return res.status(200).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route DELETE /api/v1/admin/holiday-calendars/:id
+ * @desc Delete a holiday calendar and all its entries and revisions.
+ * @access Private (admin token only)
+ */
+router.delete("/holiday-calendars/:id", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    await getHolidayCalendarService().deleteCalendar(req.params.id);
+    return res.status(200).json({ success: true, message: "Calendar deleted" });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/holiday-calendars/:id/entries
+ * @desc Add a single holiday entry to an existing calendar.
+ * @access Private (admin token only)
+ *
+ * Body:
+ *   name       {string}  — holiday name
+ *   start_date {string}  — YYYY-MM-DD inclusive start
+ *   end_date   {string}  — YYYY-MM-DD inclusive end (equals start for single-day)
+ *   recurring  {boolean} — whether this recurs annually (default false)
+ *   note       {string}  — optional note
+ */
+router.post("/holiday-calendars/:id/entries", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { name, start_date, end_date, recurring, note } = req.body ?? {};
+
+    if (!name || typeof name !== "string" || name.trim() === "") {
+      return res.status(400).json({ success: false, error: "name is required" });
+    }
+    if (!start_date || typeof start_date !== "string") {
+      return res.status(400).json({ success: false, error: "start_date is required (YYYY-MM-DD)" });
+    }
+    if (!end_date || typeof end_date !== "string") {
+      return res.status(400).json({ success: false, error: "end_date is required (YYYY-MM-DD)" });
+    }
+
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const entry = await getHolidayCalendarService().addEntry(req.params.id, {
+      name,
+      startDate: start_date,
+      endDate: end_date,
+      recurring: recurring ?? false,
+      note,
+      changedBy,
+    });
+    return res.status(201).json({ success: true, entry });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route DELETE /api/v1/admin/holiday-calendars/:id/entries/:entryId
+ * @desc Remove a single holiday entry from a calendar.
+ * @access Private (admin token only)
+ */
+router.delete(
+  "/holiday-calendars/:id/entries/:entryId",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+      await getHolidayCalendarService().deleteEntry(req.params.id, req.params.entryId, changedBy);
+      return res.status(200).json({ success: true, message: "Entry deleted" });
+    } catch (err) {
+      return handleHolidayCalendarError(err, res);
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/holiday-calendars/import/yaml
+ * @desc Import holidays from a YAML-shaped JSON payload.
+ *       The import performs full schema validation and overlap detection.
+ *       If a calendar for the region already exists, its entries are replaced.
+ *       A new revision is saved on every successful import.
+ * @access Private (admin token only)
+ *
+ * Body (parsed YAML as JSON):
+ *   region      {string}   — target region (required)
+ *   name        {string}   — calendar display name (optional, used only on creation)
+ *   description {string}   — description (optional)
+ *   holidays    {object[]} — array of { name, start_date, end_date, recurring?, note? }
+ *
+ * Validation errors return 422 with a `details` array.
+ * Duplicate / overlapping ranges are rejected with 422.
+ */
+router.post("/holiday-calendars/import/yaml", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const calendar = await getHolidayCalendarService().importFromYaml(req.body, {
+      changedBy,
+      changeNote: req.body?.changeNote,
+    });
+    return res.status(200).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars/:id/revisions
+ * @desc List all revisions for a calendar (newest first).
+ * @access Private (admin token only)
+ */
+router.get("/holiday-calendars/:id/revisions", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const revisions = await getHolidayCalendarService().listRevisions(req.params.id);
+    return res.status(200).json({ success: true, revisions });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars/:id/revisions/:version
+ * @desc Fetch a specific historical revision snapshot.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/holiday-calendars/:id/revisions/:version",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const version = parseInt(req.params.version, 10);
+      if (isNaN(version) || version < 1) {
+        return res.status(400).json({ success: false, error: "version must be a positive integer" });
+      }
+      const revision = await getHolidayCalendarService().getRevision(req.params.id, version);
+      return res.status(200).json({ success: true, revision });
+    } catch (err) {
+      return handleHolidayCalendarError(err, res);
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/holiday-calendars/:id/rollback/:version
+ * @desc Roll the calendar back to a specific historical revision.
+ *       The rollback itself is recorded as a new revision for auditability.
+ * @access Private (admin token only)
+ */
+router.post(
+  "/holiday-calendars/:id/rollback/:version",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const version = parseInt(req.params.version, 10);
+      if (isNaN(version) || version < 1) {
+        return res.status(400).json({ success: false, error: "version must be a positive integer" });
+      }
+      const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+      const calendar = await getHolidayCalendarService().rollbackToRevision(
+        req.params.id,
+        version,
+        changedBy,
+      );
+      return res.status(200).json({ success: true, calendar });
+    } catch (err) {
+      return handleHolidayCalendarError(err, res);
+    }
+  },
+);
+
 export default router;
-
-
-// ─── GDPR DSR SLA Routes (#518) ──────────────────────────────────────────────
-
-const VALID_REQUEST_TYPES: DsrRequestType[] = [
-  "access",
-  "erasure",
-  "rectification",
-  "portability",
-  "restriction",
-  "objection",
-];
-
-const VALID_STATUSES: DsrStatus[] = [
-  "open",
-  "in_progress",
-  "resolved",
-  "extended",
-  "rejected",
-];
-
-/**
- * @route GET /api/v1/admin/gdpr/dsr/dashboard
- * @desc Compliance dashboard: aggregate counts by status + SLA health buckets.
- * @access Private (admin token only)
- */
-router.get("/gdpr/dsr/dashboard", requireAdminToken, async (req: Request, res: Response) => {
-  try {
-    const summary = await getDsrSlaService().getDashboardSummary();
-    return res.status(200).json({ success: true, summary });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message ?? "Failed to fetch DSR dashboard" });
-  }
-});
-
-/**
- * @route GET /api/v1/admin/gdpr/dsr
- * @desc List DSRs with optional status filter and pagination.
- *   Query params:
- *     status  – filter by a single status value
- *     limit   – max results (default 50, max 200)
- *     offset  – pagination offset (default 0)
- * @access Private (admin token only)
- */
-router.get("/gdpr/dsr", requireAdminToken, async (req: Request, res: Response) => {
-  try {
-    const limit = req.query.limit !== undefined ? parseInt(String(req.query.limit), 10) : 50;
-    const offset = req.query.offset !== undefined ? parseInt(String(req.query.offset), 10) : 0;
-
-    if (isNaN(limit) || limit < 1 || limit > 200) {
-      return res.status(400).json({ success: false, error: "limit must be between 1 and 200" });
-    }
-    if (isNaN(offset) || offset < 0) {
-      return res.status(400).json({ success: false, error: "offset must be a non-negative integer" });
-    }
-
-    const statusParam = req.query.status;
-    let status: DsrStatus | undefined;
-    if (statusParam !== undefined) {
-      if (typeof statusParam !== "string" || !VALID_STATUSES.includes(statusParam as DsrStatus)) {
-        return res.status(400).json({
-          success: false,
-          error: `status must be one of: ${VALID_STATUSES.join(", ")}`,
-        });
-      }
-      status = statusParam as DsrStatus;
-    }
-
-    const records = await getDsrSlaService().list({ status, limit, offset });
-    return res.status(200).json({ success: true, records, limit, offset });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message ?? "Failed to list DSRs" });
-  }
-});
-
-/**
- * @route GET /api/v1/admin/gdpr/dsr/:id
- * @desc Retrieve a single DSR by ID with countdown.
- * @access Private (admin token only)
- */
-router.get("/gdpr/dsr/:id", requireAdminToken, async (req: Request, res: Response) => {
-  try {
-    const record = await getDsrSlaService().findById(req.params.id);
-    if (!record) {
-      return res.status(404).json({ success: false, error: "DSR not found" });
-    }
-    return res.status(200).json({ success: true, record });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message ?? "Failed to retrieve DSR" });
-  }
-});
-
-/**
- * @route POST /api/v1/admin/gdpr/dsr
- * @desc Register a new data-subject request and start the 30-day SLA clock.
- * @access Private (admin token only)
- */
-router.post("/gdpr/dsr", requireAdminToken, async (req: Request, res: Response) => {
-  try {
-    const { subjectId, subjectEmail, requestType, notes, receivedAt } = req.body ?? {};
-
-    if (!subjectId || typeof subjectId !== "string") {
-      return res.status(400).json({ success: false, error: "subjectId is required" });
-    }
-    if (!subjectEmail || typeof subjectEmail !== "string") {
-      return res.status(400).json({ success: false, error: "subjectEmail is required" });
-    }
-    if (!requestType || !VALID_REQUEST_TYPES.includes(requestType as DsrRequestType)) {
-      return res.status(400).json({
-        success: false,
-        error: `requestType must be one of: ${VALID_REQUEST_TYPES.join(", ")}`,
-      });
-    }
-
-    let parsedReceivedAt: Date | undefined;
-    if (receivedAt !== undefined) {
-      parsedReceivedAt = new Date(receivedAt);
-      if (isNaN(parsedReceivedAt.getTime())) {
-        return res.status(400).json({ success: false, error: "receivedAt must be a valid ISO 8601 date" });
-      }
-    }
-
-    const record = await getDsrSlaService().create({
-      subjectId: subjectId.trim(),
-      subjectEmail: subjectEmail.trim(),
-      requestType: requestType as DsrRequestType,
-      receivedAt: parsedReceivedAt,
-      notes: typeof notes === "string" ? notes.trim() : undefined,
-    });
-
-    return res.status(201).json({ success: true, record });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message ?? "Failed to create DSR" });
-  }
-});
-
-/**
- * @route PATCH /api/v1/admin/gdpr/dsr/:id/status
- * @desc Update the lifecycle status of a DSR (open → in_progress, rejected).
- * @access Private (admin token only)
- */
-router.patch("/gdpr/dsr/:id/status", requireAdminToken, async (req: Request, res: Response) => {
-  try {
-    const { status, notes } = req.body ?? {};
-
-    const updateableStatuses: DsrStatus[] = ["open", "in_progress", "rejected"];
-    if (!status || !updateableStatuses.includes(status as DsrStatus)) {
-      return res.status(400).json({
-        success: false,
-        error: `status must be one of: ${updateableStatuses.join(", ")}`,
-      });
-    }
-
-    const record = await getDsrSlaService().updateStatus(req.params.id, {
-      status: status as Exclude<DsrStatus, "resolved" | "extended">,
-      notes: typeof notes === "string" ? notes.trim() : undefined,
-    });
-
-    return res.status(200).json({ success: true, record });
-  } catch (err: any) {
-    const status = err.message?.includes("not found") ? 404 : 500;
-    return res.status(status).json({ success: false, error: err.message ?? "Failed to update DSR status" });
-  }
-});
-
-/**
- * @route POST /api/v1/admin/gdpr/dsr/:id/resolve
- * @desc Mark a DSR as resolved with a mandatory resolution reason and optional evidence.
- * @access Private (admin token only)
- */
-router.post("/gdpr/dsr/:id/resolve", requireAdminToken, async (req: Request, res: Response) => {
-  try {
-    const { resolvedBy, resolutionReason, resolutionEvidence } = req.body ?? {};
-
-    if (!resolvedBy || typeof resolvedBy !== "string") {
-      return res.status(400).json({ success: false, error: "resolvedBy is required" });
-    }
-    if (!resolutionReason || typeof resolutionReason !== "string") {
-      return res.status(400).json({ success: false, error: "resolutionReason is required" });
-    }
-
-    const record = await getDsrSlaService().resolve(req.params.id, {
-      resolvedBy: resolvedBy.trim(),
-      resolutionReason: resolutionReason.trim(),
-      resolutionEvidence: typeof resolutionEvidence === "string" ? resolutionEvidence.trim() : undefined,
-    });
-
-    return res.status(200).json({ success: true, record });
-  } catch (err: any) {
-    const status = err.message?.includes("not found") || err.message?.includes("terminal") ? 404 : 500;
-    return res.status(status).json({ success: false, error: err.message ?? "Failed to resolve DSR" });
-  }
-});
-
-/**
- * @route POST /api/v1/admin/gdpr/dsr/:id/extend
- * @desc Apply a GDPR Art. 12(3) SLA extension.
- * @access Private (admin token only)
- */
-router.post("/gdpr/dsr/:id/extend", requireAdminToken, async (req: Request, res: Response) => {
-  try {
-    const { extensionReason, additionalDays } = req.body ?? {};
-
-    if (!extensionReason || typeof extensionReason !== "string") {
-      return res.status(400).json({ success: false, error: "extensionReason is required" });
-    }
-
-    let parsedDays: number | undefined;
-    if (additionalDays !== undefined) {
-      parsedDays = parseInt(String(additionalDays), 10);
-      if (isNaN(parsedDays) || parsedDays < 1 || parsedDays > 60) {
-        return res.status(400).json({ success: false, error: "additionalDays must be between 1 and 60" });
-      }
-    }
-
-    const record = await getDsrSlaService().extend(req.params.id, {
-      extensionReason: extensionReason.trim(),
-      additionalDays: parsedDays,
-    });
-
-    return res.status(200).json({ success: true, record });
-  } catch (err: any) {
-    const status = err.message?.includes("not found") || err.message?.includes("terminal") ? 404 : 500;
-    return res.status(status).json({ success: false, error: err.message ?? "Failed to extend DSR" });
-  }
-});
-
-/**
- * @route POST /api/v1/admin/gdpr/dsr/:id/reopen
- * @desc Reopen a resolved/rejected DSR and restart the 30-day SLA clock.
- * @access Private (admin token only)
- */
-router.post("/gdpr/dsr/:id/reopen", requireAdminToken, async (req: Request, res: Response) => {
-  try {
-    const { reason } = req.body ?? {};
-
-    if (!reason || typeof reason !== "string") {
-      return res.status(400).json({ success: false, error: "reason is required" });
-    }
-
-    const record = await getDsrSlaService().reopen(req.params.id, reason.trim());
-    return res.status(200).json({ success: true, record });
-  } catch (err: any) {
-    const status = err.message?.includes("not found") ? 404 : 500;
-    return res.status(status).json({ success: false, error: err.message ?? "Failed to reopen DSR" });
-  }
-});

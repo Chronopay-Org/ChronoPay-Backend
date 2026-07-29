@@ -501,6 +501,18 @@ export const slowQueryCounter = createBudgetedCounter({
 });
 
 /**
+ * Counter incremented each time a query budget is breached.
+ * Labelled by route so per-endpoint budget pressure is visible.
+ */
+export const queryBudgetBreaches = createBudgetedCounter({
+  name: "query_budget_breaches_total",
+  help: "Total number of per-request query budget breaches grouped by route",
+  labels: ["route"],
+  budget: 256,
+  registers: [register],
+});
+
+/**
  * Histogram tracking duration (in milliseconds) of slow queries.
  */
 export const slowQueryDuration = createBudgetedHistogram({
