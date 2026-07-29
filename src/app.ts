@@ -44,8 +44,12 @@ import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
+import graceWindowRouter from "./routes/graceWindow.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
-import { registerWebhookRoutes } from "./routes/webhooks.js";
+import redactionPolicyRouter from "./routes/redactionPolicy.js";
+import { gdprExportRouter } from "./routes/gdprExport.js";
+import reputationRouter from "./routes/reputation.js";
+import webhookRoutes, { registerWebhookRoutes } from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 import fraudModelsRouter from "./routes/fraudModels.js";
 import { requireAdminToken } from "./middleware/authorization.js";
@@ -455,6 +459,7 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3b. Admin Routes
   app.use("/api/v1/admin", adminRouter);
+  app.use("/api/v1/admin", graceWindowRouter);
   app.use("/api/v1/admin", redactionPolicyRouter);
 
   // 3b-i. Fraud model admin routes (#455 rollback hotkey)

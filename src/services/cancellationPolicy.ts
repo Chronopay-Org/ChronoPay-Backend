@@ -6,6 +6,7 @@ import {
 } from "../modules/booking-intents/booking-intent-repository.js";
 import { BookingIntentError } from "../modules/booking-intents/booking-intent-service.js";
 import { AuditLogger, defaultAuditLogger } from "./auditLogger.js";
+import type { SupplierCancellationOverrideStore } from "./supplierCancellationOverrideStore.js";
 
 export interface RefundBreakdown {
   fee: number;
@@ -264,6 +265,12 @@ export interface CancellationPolicyServiceDeps {
   auditLogger?: AuditLogger;
   nowMs?: () => number;
   nowIso?: () => string;
+  /**
+   * Optional supplier cancellation override store.
+   * When provided, {@link calculateRefund} checks for a per-supplier override
+   * before falling back to the global policy.
+   */
+  supplierOverrideStore?: SupplierCancellationOverrideStore;
 }
 
 export class CancellationPolicyService {
@@ -272,6 +279,7 @@ export class CancellationPolicyService {
   private readonly auditLogger: AuditLogger;
   private readonly nowMs: () => number;
   private readonly nowIso: () => string;
+  private readonly supplierOverrideStore?: SupplierCancellationOverrideStore;
 
   constructor(deps: CancellationPolicyServiceDeps = {}) {
     const defaultRegistry = createDefaultRegistry();
@@ -280,6 +288,7 @@ export class CancellationPolicyService {
     this.auditLogger = deps.auditLogger ?? defaultAuditLogger;
     this.nowMs = deps.nowMs ?? (() => Date.now());
     this.nowIso = deps.nowIso ?? (() => new Date().toISOString());
+    this.supplierOverrideStore = deps.supplierOverrideStore;
   }
 
   snapshotCurrentPolicy(overrideTerms?: ProratedCancellationTerms): CancellationPolicySnapshot {
@@ -326,6 +335,28 @@ export class CancellationPolicyService {
     };
   }
 
+  /**
+   * Resolve the effective cancellation terms for a given supplier.
+   * Returns a supplier override if one exists, otherwise falls back to
+   * the global policy terms.
+   */
+  private resolveTermsForSupplier(supplierId: string): {
+    terms: ProratedCancellationTerms;
+    policyVersionId: string;
+  } | undefined {
+    if (!this.supplierOverrideStore) {
+      return undefined;
+    }
+    const override = this.supplierOverrideStore.getOverride(supplierId);
+    if (!override) {
+      return undefined;
+    }
+    return {
+      terms: override.terms,
+      policyVersionId: `supplier-override:${supplierId}`,
+    };
+  }
+
   calculateRefund(intent: BookingIntentRecord): RefundBreakdown {
     if (intent.status === "cancelled") {
       throw new BookingIntentError(409, "Already cancelled");
@@ -338,6 +369,21 @@ export class CancellationPolicyService {
     let policyVersionId: string;
     let terms: ProratedCancellationTerms;
 
+    // 1. Check for per-supplier override first
+    if (intent.professional) {
+      const supplierOverride = this.resolveTermsForSupplier(intent.professional);
+      if (supplierOverride) {
+        validateProratedCancellationTerms(supplierOverride.terms);
+        return computeRefundWithTerms(
+          supplierOverride.terms,
+          price,
+          hoursUntilStart,
+          supplierOverride.policyVersionId,
+        );
+      }
+    }
+
+    // 2. Fall back to grandfathered or global policy
     if (intent.cancellationPolicySnapshot) {
       policyVersionId = intent.cancellationPolicySnapshot.policyVersionId;
       terms = intent.cancellationPolicySnapshot.policyTerms;
