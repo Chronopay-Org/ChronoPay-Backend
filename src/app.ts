@@ -10,7 +10,7 @@ import {
   jsonParseErrorHandler,
   notFoundHandler,
 } from "./middleware/errorHandling.js";
-import { validateRequiredFields } from "./middleware/validation.js";
+import { validateRequiredFields, validateBody } from "./middleware/validation.js";
 import { authenticateToken as requireAuth } from "./middleware/auth.js";
 import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
@@ -44,14 +44,18 @@ import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
-import graphqlRouter from "./routes/graphql.js";
-import webhookRouter, { registerWebhookRoutes } from "./routes/webhooks.js";
+
+import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 
 // Import modules
 import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
 import { InMemoryBookingIntentRepository } from "./modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
+import { ConflictPreviewService } from "./services/conflictPreviewService.js";
+import { RecurrenceError } from "./services/recurrenceService.js";
+import { ConflictPreviewBodySchema } from "./middleware/schemas.js";
+import { isValidIANATimezone } from "./validation/reminderValidation.js";
 
 export interface AppFactoryOptions {
   apiKey?: string;
@@ -373,6 +377,49 @@ export function createApp(options: AppFactoryOptions = {}) {
       // eslint-disable-next-line unused-imports/no-unused-vars
       } catch (error: any) {
         res.status(500).json({ success: false, error: "Slot creation failed" });
+      }
+    }
+  );
+
+  // 1a. Conflict Preview Route
+  app.post(
+    "/api/v1/slots/conflicts/preview",
+    rbacMiddleware,
+    requireApiKey(options.apiKey),
+    requireFeatureFlag("CREATE_SLOT"),
+    validateBody(ConflictPreviewBodySchema),
+    async (req, res) => {
+      try {
+        const { rrule, professional, slotDurationMs, timezone, horizonDays } = req.body;
+
+        if (timezone && !isValidIANATimezone(timezone)) {
+          return res.status(422).json({
+            success: false,
+            error: "timezone must be a valid IANA timezone identifier",
+          });
+        }
+
+        const service = new ConflictPreviewService();
+        const result = await service.previewConflicts({
+          rrule,
+          professional,
+          slotDurationMs,
+          timezone,
+          horizonDays,
+        });
+
+        res.json({ success: true, data: result });
+      } catch (error: any) {
+        if (error instanceof RecurrenceError) {
+          return res.status(422).json({
+            success: false,
+            error: error.message,
+          });
+        }
+        res.status(500).json({
+          success: false,
+          error: "Conflict preview failed",
+        });
       }
     }
   );
