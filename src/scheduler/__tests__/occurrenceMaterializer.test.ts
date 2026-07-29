@@ -1,4 +1,3 @@
-import { jest } from "@jest/globals";
 import {
   InMemoryRecurrenceSeriesRepository,
 } from "../../models/recurrenceSeries.js";
@@ -281,7 +280,7 @@ describe("Occurrence Materializer", () => {
     });
 
     it("continues processing other series when one fails", async () => {
-      const good = await seriesRepo.create({
+      const _good = await seriesRepo.create({
         rrule:
           "DTSTART:20260105T100000Z\nRRULE:FREQ=WEEKLY;COUNT=5;BYDAY=MO",
       });
@@ -416,7 +415,7 @@ describe("Occurrence Materializer", () => {
         day1,
         day1 + 90 * 24 * 60 * 60 * 1000,
       );
-      const day1Dates = occsDay1.map((o) => o.occurrenceDate);
+      const _day1Dates = occsDay1.map((o) => o.occurrenceDate);
 
       // Materialize on day 31 — should drop Jan 1-30 from horizon
       await materializeSeries(series.id, {

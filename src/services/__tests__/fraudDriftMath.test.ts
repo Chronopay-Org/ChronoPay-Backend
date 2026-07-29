@@ -71,9 +71,9 @@ describe("fraudDriftMath.normalizeToDistribution", () => {
     expect(normalizeToDistribution({ "0": Number.NaN })).toBeNull();
     expect(normalizeToDistribution({ "0": 1 }, -1 as never)).toBeNull();
     // Non-object inputs (shouldn't happen in practice but cover the type guard)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(normalizeToDistribution(undefined as any)).toBeNull();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(normalizeToDistribution(null as any)).toBeNull();
   });
 

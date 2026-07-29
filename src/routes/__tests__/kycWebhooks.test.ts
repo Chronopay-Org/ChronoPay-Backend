@@ -88,7 +88,7 @@ describe("POST /api/v1/webhooks/kyc", () => {
 
     // Verify DB calls
     expect(mockQuery).toHaveBeenCalledTimes(2);
-    expect(mockQuery.mock.calls[0][0]).toContain("SELECT id, email, kyc_status, kyc_ref FROM users");
+    expect(mockQuery.mock.calls[0][0]).toContain("SELECT id, email, kyc_status, kyc_ref, region FROM users");
     expect(mockQuery.mock.calls[1][0]).toContain("UPDATE users SET kyc_status = $1, kyc_ref = $2");
     expect(mockQuery.mock.calls[1][1]).toEqual(["verified", "ref-123", supplierId]);
   });
