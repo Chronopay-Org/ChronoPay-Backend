@@ -84,6 +84,18 @@ export class ConfigService {
     return this.envConfig.webhookSecret;
   }
 
+  public get internalOverrideSecret() {
+    return this.envConfig.internalOverrideSecret;
+  }
+
+  public get internalOverrideSecretPrev() {
+    return this.envConfig.internalOverrideSecretPrev;
+  }
+
+  public get internalBypassToleranceMs() {
+    return this.envConfig.internalBypassToleranceMs;
+  }
+
   public get jwtIssuer() {
     return this.envConfig.jwtIssuer;
   }

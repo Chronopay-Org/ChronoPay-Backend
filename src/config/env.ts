@@ -37,6 +37,12 @@ export interface EnvConfig {
   networkPassphrase?: string;
   /** Pinned hash for the current active escrow contract */
   escrowContractHash?: string;
+  /** Secret used to verify the internal fair-queue rate-limit bypass HMAC signature. */
+  internalOverrideSecret?: string;
+  /** Previous secret for zero-downtime rotation of the bypass signing key. */
+  internalOverrideSecretPrev?: string;
+  /** Acceptable clock skew (ms) for the bypass timestamp. Default 30 000. */
+  internalBypassToleranceMs: number;
 }
 
 export class EnvValidationError extends Error {
@@ -74,6 +80,15 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   const networkPassphrase = parseOptionalString(env.STELLAR_NETWORK_PASSPHRASE);
   const escrowContractHash = parseOptionalString(env.ESCROW_CONTRACT_HASH);
 
+  const internalOverrideSecret = parseOptionalString(env.INTERNAL_OVERRIDE_SECRET);
+  const internalOverrideSecretPrev = parseOptionalString(env.INTERNAL_OVERRIDE_SECRET_PREV);
+  const internalBypassToleranceMs = parsePositiveInteger(
+    env.INTERNAL_BYPASS_TOLERANCE_MS,
+    "INTERNAL_BYPASS_TOLERANCE_MS",
+    30_000,
+    issues,
+  );
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -93,6 +108,9 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     horizonUrl,
     networkPassphrase,
     escrowContractHash,
+    internalOverrideSecret,
+    internalOverrideSecretPrev,
+    internalBypassToleranceMs,
   };
 }
 
