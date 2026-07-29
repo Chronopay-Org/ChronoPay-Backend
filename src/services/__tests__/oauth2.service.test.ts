@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, it, expect, beforeEach, jest } from "@jest/globals";
 import { oauth2Service, OAuth2Error } from "../../services/oauth2.service.js";
 

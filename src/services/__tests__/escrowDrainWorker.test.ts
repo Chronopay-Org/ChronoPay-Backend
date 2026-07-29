@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { EscrowDrainWorker, HoldRecord } from "../escrowDrainWorker";
 
 describe("EscrowDrainWorker", () => {

@@ -64,7 +64,7 @@ router.get(
         discountCurves: curves,
         total: curves.length,
       });
-    } catch (error: any) {
+    } catch (_error: any) {
       res.status(500).json({ success: false, error: "Internal server error" });
     }
   },

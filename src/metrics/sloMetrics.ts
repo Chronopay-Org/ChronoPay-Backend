@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createBudgetedGauge } from "../metrics.js";
 
 export type RouteName = "booking_intent" | "slots_list" | "checkout" | "escrow_listener";

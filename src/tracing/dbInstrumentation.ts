@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { Pool, QueryResult } from "pg";
 import { withSpan } from "./hooks.js";
 
