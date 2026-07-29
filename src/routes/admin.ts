@@ -2,15 +2,85 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
+import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
 
-
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import {
+  CancellationReversalService,
+  CancellationReversalCurrencyMismatchError,
+  isSupportedCurrency,
+  setTenantPausedResolver as setReversalTenantPausedResolver,
+} from "../modules/cancellation/cancellation-reversal-service.js";
+import { PgCancellationReversalRepository } from "../modules/cancellation/pg-cancellation-reversal-repository.js";
+import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
+import { query } from "../db/pool.js";
+
+/**
+ * Singleton cancellation-reversal service. The route handlers reuse
+ * the same instance across requests so the in-memory ledger state stays
+ * consistent within a process.
+ *
+ * Production bootstrap is responsible for calling
+ * `setReversalTenantPausedResolver(fn)` to wire a real tenant-paused
+ * source (e.g. one that consults the live `SchedulingService`). Until
+ * that hook is wired, all requests pass through the tenant gate
+ * without restriction — the failure mode is "tenant-pause never fires"
+ * (fail-open) rather than "every accepted-paused silently means denied".
+ */
+const _checkoutSessionRepoForReversal = new PgCheckoutSessionRepository(query);
+
+function buildReversalService(): CancellationReversalService {
+  return new CancellationReversalService({
+    repo: new PgCancellationReversalRepository(query),
+    checkoutSessionLookup: {
+      async getCurrency(paymentId: string) {
+        const session = await _checkoutSessionRepoForReversal.findById(paymentId);
+        if (!session) return null;
+        return isSupportedCurrency(session.payment.currency)
+          ? session.payment.currency
+          : null;
+      },
+    },
+    // No tenant-paused resolver is wired at module-load. The admin
+    // route's tenant-paused check falls-through to "no tenant is
+    // paused" until `setReversalTenantPausedResolver(fn)` is wired
+    // by production bootstrap.
+    netRefundLookup: {
+      async getNetRefund() {
+        // The netRefund is provided by the prorated cancellation policy.
+        // Returning `null` here triggers the strict-mode
+        // CancellationReversalNetRefundNotRegisteredError on
+        // append, surfacing the missing wiring at runtime. Production
+        // must wire a real lookup at bootstrap.
+        return null;
+      },
+    },
+  });
+}
+
+let _cancellationReversalService: CancellationReversalService =
+  buildReversalService();
+
+/** Test/production hook to swap the entire service. */
+export function setCancellationReversalService(
+  service: CancellationReversalService,
+): void {
+  _cancellationReversalService = service;
+}
+
+// Re-export for route-level test convenience.
+export { setReversalTenantPausedResolver };
 
 const router = Router();
+const disputeQueueService = new DisputeArbitrationQueueService();
+
+// In-memory dispute state for E2E tests
+const disputes = new Map<string, DisputeDomainType>();
+let ledgers = { buyer: 1000, supplier: 1000 };
 
 // --- Pending Payout Replays State ---
 export type PendingReplay = {
@@ -143,14 +213,223 @@ router.post("/refunds", requireAdminToken, async (req: Request, res: Response) =
 });
 
 /**
- * @route GET /api/v1/admin/payments/:id/trace
- * @desc Retrieve a payment trace including the original payment and all linked refund entries.
+ * @route POST /api/v1/admin/payments/:paymentId/reversals
+ * @desc Record a prorated-cancellation reversal entry against a payment.
+ *       Body: { bookingIntentId, amountCents (sign-aware), currency,
+ *               originalRefundId?, escrowReleased?, escrowReleasedAmountCents?,
+ *               escrowReleaseTxId?, reason, policyVersionId, idempotencyKey, metadata? }.
+ *       Errors:
+ *         422 INVALID_CURRENCY    — entry currency != payment currency
+ *         409 invariant violation — sum across booking + amount != -netRefund
+ *         422 TenantPausedError  — metadata.tenantId resolves to a paused tenant
  * @access Private (admin token only)
  */
+router.post(
+  "/payments/:paymentId/reversals",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentId } = req.params;
+      const body = req.body ?? {};
+
+      const required = [
+        "bookingIntentId",
+        "amountCents",
+        "currency",
+        "reason",
+        "policyVersionId",
+        "idempotencyKey",
+      ];
+      for (const k of required) {
+        if (body[k] === undefined || body[k] === null || body[k] === "") {
+          return res
+            .status(400)
+            .json({ success: false, error: `${k} is required` });
+        }
+      }
+      if (typeof body.amountCents !== "number" || !Number.isInteger(body.amountCents) || body.amountCents === 0) {
+        return res
+          .status(400)
+          .json({ success: false, error: "amountCents must be a non-zero integer" });
+      }
+      if (
+        typeof body.escrowReleasedAmountCents === "number" &&
+        body.escrowReleasedAmountCents < 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "escrowReleasedAmountCents must be >= 0",
+        });
+      }
+      if (typeof body.escrowReleased !== "boolean") {
+        return res.status(400).json({
+          success: false,
+          error: "escrowReleased must be a boolean",
+        });
+      }
+
+      const entry = await _cancellationReversalService.appendEntry({
+        bookingIntentId: String(body.bookingIntentId),
+        paymentId: String(paymentId),
+        originalRefundId:
+          body.originalRefundId === undefined || body.originalRefundId === null
+            ? undefined
+            : String(body.originalRefundId),
+        amountCents: body.amountCents,
+        currency: body.currency,
+        escrowReleased: body.escrowReleased,
+        escrowReleasedAmountCents: body.escrowReleasedAmountCents ?? 0,
+        escrowReleaseTxId:
+          body.escrowReleaseTxId === undefined || body.escrowReleaseTxId === null
+            ? undefined
+            : String(body.escrowReleaseTxId),
+        reason: String(body.reason),
+        idempotencyKey: String(body.idempotencyKey),
+        policyVersionId: String(body.policyVersionId),
+        actor: req.auth?.userId ?? "admin",
+        metadata:
+          body.metadata && typeof body.metadata === "object"
+            ? (body.metadata as Record<string, unknown>)
+            : undefined,
+      });
+
+      return res.status(201).json({ success: true, entry });
+    } catch (error: any) {
+      if (
+        error instanceof CancellationReversalCurrencyMismatchError
+      ) {
+        return res.status(422).json({
+          success: false,
+          code: "CURRENCY_MISMATCH",
+          error: error.message,
+          details: error.details,
+        });
+      }
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Reversal recording failed",
+        code: error.code,
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/booking-intents/:bookingIntentId/invariant
+ * @desc Compute the per-(bookingIntentId, currency) reversal invariant. The
+ *       `currency` query parameter is required. Returns 200 with
+ *       `{ valid, sumReversalCents, expectedNegationOfNetRefund, reason? }`.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/booking-intents/:bookingIntentId/invariant",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const currency = String(req.query.currency ?? "");
+      const validCurrencies = ["USD", "EUR", "GBP", "XLM"];
+      if (!validCurrencies.includes(currency)) {
+        return res.status(400).json({
+          success: false,
+          error: `currency query parameter is required (one of ${validCurrencies.join(", ")})`,
+        });
+      }
+      const result = await _cancellationReversalService.checkInvariantForBooking(
+        req.params.bookingIntentId,
+        currency,
+      );
+      const chain = await _cancellationReversalService.verifyChainForPayment(
+        // The invariant endpoint is per-booking; the chain walk is keyed
+        // off paymentId which the caller may pass as `?paymentId=`.
+        String(req.query.paymentId ?? ""),
+      );
+      return res.json({
+        success: true,
+        invariant: result,
+        chain: chain.valid
+          ? { valid: true, entriesChecked: chain.entriesChecked }
+          : { valid: false, ...chain },
+      });
+    } catch (error: any) {
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Invariant check failed",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/booking-intents/:bookingIntentId/reversal-chain
+ * @desc Walk the hash chain for a paymentId and report integrity. The
+ *       `paymentId` query parameter is required.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/booking-intents/:bookingIntentId/reversal-chain",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const paymentId = String(req.query.paymentId ?? "");
+      if (!paymentId) {
+        return res.status(400).json({
+          success: false,
+          error: "paymentId query parameter is required",
+        });
+      }
+      const chain = await _cancellationReversalService.verifyChainForPayment(
+        paymentId,
+      );
+      return res.json({ success: true, chain });
+    } catch (error: any) {
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Chain verification failed",
+      });
+    }
+  },
+);
 router.get("/payments/:id/trace", requireAdminToken, async (req: Request, res: Response) => {
   try {
     const trace = await RefundService.getPaymentTraceTraced(req.params.id);
-    return res.json({ success: true, trace });
+
+    const includeReversals = String(req.query.include ?? "")
+      .toLowerCase()
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+      .includes("reversals");
+
+    if (!includeReversals) {
+      return res.json({ success: true, trace });
+    }
+
+    const reversalTrace = await _cancellationReversalService.buildPaymentReversalTrace({
+      paymentId: trace.payment.id,
+      paymentsCurrency: trace.payment.currency,
+      refunds: trace.refunds.map((r) => ({
+        id: r.id,
+        amountCents: r.amountCents,
+        reason: r.reason,
+        status: r.status,
+        createdAt: r.createdAt,
+      })),
+    });
+
+    return res.json({
+      success: true,
+      trace: {
+        ...trace,
+        reversals: reversalTrace.reversals,
+        invariantStatus: reversalTrace.invariantStatus,
+        invariantValid: reversalTrace.invariantValid,
+        netAcrossOriginalAndReversalCents:
+          reversalTrace.netAcrossOriginalAndReversalCents,
+      },
+    });
   } catch (error: any) {
     const status = error.status ?? 500;
     return res.status(status).json({
@@ -376,38 +655,31 @@ router.get(
   requireAdminToken,
   async (req: Request, res: Response) => {
     try {
-      const opts: SessionListOptions = {};      if (typeof req.query.targetUserId === "string") {
-        opts.targetUserId = req.query.targetUserId;
-      }
-      if (typeof req.query.adminId === "string") {
-        opts.adminId = req.query.adminId;
-      }
-      if (typeof req.query.since === "string") {
-        opts.since = req.query.since;
-      }
-      if (typeof req.query.limit === "string") {
-        const parsed = Number.parseInt(req.query.limit, 10);
-        if (Number.isFinite(parsed)) {
-          opts.limit = parsed;
-        }
-      }
-      if (typeof req.query.offset === "string") {
-        const parsed = Number.parseInt(req.query.offset, 10);
-        if (Number.isFinite(parsed)) {
-          opts.offset = parsed;
-        }
-      }
+      const opts: SessionListOptions = {};
+      const store = getImpersonationSessionStore();
+      const sessions = await store.listSessions(opts);
 
-      const sessions = await impersonationSessionStore.listSessions(opts);
       return res.status(200).json({ success: true, sessions });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to list impersonation sessions",
-      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error.message ?? "Failed to list impersonation sessions" });
     }
   },
 );
+
+/**
+ * Export a snapshot of the current dispute list. Used by the dispute deadline
+ * scheduler in `src/index.ts` and by tests via `resetDisputesState`.
+ */
+export function getDisputes(): DisputeDomainType[] {
+  return Array.from(disputes.values());
+}
+
+export const resetDisputesState = () => {
+  disputes.clear();
+  ledgers = { buyer: 1000, supplier: 1000 };
+  resetSeniorPool();
+  disputeQueueService.clear();
+};
 
 function readStringField(body: any, key: string, fallback: unknown): string {
   if (!body || typeof body !== "object") {
@@ -477,6 +749,16 @@ router.post("/disputes", requireAdminToken, (req, res) => {
     appealWindowMs,
   };
   disputes.set(id, dispute);
+  const buyerTier = (typeof body.buyerTier === "string" && ["bronze", "silver", "gold", "platinum"].includes(body.buyerTier)
+    ? body.buyerTier
+    : "bronze") as import("../services/disputeArbitrationQueue.js").BuyerTier;
+  disputeQueueService.enqueueDispute({
+    disputeId: id,
+    amount,
+    buyerTier,
+    createdAt: Date.now(),
+    queuedAt: Date.now(),
+  });
   return res.status(201).json({ success: true, dispute });
 });
 
@@ -538,6 +820,7 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
   dispute.status = "ADJUDICATED";
   dispute.finalityHash = link.hash;
   dispute.finalityChain.push(link);
+  disputeQueueService.removeDispute(req.params.id);
 
   if (ruling === "BUYER_FAVOR") {
     ledgers.buyer += dispute.amount;
@@ -552,6 +835,23 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
     dispute,
     rulingAudit: `audit-${at}`,
     ledgers,
+  });
+});
+
+router.get("/disputes/queue", requireAdminToken, (req, res) => {
+  const now = Date.now();
+  const queue = disputeQueueService.list(now);
+  return res.status(200).json({
+    success: true,
+    queue,
+  });
+});
+
+router.get("/disputes/queue/dashboard", requireAdminToken, (req, res) => {
+  const now = Date.now();
+  return res.status(200).json({
+    success: true,
+    dashboard: disputeQueueService.getDashboard(now),
   });
 });
 
@@ -761,10 +1061,90 @@ router.post("/disputes/:id/timeout", requireAdminToken, (req, res) => {
   dispute.status = "TIMEOUT";
   dispute.finalityHash = link.hash;
   dispute.finalityChain.push(link);
+  disputeQueueService.removeDispute(req.params.id);
 
   return res.status(200).json({ success: true, dispute });
 });
 // ----------------------------------------
+
+/**
+ * @route POST /api/v1/admin/disputes/deadline/scan
+ * @desc Trigger a one-off scan of stale disputes for auto-resolution.
+ *   Returns the list of disputes that were auto-resolved during this scan.
+ * @access Private (admin token only)
+ */
+router.post("/disputes/deadline/scan", requireAdminToken, (_req: Request, res: Response) => {
+  try {
+    const allDisputes = Array.from(disputes.values()) as DisputeDomainType[];
+    // Support configurable windows via query params for testing
+    const now = Date.now();
+    const result = scanAndAutoResolve(allDisputes, {
+      now: () => now,
+    });
+    return res.status(200).json({
+      success: true,
+      resolved: result.resolved,
+      skipped: result.skipped,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message ?? "Deadline scan failed",
+    });
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/disputes/:id/reverse-auto-resolve
+ * @desc Reverse an auto-resolution within the reversal window.
+ *   The dispute is restored to the status it held before auto-resolution.
+ * @access Private (admin token only)
+ */
+router.post("/disputes/:id/reverse-auto-resolve", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const result = reverseAutoResolve(
+      disputes,
+      req.params.id,
+    );
+
+    if (!result.reversed) {
+      const statusMap: Record<string, number> = {
+        DISPUTE_NOT_FOUND: 404,
+        NOT_AUTO_RESOLVED: 400,
+        REVERSAL_WINDOW_EXPIRED: 410,
+        INVALID_STATE: 409,
+      };
+      const httpStatus = result.error ? (statusMap[result.error.code] ?? 400) : 400;
+      return res.status(httpStatus).json({
+        success: false,
+        error: result.error?.message ?? "Reversal failed",
+        code: result.error?.code,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      dispute: result.dispute,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message ?? "Reversal failed",
+    });
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/disputes/deadline/status
+ * @desc Check whether the dispute deadline scheduler is running.
+ * @access Private (admin token only)
+ */
+router.get("/disputes/deadline/status", requireAdminToken, (_req: Request, res: Response) => {
+  return res.status(200).json({
+    success: true,
+    running: isDisputeDeadlineSchedulerRunning(),
+  });
+});
 
 // ─── Timezone Drift Monitor Admin API ─────────────────────────────────────────
 
@@ -862,11 +1242,8 @@ router.get(
 
 // ─── Payout DLQ Inspection API ──────────────────────────────────────────────
 
-// In-memory dispute state for testing (kept for backward compatibility)
-let _disputesState: Map<string, any> = new Map();
-
 export function resetDisputesState(): void {
-  _disputesState = new Map();
+  // Placeholder for backward compatibility — state was removed in cleanup
 }
 
 /**
@@ -1179,3 +1556,250 @@ router.post(
 );
 
 export default router;
+
+
+// ─── GDPR DSR SLA Routes (#518) ──────────────────────────────────────────────
+
+const VALID_REQUEST_TYPES: DsrRequestType[] = [
+  "access",
+  "erasure",
+  "rectification",
+  "portability",
+  "restriction",
+  "objection",
+];
+
+const VALID_STATUSES: DsrStatus[] = [
+  "open",
+  "in_progress",
+  "resolved",
+  "extended",
+  "rejected",
+];
+
+/**
+ * @route GET /api/v1/admin/gdpr/dsr/dashboard
+ * @desc Compliance dashboard: aggregate counts by status + SLA health buckets.
+ * @access Private (admin token only)
+ */
+router.get("/gdpr/dsr/dashboard", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const summary = await getDsrSlaService().getDashboardSummary();
+    return res.status(200).json({ success: true, summary });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message ?? "Failed to fetch DSR dashboard" });
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/gdpr/dsr
+ * @desc List DSRs with optional status filter and pagination.
+ *   Query params:
+ *     status  – filter by a single status value
+ *     limit   – max results (default 50, max 200)
+ *     offset  – pagination offset (default 0)
+ * @access Private (admin token only)
+ */
+router.get("/gdpr/dsr", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const limit = req.query.limit !== undefined ? parseInt(String(req.query.limit), 10) : 50;
+    const offset = req.query.offset !== undefined ? parseInt(String(req.query.offset), 10) : 0;
+
+    if (isNaN(limit) || limit < 1 || limit > 200) {
+      return res.status(400).json({ success: false, error: "limit must be between 1 and 200" });
+    }
+    if (isNaN(offset) || offset < 0) {
+      return res.status(400).json({ success: false, error: "offset must be a non-negative integer" });
+    }
+
+    const statusParam = req.query.status;
+    let status: DsrStatus | undefined;
+    if (statusParam !== undefined) {
+      if (typeof statusParam !== "string" || !VALID_STATUSES.includes(statusParam as DsrStatus)) {
+        return res.status(400).json({
+          success: false,
+          error: `status must be one of: ${VALID_STATUSES.join(", ")}`,
+        });
+      }
+      status = statusParam as DsrStatus;
+    }
+
+    const records = await getDsrSlaService().list({ status, limit, offset });
+    return res.status(200).json({ success: true, records, limit, offset });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message ?? "Failed to list DSRs" });
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/gdpr/dsr/:id
+ * @desc Retrieve a single DSR by ID with countdown.
+ * @access Private (admin token only)
+ */
+router.get("/gdpr/dsr/:id", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const record = await getDsrSlaService().findById(req.params.id);
+    if (!record) {
+      return res.status(404).json({ success: false, error: "DSR not found" });
+    }
+    return res.status(200).json({ success: true, record });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message ?? "Failed to retrieve DSR" });
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/gdpr/dsr
+ * @desc Register a new data-subject request and start the 30-day SLA clock.
+ * @access Private (admin token only)
+ */
+router.post("/gdpr/dsr", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { subjectId, subjectEmail, requestType, notes, receivedAt } = req.body ?? {};
+
+    if (!subjectId || typeof subjectId !== "string") {
+      return res.status(400).json({ success: false, error: "subjectId is required" });
+    }
+    if (!subjectEmail || typeof subjectEmail !== "string") {
+      return res.status(400).json({ success: false, error: "subjectEmail is required" });
+    }
+    if (!requestType || !VALID_REQUEST_TYPES.includes(requestType as DsrRequestType)) {
+      return res.status(400).json({
+        success: false,
+        error: `requestType must be one of: ${VALID_REQUEST_TYPES.join(", ")}`,
+      });
+    }
+
+    let parsedReceivedAt: Date | undefined;
+    if (receivedAt !== undefined) {
+      parsedReceivedAt = new Date(receivedAt);
+      if (isNaN(parsedReceivedAt.getTime())) {
+        return res.status(400).json({ success: false, error: "receivedAt must be a valid ISO 8601 date" });
+      }
+    }
+
+    const record = await getDsrSlaService().create({
+      subjectId: subjectId.trim(),
+      subjectEmail: subjectEmail.trim(),
+      requestType: requestType as DsrRequestType,
+      receivedAt: parsedReceivedAt,
+      notes: typeof notes === "string" ? notes.trim() : undefined,
+    });
+
+    return res.status(201).json({ success: true, record });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message ?? "Failed to create DSR" });
+  }
+});
+
+/**
+ * @route PATCH /api/v1/admin/gdpr/dsr/:id/status
+ * @desc Update the lifecycle status of a DSR (open → in_progress, rejected).
+ * @access Private (admin token only)
+ */
+router.patch("/gdpr/dsr/:id/status", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { status, notes } = req.body ?? {};
+
+    const updateableStatuses: DsrStatus[] = ["open", "in_progress", "rejected"];
+    if (!status || !updateableStatuses.includes(status as DsrStatus)) {
+      return res.status(400).json({
+        success: false,
+        error: `status must be one of: ${updateableStatuses.join(", ")}`,
+      });
+    }
+
+    const record = await getDsrSlaService().updateStatus(req.params.id, {
+      status: status as Exclude<DsrStatus, "resolved" | "extended">,
+      notes: typeof notes === "string" ? notes.trim() : undefined,
+    });
+
+    return res.status(200).json({ success: true, record });
+  } catch (err: any) {
+    const status = err.message?.includes("not found") ? 404 : 500;
+    return res.status(status).json({ success: false, error: err.message ?? "Failed to update DSR status" });
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/gdpr/dsr/:id/resolve
+ * @desc Mark a DSR as resolved with a mandatory resolution reason and optional evidence.
+ * @access Private (admin token only)
+ */
+router.post("/gdpr/dsr/:id/resolve", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { resolvedBy, resolutionReason, resolutionEvidence } = req.body ?? {};
+
+    if (!resolvedBy || typeof resolvedBy !== "string") {
+      return res.status(400).json({ success: false, error: "resolvedBy is required" });
+    }
+    if (!resolutionReason || typeof resolutionReason !== "string") {
+      return res.status(400).json({ success: false, error: "resolutionReason is required" });
+    }
+
+    const record = await getDsrSlaService().resolve(req.params.id, {
+      resolvedBy: resolvedBy.trim(),
+      resolutionReason: resolutionReason.trim(),
+      resolutionEvidence: typeof resolutionEvidence === "string" ? resolutionEvidence.trim() : undefined,
+    });
+
+    return res.status(200).json({ success: true, record });
+  } catch (err: any) {
+    const status = err.message?.includes("not found") || err.message?.includes("terminal") ? 404 : 500;
+    return res.status(status).json({ success: false, error: err.message ?? "Failed to resolve DSR" });
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/gdpr/dsr/:id/extend
+ * @desc Apply a GDPR Art. 12(3) SLA extension.
+ * @access Private (admin token only)
+ */
+router.post("/gdpr/dsr/:id/extend", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { extensionReason, additionalDays } = req.body ?? {};
+
+    if (!extensionReason || typeof extensionReason !== "string") {
+      return res.status(400).json({ success: false, error: "extensionReason is required" });
+    }
+
+    let parsedDays: number | undefined;
+    if (additionalDays !== undefined) {
+      parsedDays = parseInt(String(additionalDays), 10);
+      if (isNaN(parsedDays) || parsedDays < 1 || parsedDays > 60) {
+        return res.status(400).json({ success: false, error: "additionalDays must be between 1 and 60" });
+      }
+    }
+
+    const record = await getDsrSlaService().extend(req.params.id, {
+      extensionReason: extensionReason.trim(),
+      additionalDays: parsedDays,
+    });
+
+    return res.status(200).json({ success: true, record });
+  } catch (err: any) {
+    const status = err.message?.includes("not found") || err.message?.includes("terminal") ? 404 : 500;
+    return res.status(status).json({ success: false, error: err.message ?? "Failed to extend DSR" });
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/gdpr/dsr/:id/reopen
+ * @desc Reopen a resolved/rejected DSR and restart the 30-day SLA clock.
+ * @access Private (admin token only)
+ */
+router.post("/gdpr/dsr/:id/reopen", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { reason } = req.body ?? {};
+
+    if (!reason || typeof reason !== "string") {
+      return res.status(400).json({ success: false, error: "reason is required" });
+    }
+
+    const record = await getDsrSlaService().reopen(req.params.id, reason.trim());
+    return res.status(200).json({ success: true, record });
+  } catch (err: any) {
+    const status = err.message?.includes("not found") ? 404 : 500;
+    return res.status(status).json({ success: false, error: err.message ?? "Failed to reopen DSR" });
+  }
+});
