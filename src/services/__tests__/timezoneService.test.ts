@@ -4,7 +4,7 @@ import {
   formatToTimezoneOffset,
   normalizeSlotTimes,
   normalizeSlots,
-  DEFAULT_TIMEZONE,
+  
 } from "../timezoneService.js";
 
 describe("timezoneService", () => {

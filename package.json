@@ -16,12 +16,17 @@
     "format": "prettier --write \"src/**/*.{ts,js,cjs,mjs}\" \".github/workflows/*.{yml,yaml}\" \"eslint.config.js\" \"package.json\" \"tsconfig.json\" \"README.md\" \".prettierrc\"",
     "test": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --runInBand",
     "test:coverage": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --runInBand --coverage",
+    "pii-scan": "tsx scripts/pii-conformance-scan.ts",
     "migrate": "tsx src/scripts/migrate.ts",
     "canary": "tsx scripts/canary.ts",
     "generate-openapi": "tsx src/scripts/generate-openapi.ts",
-    "release:sdk": "node scripts/release-sdk.js"
+    "release:sdk": "node scripts/release-sdk.js",
+    "sbom": "tsx scripts/generate-sbom.ts",
+    "sbom:upload": "tsx scripts/upload-sbom.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-kms": "^3.1097.0",
+    "@google-cloud/kms": "^5.7.0",
     "cors": "^2.8.5",
     "dataloader": "^2.2.3",
     "dotenv": "^17.4.2",
@@ -46,9 +51,11 @@
     "ws": "^8.21.0",
     "ethers": {
       "ws": "^8.21.0"
-    }
+    },
+    "fast-xml-parser": "^5.0.9"
   },
   "devDependencies": {
+    "@cyclonedx/cyclonedx-npm": "^1.19.3",
     "@eslint/js": "^10.0.1",
     "@jest/globals": "^30.3.0",
     "@stryker-mutator/core": "^8.7.1",

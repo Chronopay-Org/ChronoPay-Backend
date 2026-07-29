@@ -37,3 +37,8 @@ export interface FeatureFlagAccessor {
   isEnabled: (flag: FeatureFlagName) => boolean;
   list: () => FeatureFlagState;
 }
+
+/** Deployment environments a rollout schedule can target. Mirrors `NodeEnv`. */
+export const ROLLOUT_ENVIRONMENTS = ["development", "test", "production"] as const;
+
+export type RolloutEnvironment = (typeof ROLLOUT_ENVIRONMENTS)[number];

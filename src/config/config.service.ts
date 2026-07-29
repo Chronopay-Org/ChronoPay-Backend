@@ -37,13 +37,13 @@ export class ConfigService {
     void this.loadSecretsFromProvider();
 
     // listen for rotation events
-    this.secretsProvider.on("rotate", (key?: string) => {
+    this.secretsProvider.on("rotate", (_key?: string) => {
       // when rotation occurs, refresh the in-memory secrets
       try {
         void this.loadSecretsFromProvider();
       } catch (err) {
         // swallow - keep existing secrets if refresh fails
-        // eslint-disable-next-line no-console
+
         console.error("Failed to refresh secrets on rotation:", err);
       }
     });
@@ -84,6 +84,18 @@ export class ConfigService {
     return this.envConfig.webhookSecret;
   }
 
+  public get internalOverrideSecret() {
+    return this.envConfig.internalOverrideSecret;
+  }
+
+  public get internalOverrideSecretPrev() {
+    return this.envConfig.internalOverrideSecretPrev;
+  }
+
+  public get internalBypassToleranceMs() {
+    return this.envConfig.internalBypassToleranceMs;
+  }
+
   public get jwtIssuer() {
     return this.envConfig.jwtIssuer;
   }
@@ -115,7 +127,7 @@ export class ConfigService {
           primary: versions[0],
           previous: versions[1] || undefined,
         });
-      } catch (err) {
+      } catch (_err) {
         // ignore missing keys from provider
       }
     }

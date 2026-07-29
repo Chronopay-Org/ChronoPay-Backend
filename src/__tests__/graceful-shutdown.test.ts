@@ -3,13 +3,9 @@ import { createServer, IncomingMessage, ServerResponse } from "http";
 import { closePool } from "../db/connection.js";
 import { stopScheduler } from "../scheduler/reminderScheduler.js";
 import {
-  // @ts-expect-error - Auto-fixed by script
   gracefulShutdown,
-  // @ts-expect-error - Auto-fixed by script
   setServer,
-  // @ts-expect-error - Auto-fixed by script
   resetShutdownFlag,
-  // @ts-expect-error - Auto-fixed by script
   getActiveRequestCount,
 } from "../index.js";
 

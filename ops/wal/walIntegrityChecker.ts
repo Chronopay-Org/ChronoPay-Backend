@@ -363,7 +363,7 @@ export class WalIntegrityChecker {
       byTimeline.set(tl, existing);
     }
 
-    let gapsDetected = 0;
+    let _gapsDetected = 0;
     for (const [tl, segs] of byTimeline.entries()) {
       const sorted = segs
         .slice()
@@ -378,7 +378,7 @@ export class WalIntegrityChecker {
         // a restore-in-progress situation exists – suppress full GAP alarm.
         if (curr.sequenceNumber !== expected) {
           const gapSize = curr.sequenceNumber - expected;
-          gapsDetected += gapSize;
+          _gapsDetected += gapSize;
           alarms.push({
             severity: "CRITICAL",
             code: "GAP_DETECTED",

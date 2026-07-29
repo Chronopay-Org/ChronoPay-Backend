@@ -1,29 +1,52 @@
 import type { StrategyId, StrategyConfig } from "../../services/pricingStrategy.js";
+import type { HoldFeePolicySnapshot } from "../../services/holdFeePolicy.js";
 
-export type BookingIntentStatus = "pending" | "confirmed" | "cancelled" | "expired";
+export type BookingIntentStatus =
+  | "pending"
+  | "confirmed"
+  | "firm"
+  | "cancelled"
+  | "expired"
+  | "hold_placed"
+  | "hold_refunded";
 
-/**
- * Immutable snapshot of the pricing inputs and result captured at intent
- * creation time.  Stored for auditability — the resolved price never changes
- * even if the slot's strategy is later updated.
- */
+export type BookingType = "standard" | "refundable_hold";
+
 export interface PricingSnapshot {
-  /** Strategy that produced the price. */
   strategyId: StrategyId;
-  /** Resolved price at the moment the intent was created. */
   resolvedPrice: number;
-  /** Base price used as input. */
   basePrice: number;
-  /** Slot start time (ms) used as input. */
   slotStartMs: number;
-  /** "now" timestamp (ms) used as input. */
   nowMs: number;
-  /** Active bookings count used as input. */
   activeBookings: number;
-  /** Capacity used as input. */
   capacity: number;
-  /** Strategy-specific config used as input. */
   config: StrategyConfig;
+}
+
+export interface CancellationPolicyVersion {
+  versionId: string;
+  effectiveFrom: string;
+  effectiveUntil?: string;
+  description: string;
+}
+
+export interface CancellationPolicySnapshot {
+  policyVersionId: string;
+  policyTerms: ProratedCancellationTerms;
+  capturedAtMs: number;
+}
+
+export interface ProratedCancellationTerms {
+  tiers: {
+    minHoursUntilStart: number;
+    maxHoursUntilStart?: number;
+    refundRatio: number;
+    flatFee?: number;
+    percentageFee?: number;
+    taxReversalRatio?: number;
+  }[];
+  minRefundAmount?: number;
+  maxRefundAmount?: number;
 }
 
 export interface BookingIntentRecord {
@@ -38,26 +61,39 @@ export interface BookingIntentRecord {
   tokenAsset?: string;
   mintTxHash?: string;
   createdAt: string;
-  /** Present when the slot had a pricing strategy configured at intent creation. */
+  slotIds?: string[];
+  bundleId?: string;
+  supplierId?: string;
+  buyerId?: string;
+  escrowHoldId?: string;
+  bookingType?: BookingType;
+  holdUntilMs?: number;
+  holdPlacedAt?: string;
+  refundedAt?: string;
+  refundMetadata?: {
+    refundedAt: string;
+    refundedAmountCents: number;
+    refundReason: string;
+  };
   pricingSnapshot?: PricingSnapshot;
+  cancellationPolicySnapshot?: CancellationPolicySnapshot;
+  holdFeePolicySnapshot?: HoldFeePolicySnapshot;
 }
-
 
 export interface BookingIntentRepository {
   create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord>;
   findById(id: string): BookingIntentRecord | undefined;
   findBySlotId(slotId: string): BookingIntentRecord | undefined;
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
-  /**
-   * Indexed lookup for the most recent intent (regardless of status) for a
-   * slot. Returns undefined when no intent exists. Optional — implementations
-   * that omit it will fall back to a listAll scan (only safe for in-memory).
-   */
   findLatestBySlotId?(slotId: string): BookingIntentRecord | undefined;
   listByCustomer(customerId: string): BookingIntentRecord[];
   listAll(): BookingIntentRecord[];
   updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord;
+  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord;
+  findExpiredHolds(nowMs: number): BookingIntentRecord[];
 }
+
+const ACTIVE_HOLD_STATUSES: BookingIntentStatus[] = ["pending", "hold_placed"];
 
 export class InMemoryBookingIntentRepository implements BookingIntentRepository {
   private readonly intents: BookingIntentRecord[] = [];
@@ -66,23 +102,26 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
   async create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> {
     const created: BookingIntentRecord = {
       id: `intent-${this.sequence++}`,
+      bookingType: "standard",
       ...intent,
     };
-
     this.intents.push(created);
     return { ...created };
   }
 
   findBySlotId(slotId: string): BookingIntentRecord | undefined {
     const intent = this.intents.find(
-      (entry) => entry.slotId === slotId && entry.status === "pending",
+      (entry) => entry.slotId === slotId && ACTIVE_HOLD_STATUSES.includes(entry.status),
     );
     return intent ? { ...intent } : undefined;
   }
 
   findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined {
     const intent = this.intents.find(
-      (entry) => entry.slotId === slotId && entry.customerId === customerId && entry.status === "pending",
+      (entry) =>
+        entry.slotId === slotId &&
+        entry.customerId === customerId &&
+        ACTIVE_HOLD_STATUSES.includes(entry.status),
     );
     return intent ? { ...intent } : undefined;
   }
@@ -115,5 +154,26 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
     }
     this.intents[index] = { ...this.intents[index], status };
     return { ...this.intents[index] };
+  }
+
+  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord {
+    const index = this.intents.findIndex((entry) => entry.id === id);
+    if (index === -1) {
+      throw new Error(`BookingIntent with id "${id}" not found`);
+    }
+    this.intents[index] = { ...this.intents[index], ...updates };
+    return { ...this.intents[index] };
+  }
+
+  findExpiredHolds(nowMs: number): BookingIntentRecord[] {
+    return this.intents
+      .filter(
+        (entry) =>
+          entry.bookingType === "refundable_hold" &&
+          entry.status === "hold_placed" &&
+          entry.holdUntilMs !== undefined &&
+          entry.holdUntilMs <= nowMs,
+      )
+      .map((i) => ({ ...i }));
   }
 }
