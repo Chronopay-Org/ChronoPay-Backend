@@ -441,6 +441,31 @@ export const webhookHmacVerified = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Partner token quota metrics ───────────────────────────────────────────────
+
+/**
+ * Counter incremented each time a partner token's quota usage crosses the
+ * approaching-limit threshold (>= 80 % of daily or monthly limit).
+ */
+export const partnerQuotaApproachingLimit = createBudgetedCounter({
+  name: "partner_quota_approaching_limit_total",
+  help: "Total number of approaching-quota notifications emitted per token",
+  labels: ["token_id"],
+  budget: 512,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time a request is blocked because a quota was exceeded.
+ */
+export const partnerQuotaExceededTotal = createBudgetedCounter({
+  name: "partner_quota_exceeded_total",
+  help: "Total number of blocked requests due to quota exhaustion per token",
+  labels: ["token_id"],
+  budget: 512,
+  registers: [register],
+});
+
 export type DependencyFaultName =
   | "disconnect"
   | "timeout"
