@@ -236,7 +236,7 @@ describe("simulate() – handler throws mid-run", () => {
       simulate({
         curve,
         config: { seed: 11, dryRun: true },
-        requestHandler: (req) => {
+        requestHandler: (_req) => {
           callCount++;
           if (callCount === 3) throw new Error("Simulated network drop");
         },

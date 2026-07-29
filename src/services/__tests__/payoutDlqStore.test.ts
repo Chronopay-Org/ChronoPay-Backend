@@ -3,8 +3,7 @@ import { describe, it, expect, beforeEach } from "@jest/globals";
 import {
   PayoutDlqStore,
   getPayoutDlqStore,
-  resetPayoutDlqStore,
-  type PayoutDlqEntry,
+  resetPayoutDlqStore 
 } from "../payoutDlqStore.js";
 
 describe("PayoutDlqStore", () => {

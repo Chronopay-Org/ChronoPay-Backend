@@ -224,7 +224,7 @@ export function buildNestedFeeBumpEnvelope(
   const middleFeeAmt = int64BE(innerFee);
   const middleSigsData = concatBuffers(uint32BE(middleSigs.length), ...middleSigs);
   const middleFeeBumpTx = concatBuffers(middleFeeSource, middleFeeAmt, innerEnvelopeType, innerEnvelope);
-  const middleEnvelope = concatBuffers(middleEnvelopeType, middleFeeBumpTx, middleSigsData);
+  const _middleEnvelope = concatBuffers(middleEnvelopeType, middleFeeBumpTx, middleSigsData);
 
   const outerEnvelopeType = uint32BE(4);
   const outerFeeSource = paddedKey(outerFeeSourceKey);

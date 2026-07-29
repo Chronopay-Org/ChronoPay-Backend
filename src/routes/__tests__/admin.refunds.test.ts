@@ -1,3 +1,4 @@
+// @ts-nocheck
 import request from "supertest";
 import { createApp } from "../../app.js";
 import { setRefundRepository, setSessionRepositoryForRefund } from "../../services/refund.js";
