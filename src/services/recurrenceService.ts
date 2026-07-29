@@ -174,6 +174,9 @@ export function expandRRuleWithExdate(
   if ((options.count ?? 0) <= 0 && !options.until) {
     throw new RecurrenceError("Unbounded RRULE is not allowed; include COUNT or UNTIL");
   }
+  if (options.interval !== undefined && options.interval < 1 || /(?:^|[;\n])INTERVAL=-?[0]+(?:;|$)/i.test(rruleText)) {
+    throw new RecurrenceError("INTERVAL must be a positive integer");
+  }
 
   const rawOccurrences: Date[] = (rule as any).all(
     (_occ: Date, i: number) => i < MAX_OCCURRENCES + 1,
