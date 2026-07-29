@@ -15,6 +15,11 @@ import {
   NUM_FEATURES,
 } from "./ltr/index.js";
 import { isFeatureEnabled } from "../flags/index.js";
+import {
+  computeCandidateCells,
+  distanceKm,
+  MAX_GEO_CANDIDATES,
+} from "./geo/h3GeoIndex.js";
 
 export interface SearchResult {
   slots: Slot[];
@@ -196,6 +201,22 @@ export class MarketplaceSearchService {
     conditions.push(`status = $${paramCount++}`);
     params.push("available");
 
+    // Geo-radius prefilter: H3 tile set (fast, indexed). This narrows the
+    // candidate rows down to the neighborhood of the query point; the exact
+    // radius cutoff is applied afterward via precise great-circle distance
+    // on the candidate set (see searchByGeoRadius). gridDisk-based candidate
+    // computation is correct across the antimeridian and at the poles since
+    // it walks the H3 grid topology rather than a flat lat/lng bounding box.
+    if (query.geo) {
+      const candidateCells = computeCandidateCells(
+        query.geo.lat,
+        query.geo.lng,
+        query.geo.radiusKm
+      );
+      conditions.push(`h3_cell_res7 = ANY($${paramCount++}::text[])`);
+      params.push(candidateCells);
+    }
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     return { whereClause, params, paramCount };
   }
@@ -298,6 +319,14 @@ export class MarketplaceSearchService {
       if (cached) {
         return { ...cached, cacheSource: "hit" };
       }
+    }
+
+    // Geo-radius search uses a dedicated path: the exact radius cutoff and
+    // (optional) distance sort can only be applied after fetching candidate
+    // rows and computing precise great-circle distance in application code,
+    // so it can't reuse the SQL COUNT(*)/cursor-predicate flow below.
+    if (query.geo) {
+      return this.searchByGeoRadius(query, cache, cacheKey);
     }
 
     try {
@@ -486,6 +515,160 @@ export class MarketplaceSearchService {
   }
 
   /**
+   * Sort a slot+distance candidate set according to the requested sortBy,
+   * with `id` as the final deterministic tiebreaker in every case.
+   */
+  private sortGeoCandidates(
+    candidates: Array<{ slot: Slot; distanceKm: number }>,
+    sortBy: MarketplaceSearchQuery["sortBy"]
+  ): void {
+    candidates.sort((a, b) => {
+      switch (sortBy) {
+        case "price": {
+          const diff = (a.slot.price_cents ?? 0) - (b.slot.price_cents ?? 0);
+          if (diff !== 0) return diff;
+          break;
+        }
+        case "rating": {
+          const diff = (b.slot.supplier_rating ?? 0) - (a.slot.supplier_rating ?? 0);
+          if (diff !== 0) return diff;
+          break;
+        }
+        case "distance": {
+          const diff = a.distanceKm - b.distanceKm;
+          if (diff !== 0) return diff;
+          break;
+        }
+        case "relevance":
+        default: {
+          const ratingDiff = (b.slot.supplier_rating ?? 0) - (a.slot.supplier_rating ?? 0);
+          if (ratingDiff !== 0) return ratingDiff;
+          const priceDiff = (a.slot.price_cents ?? 0) - (b.slot.price_cents ?? 0);
+          if (priceDiff !== 0) return priceDiff;
+          break;
+        }
+      }
+      return a.slot.id - b.slot.id;
+    });
+  }
+
+  /**
+   * Geo-radius search: H3 tile prefilter (via buildFilterClause) followed by
+   * a precise great-circle distance filter/sort on the candidate rows.
+   *
+   * Notes on scope/trade-offs (see PR description for full rationale):
+   *  - Does not support cursor-based pagination (rejected at validation);
+   *    only page/limit (offset) pagination is supported for geo queries.
+   *  - Does not run LTR reranking; the reranker's feature vectors don't yet
+   *    account for distance, so it's intentionally left untouched here.
+   *  - The candidate row fetch is capped at MAX_GEO_CANDIDATES as a safety
+   *    bound on query cost. Real-world slot density within a ~100km H3 tile
+   *    neighborhood is expected to stay well under this cap; if it's
+   *    exceeded, results are computed from the first MAX_GEO_CANDIDATES rows
+   *    returned by the prefilter rather than the full set.
+   */
+  private async searchByGeoRadius(
+    query: MarketplaceSearchQuery,
+    cache:
+      | {
+          get: (key: string) => Promise<SearchResult | null>;
+          set: (key: string, value: SearchResult, ttlMs: number) => Promise<void>;
+        }
+      | undefined,
+    cacheKey: string
+  ): Promise<SearchResult> {
+    const geo = query.geo;
+    /* istanbul ignore next -- guarded by validation schema; defensive only */
+    if (!geo) {
+      throw new MarketplaceSearchError("geo filter is required for geo-radius search", 400);
+    }
+
+    try {
+      const { whereClause, params, paramCount } = this.buildFilterClause(query);
+      const candidateQuery = `
+        SELECT
+          id,
+          professional_id as professional,
+          start_time as "startTime",
+          end_time as "endTime",
+          category,
+          price_cents,
+          supplier_rating,
+          status,
+          created_at,
+          latitude,
+          longitude
+        FROM slots
+        ${whereClause}
+        LIMIT $${paramCount}
+      `;
+      const result = await this.pool.query(candidateQuery, [...params, MAX_GEO_CANDIDATES]);
+
+      const candidates: Array<{ slot: Slot; distanceKm: number }> = [];
+      for (const row of result.rows) {
+        const dKm = distanceKm(geo.lat, geo.lng, Number(row.latitude), Number(row.longitude));
+        if (dKm <= geo.radiusKm) {
+          candidates.push({
+            slot: {
+              id: row.id,
+              professional: row.professional,
+              startTime: new Date(row.startTime).getTime(),
+              endTime: new Date(row.endTime).getTime(),
+              category: row.category,
+              price_cents: row.price_cents,
+              supplier_rating: row.supplier_rating,
+              latitude: Number(row.latitude),
+              longitude: Number(row.longitude),
+            },
+            distanceKm: dKm,
+          });
+        }
+      }
+
+      this.sortGeoCandidates(candidates, query.sortBy);
+
+      const total = candidates.length;
+      const offset = (query.page - 1) * query.limit;
+      const page = candidates.slice(offset, offset + query.limit);
+
+      const slots: Slot[] = page.map(({ slot, distanceKm: d }) => ({
+        ...slot,
+        distanceKm: Math.round(d * 100) / 100,
+      }));
+
+      const searchResult: SearchResult = {
+        slots,
+        data: slots,
+        page: query.page,
+        limit: query.limit,
+        total,
+        ranking: query.sortBy,
+        nextCursor: null,
+        cacheSource: "miss",
+      };
+
+      if (cache) {
+        const ttlMs = 60 * 1000;
+        await cache.set(cacheKey, searchResult, ttlMs).catch((err) => {
+          console.warn("Failed to cache marketplace geo search result:", err.message);
+        });
+      }
+
+      return searchResult;
+    } catch (error) {
+      if (error instanceof MarketplaceSearchError) {
+        throw error;
+      }
+      if (error instanceof Error) {
+        if (error.message.includes("invalid") || error.message.includes("constraint")) {
+          throw new MarketplaceSearchError("Invalid search parameters", 400, error.message);
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Extract feature vectors from slot data for the reranker.
    *
    * Feature meanings:
@@ -565,6 +748,7 @@ export class MarketplaceSearchService {
       priceRange: query.priceRange ? JSON.stringify(query.priceRange) : null,
       ratingRange: query.ratingRange ? JSON.stringify(query.ratingRange) : null,
       timeWindow: query.timeWindow ? JSON.stringify(query.timeWindow) : null,
+      geo: query.geo ? JSON.stringify(query.geo) : null,
     };
     return `marketplace:search:${Buffer.from(JSON.stringify(key)).toString("base64")}`;
   }

@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { MAX_RADIUS_KM } from "../services/geo/h3GeoIndex.js";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const MAX_CATEGORIES = 10;
@@ -52,6 +53,20 @@ const TimeWindowSchema = z.object({
 );
 
 /**
+ * Geo-radius filter: { lat, lng, radiusKm }
+ * lat/lng bound to valid WGS84 ranges; radiusKm capped to bound query cost
+ * (see MAX_GEO_CANDIDATES in h3GeoIndex.ts for the matching row-count cap).
+ */
+const GeoFilterSchema = z.object({
+  lat: z.number().min(-90, "lat must be >= -90").max(90, "lat must be <= 90"),
+  lng: z.number().min(-180, "lng must be >= -180").max(180, "lng must be <= 180"),
+  radiusKm: z
+    .number()
+    .positive("radiusKm must be > 0")
+    .max(MAX_RADIUS_KM, `radiusKm must be <= ${MAX_RADIUS_KM}`),
+});
+
+/**
  * Main search query schema
  * All filters are optional for flexible searching
  */
@@ -77,8 +92,25 @@ export const MarketplaceSearchSchema = z.object({
 
   timeWindow: TimeWindowSchema.optional(),
 
+  geo: GeoFilterSchema.optional(),
+
   // Sorting/ranking
-  sortBy: z.enum(["rating", "price", "relevance"]).default("relevance"),
+  sortBy: z.enum(["rating", "price", "relevance", "distance"]).default("relevance"),
+}).superRefine((data, ctx) => {
+  if (data.sortBy === "distance" && !data.geo) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "sortBy 'distance' requires a geo filter",
+      path: ["sortBy"],
+    });
+  }
+  if (data.geo && data.cursor) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "cursor-based pagination is not supported with a geo filter; use page-based pagination",
+      path: ["cursor"],
+    });
+  }
 });
 
 export type MarketplaceSearchQuery = z.infer<typeof MarketplaceSearchSchema>;
