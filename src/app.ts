@@ -57,6 +57,7 @@ import { registerWebhookRoutes } from "./routes/webhooks.js";
 import webhookRoutes from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 import fraudModelsRouter from "./routes/fraudModels.js";
+import flagRolloutsRouter from "./routes/flagRollouts.js";
 import redactionPolicyRouter from "./routes/redactionPolicy.js";
 import { gdprExportRouter } from "./routes/gdprExport.js";
 import reputationRouter from "./routes/reputation.js";
@@ -514,6 +515,9 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3b-i. Fraud model admin routes (#455 rollback hotkey)
   app.use("/api/v1/admin/fraud-models", fraudModelsRouter);
+
+  // 3b-i-a. Scheduled feature-flag rollout admin routes (#570)
+  app.use("/api/v1/admin/flag-rollouts", flagRolloutsRouter);
 
   // 3b-ii. Reputation write-audit history (#457)
   app.get(
