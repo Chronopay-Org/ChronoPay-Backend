@@ -3,7 +3,16 @@ import { HorizonContractClient } from "../clients/horizon-contract-client.js";
 import { settlementsPendingFinality } from "../metrics.js";
 import { getPayoutQuarantineService } from "./quarantineStore.js";
 import { logger } from "../utils/logger.js";
-import type { EscrowRefundLedgerEntry, EscrowRefundStatus } from "./schedulingService.js";
+import {
+  calculatePayoutBackoffDelay,
+  getProviderRetryConfig,
+  isRetryable,
+  type ProviderRetryConfig,
+} from "../scheduler/payoutRetryPolicy.js";
+import {
+  payoutRetryRollup,
+  resolveRetryOutcome,
+} from "../scheduler/payoutRetryMetrics.js";
 
 export interface Settlement {
   transactionId: string;
@@ -16,6 +25,11 @@ export interface Settlement {
   attempts: number;
   lastPolledAt?: number;
   forkAlertTriggered?: boolean;
+  /**
+   * Provider id used to look up the per-provider retry ceiling.
+   * Defaults to "default" when not supplied by the caller.
+   */
+  providerId?: string;
 }
 
 export type RefundSettlementStatus =
@@ -57,24 +71,83 @@ export const refundSettlementEvents = new EventEmitter();
 export class SettlementReconciler {
   private readonly horizonClient: HorizonContractClient;
   private readonly minConfirmations: number;
-  private readonly maxAttempts: number;
   private isRunning: boolean = false;
   private intervalId: NodeJS.Timeout | null = null;
   private pollIntervalMs: number;
+
+  /**
+   * Pluggable clock — overridable in tests so backoff assertions are
+   * deterministic without `jest.useFakeTimers`.
+   */
+  private readonly _now: () => number;
+
+  /**
+   * Pluggable random source — overridable in tests to produce deterministic
+   * jitter.  Defaults to `Math.random`.
+   */
+  private readonly _random: () => number;
 
   constructor(
     horizonClient: HorizonContractClient,
     options: {
       minConfirmations?: number;
+      /**
+       * @deprecated Pass per-provider ceiling via `providerRetryRegistry` or
+       * `defaultProviderRetryConfig` instead.  Kept for backwards-compat with
+       * existing tests — treated as the `maxRetries` of the default provider.
+       */
       maxAttempts?: number;
       pollIntervalMs?: number;
+      /**
+       * Override the retry config used when a settlement has no `providerId`
+       * (or its id is not found in `providerRetryRegistry`).
+       */
+      defaultProviderRetryConfig?: ProviderRetryConfig;
+      /** @internal test-only clock override */
+      _now?: () => number;
+      /** @internal test-only random override */
+      _random?: () => number;
     } = {},
   ) {
     this.horizonClient = horizonClient;
-    this.minConfirmations =
-      options.minConfirmations ?? Number(process.env.MIN_LEDGER_CONFIRMATIONS || 3);
-    this.maxAttempts = options.maxAttempts ?? 5;
+    this.minConfirmations = options.minConfirmations ?? Number(process.env.MIN_LEDGER_CONFIRMATIONS || 3);
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
+    this._now = options._now ?? (() => Date.now());
+    this._random = options._random ?? Math.random;
+
+    // If the legacy maxAttempts option was passed, register a "default" provider
+    // config that respects it so old callers are not broken.
+    if (options.defaultProviderRetryConfig) {
+      this._defaultRetryConfig = options.defaultProviderRetryConfig;
+    } else if (options.maxAttempts !== undefined) {
+      this._defaultRetryConfig = {
+        providerId: "default",
+        baseDelayMs: 1_000,
+        multiplier: 2,
+        maxDelayCeilingMs: 30_000,
+        maxRetries: options.maxAttempts,
+      };
+    }
+  }
+
+  /**
+   * Per-instance default retry config.  Falls back to the module-level
+   * `providerRetryRegistry` if not set.
+   */
+  private _defaultRetryConfig: ProviderRetryConfig | undefined;
+
+  /**
+   * Resolve the retry config for a settlement, honouring:
+   *   1. Per-instance default (constructor override or legacy maxAttempts)
+   *   2. Module-level providerRetryRegistry keyed by settlement.providerId
+   *   3. Library-wide DEFAULT_PROVIDER_RETRY_CONFIG
+   */
+  private resolveRetryConfig(settlement: Settlement): ProviderRetryConfig {
+    const id = settlement.providerId ?? "default";
+    if (this._defaultRetryConfig && id === "default") {
+      return { ...this._defaultRetryConfig, providerId: id };
+    }
+    return getProviderRetryConfig(id);
   }
 
   /**
@@ -136,18 +209,30 @@ export class SettlementReconciler {
 
     // 3. Reconcile each active settlement
     for (const settlement of activeSettlements) {
-      // Check exponential backoff delay based on attempts
-      const backoffDelay = Math.pow(2, settlement.attempts) * 1000; // exponential backoff in ms
-      const now = Date.now();
+      const retryCfg = this.resolveRetryConfig(settlement);
+
+      // ── Jittered backoff gate ───────────────────────────────────────────
+      // For pending_finality settlements, compute the required wait from the
+      // full-jitter algorithm and skip polling if the window has not elapsed.
       if (
         settlement.status === "pending_finality" &&
-        settlement.lastPolledAt &&
-        now - settlement.lastPolledAt < backoffDelay
+        settlement.lastPolledAt !== undefined
       ) {
-        continue;
+        const backoff = calculatePayoutBackoffDelay(
+          settlement.attempts,
+          retryCfg,
+          this._random,
+        );
+        const now = this._now();
+        const elapsed = now - settlement.lastPolledAt;
+
+        if (elapsed < backoff.delayMs) {
+          // Still within the backoff window — do not poll yet.
+          continue;
+        }
       }
 
-      settlement.lastPolledAt = now;
+      settlement.lastPolledAt = this._now();
 
       try {
         // Query the specific transaction from Horizon
@@ -160,7 +245,7 @@ export class SettlementReconciler {
 
         const tx = txResponse.data;
         if (!tx.successful) {
-          // If transaction exists but failed, mark settlement as failed immediately
+          // Transaction exists but failed on-chain — mark as failed immediately.
           settlement.status = "failed";
           getPayoutQuarantineService().recordFailure({
             payoutId: settlement.transactionId,
@@ -191,7 +276,7 @@ export class SettlementReconciler {
 
         if (isNotFound) {
           if (settlement.status === "payout_ready") {
-            // CRITICAL: A transaction previously marked payout_ready has disappeared! Fork/reorg detected.
+            // CRITICAL: transaction previously payout_ready has disappeared — fork/reorg.
             settlement.status = "reorg_flagged";
             _settlements.set(settlement.transactionId, settlement);
 
@@ -199,7 +284,7 @@ export class SettlementReconciler {
               settlement.forkAlertTriggered = true;
               logger.fatal(
                 { settlementId: settlement.transactionId },
-                `CRITICAL: Chain fork/reorg detected! Settlement previously payout_ready has disappeared from Horizon.`,
+                "CRITICAL: Chain fork/reorg detected! Settlement previously payout_ready has disappeared from Horizon.",
               );
               settlementEvents.emit("alert", {
                 type: "FORK_DETECTED",
@@ -208,9 +293,47 @@ export class SettlementReconciler {
               });
             }
           } else {
-            // Standard missing transaction during pending finality phase: increment attempts
-            settlement.attempts += 1;
-            if (settlement.attempts >= this.maxAttempts) {
+            // Standard missing transaction during pending finality — increment attempts
+            // and emit retry metrics before deciding whether to exhaust.
+            const nextAttempt = settlement.attempts + 1;
+            const exhausted = !isRetryable(nextAttempt, retryCfg);
+
+            // Compute the backoff that WILL apply to the next attempt so we
+            // can record it in metrics (even if this is the last one).
+            const backoff = calculatePayoutBackoffDelay(
+              nextAttempt,
+              retryCfg,
+              this._random,
+            );
+            const outcome = resolveRetryOutcome(
+              backoff.capMs,
+              retryCfg.maxDelayCeilingMs,
+              exhausted,
+            );
+
+            payoutRetryRollup.recordAttempt(
+              retryCfg.providerId,
+              outcome,
+              backoff.delayMs,
+              backoff.capMs,
+            );
+
+            logger.warn(
+              {
+                transactionId: settlement.transactionId,
+                attempt: nextAttempt,
+                maxRetries: retryCfg.maxRetries,
+                delayMs: backoff.delayMs,
+                capMs: backoff.capMs,
+                ceilingMs: retryCfg.maxDelayCeilingMs,
+                outcome,
+              },
+              "Payout retry scheduled with jittered backoff",
+            );
+
+            settlement.attempts = nextAttempt;
+
+            if (exhausted) {
               settlement.status = "failed";
               getPayoutQuarantineService().recordFailure({
                 payoutId: settlement.transactionId,
@@ -220,6 +343,7 @@ export class SettlementReconciler {
                 threshold: Number(process.env.PAYOUT_QUARANTINE_THRESHOLD ?? 3),
               });
             }
+
             _settlements.set(settlement.transactionId, settlement);
           }
         } else {
