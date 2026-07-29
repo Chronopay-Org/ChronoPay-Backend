@@ -43,9 +43,45 @@ describe("createApp", () => {
     it("health endpoint still works when enableDocs is false", async () => {
       const { createApp } = await import("../app.js");
       const app = createApp({ enableDocs: false });
-      const res = await request(app).get("/health");
+      const res = await request(app).get("/health").set("x-strict-health", "1");
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ status: "ok", service: "chronopay-backend" });
+    });
+
+    it("exposes Horizon health in /health when a horizonContractService is provided", async () => {
+      const { createApp } = await import("../app.js");
+      const { ContractService } = await import("../services/contract.service.js");
+      const service = new ContractService();
+      const app = createApp({ enableDocs: false, horizonContractService: service });
+
+      const res = await request(app).get("/health");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty("horizon");
+      expect(res.body.horizon).toMatchObject({ tier: "normal", samples: 0 });
+    });
+
+    it("returns Horizon health from /health/horizon when configured", async () => {
+      const { createApp } = await import("../app.js");
+      const { ContractService } = await import("../services/contract.service.js");
+      const service = new ContractService();
+      const app = createApp({ enableDocs: false, horizonContractService: service });
+
+      const res = await request(app).get("/health/horizon");
+
+      expect(res.status).toBe(200);
+      expect(res.body.tier).toBe("normal");
+      expect(res.body.samples).toBe(0);
+    });
+
+    it("returns 404 from /health/horizon when no horizon service is configured", async () => {
+      const { createApp } = await import("../app.js");
+      const app = createApp({ enableDocs: false });
+
+      const res = await request(app).get("/health/horizon");
+
+      expect(res.status).toBe(404);
+      expect(res.body).toMatchObject({ success: false, error: "Horizon health unavailable" });
     });
   });
 
@@ -151,7 +187,7 @@ describe("createApp", () => {
       const { createApp } = await import("../app.js");
 
       expect(() => createApp({ enableTestRoutes: true })).toThrow(
-        "Test routes cannot be enabled in production. enableTestRoutes is true but NODE_ENV is 'production'."
+        "Test routes cannot be enabled in production. enableTestRoutes is true but NODE_ENV is 'production'.",
       );
 
       process.env.NODE_ENV = originalNodeEnv;
@@ -285,9 +321,7 @@ describe("createApp", () => {
       const app = express();
       app.use(notFoundHandler);
 
-      const res = await request(app)
-        .post("/unknown")
-        .set("Content-Type", "application/json");
+      const res = await request(app).post("/unknown").set("Content-Type", "application/json");
 
       expect(res.status).toBe(404);
       expect(res.body.error).toContain("POST");

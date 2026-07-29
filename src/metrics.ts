@@ -7,16 +7,10 @@ import { Request, Response, NextFunction } from "express";
  */
 export const register = new Registry();
 
-// Add default metrics (CPU, Memory, etc.) only outside tests.
-// Jest can execute through node and may not set NODE_ENV=test in this repository,
-// so also detect the Jest runner via process argv.
-const isTestEnvironment =
-  process.env.NODE_ENV === "test" ||
-  typeof process.env.JEST_WORKER_ID !== "undefined" ||
-  process.argv.some((arg) => typeof arg === "string" && arg.includes("jest"));
-
-if (!isTestEnvironment) {
+try {
   collectDefaultMetrics({ register });
+} catch {
+  // Ignore if already collected
 }
 
 const OVERFLOW_LABEL_VALUE = "__overflow__";
@@ -565,6 +559,33 @@ export const escrowDriftOverridesApplied = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Query Budget Metrics ─────────────────────────────────────────────────────
+
+/**
+ * Counter incremented when a SQL query exceeds its per-request budget.
+ * Label is the Express route pattern.
+ */
+export const queryBudgetBreaches = createBudgetedCounter({
+  name: "query_budget_breaches_total",
+  help: "Total number of SQL queries that exceeded their per-request budget (statement_timeout)",
+  labels: ["route"],
+  budget: 128,
+  registers: [register],
+});
+
+/**
+ * Histogram tracking per-request SQL wall-clock time in milliseconds.
+ * Labels: route, outcome (ok | breached).
+ */
+export const queryBudgetSqlTimeMs = createBudgetedHistogram({
+  name: "query_budget_sql_time_ms",
+  help: "Per-request SQL execution time in milliseconds broken down by route and outcome",
+  labels: ["route", "outcome"],
+  budget: 256,
+  buckets: [1, 5, 10, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000],
+  registers: [register],
+});
+
 /**
  * Express middleware to track HTTP request duration.
  */
@@ -585,4 +606,11 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
 
   next();
 };
+
+export const treasuryBalance = createBudgetedGauge({
+  name: "treasury_balance_stroops",
+  help: "Current treasury balance in stroops",
+  labels: ["asset_code", "asset_issuer"],
+  budget: 50,
+});
 

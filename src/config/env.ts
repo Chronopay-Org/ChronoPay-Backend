@@ -1,3 +1,5 @@
+import os from "os";
+
 export type NodeEnv = "development" | "test" | "production";
 
 export interface EncryptionKey {
@@ -256,4 +258,32 @@ function parseOptionalUrl(rawValue: string | undefined, key: string, issues: str
     issues.push(`${key} must be a valid URL.`);
     return undefined;
   }
+}
+
+function parseReplicaId(rawValue: string | undefined): string {
+  if (rawValue === undefined || rawValue.trim().length === 0) {
+    // Fall back to the OS hostname so each pod/container gets a distinct ID
+    // without requiring explicit config.
+    try {
+      return os.hostname();
+    } catch {
+      return "unknown-replica";
+    }
+  }
+  return rawValue.trim();
+}
+
+function parseFloat01(rawValue: string | undefined, key: string, defaultValue: number, issues: string[]): number {
+  if (rawValue === undefined) return defaultValue;
+  const value = rawValue.trim();
+  if (value.length === 0) {
+    issues.push(`${key} must be a number between 0 and 1.`);
+    return defaultValue;
+  }
+  const parsed = Number(value);
+  if (isNaN(parsed) || parsed < 0 || parsed > 1) {
+    issues.push(`${key} must be a number between 0.0 and 1.0.`);
+    return defaultValue;
+  }
+  return parsed;
 }

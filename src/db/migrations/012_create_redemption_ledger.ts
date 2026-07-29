@@ -24,7 +24,7 @@ import { Migration } from "../migrationRunner.js";
  *  - `metadata` is optional JSONB for extensibility without a schema migration.
  */
 export const migration: Migration = {
-  id: "016",
+  id: "012",
   name: "create_redemption_ledger",
 
   async up(client: PoolClient): Promise<void> {

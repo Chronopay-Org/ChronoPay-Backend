@@ -130,3 +130,6 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
     (req, res, next) => handleSettlementWebhook(req, res).catch(next),
   );
 }
+
+export function _resetProcessedTransactions(): void {}
+

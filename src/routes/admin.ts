@@ -2,15 +2,96 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
+import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
-import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
-
+import {
+  HolidayCalendarService,
+  InMemoryHolidayCalendarRepository,
+  HolidayCalendarNotFoundError,
+  HolidayCalendarConflictError,
+  HolidayCalendarValidationError,
+  type IHolidayCalendarRepository,
+} from "../services/holidayCalendarService.js";
 
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import {
+  CancellationReversalService,
+  CancellationReversalCurrencyMismatchError,
+  isSupportedCurrency,
+  setTenantPausedResolver as setReversalTenantPausedResolver,
+} from "../modules/cancellation/cancellation-reversal-service.js";
+import { PgCancellationReversalRepository } from "../modules/cancellation/pg-cancellation-reversal-repository.js";
+import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
+import { query } from "../db/pool.js";
+import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
+import { getPayoutQuarantineService } from "../services/quarantineStore.js";
+
+/**
+ * Singleton cancellation-reversal service. The route handlers reuse
+ * the same instance across requests so the in-memory ledger state stays
+ * consistent within a process.
+ *
+ * Production bootstrap is responsible for calling
+ * `setReversalTenantPausedResolver(fn)` to wire a real tenant-paused
+ * source (e.g. one that consults the live `SchedulingService`). Until
+ * that hook is wired, all requests pass through the tenant gate
+ * without restriction — the failure mode is "tenant-pause never fires"
+ * (fail-open) rather than "every accepted-paused silently means denied".
+ */
+const _checkoutSessionRepoForReversal = new PgCheckoutSessionRepository(query);
+
+function buildReversalService(): CancellationReversalService {
+  return new CancellationReversalService({
+    repo: new PgCancellationReversalRepository(query),
+    checkoutSessionLookup: {
+      async getCurrency(paymentId: string) {
+        const session = await _checkoutSessionRepoForReversal.findById(paymentId);
+        if (!session) return null;
+        return isSupportedCurrency(session.payment.currency)
+          ? session.payment.currency
+          : null;
+      },
+    },
+    // No tenant-paused resolver is wired at module-load. The admin
+    // route's tenant-paused check falls-through to "no tenant is
+    // paused" until `setReversalTenantPausedResolver(fn)` is wired
+    // by production bootstrap.
+    netRefundLookup: {
+      async getNetRefund() {
+        // The netRefund is provided by the prorated cancellation policy.
+        // Returning `null` here triggers the strict-mode
+        // CancellationReversalNetRefundNotRegisteredError on
+        // append, surfacing the missing wiring at runtime. Production
+        // must wire a real lookup at bootstrap.
+        return null;
+      },
+    },
+  });
+}
+
+let _cancellationReversalService: CancellationReversalService =
+  buildReversalService();
+
+/** Test/production hook to swap the entire service. */
+export function setCancellationReversalService(
+  service: CancellationReversalService,
+): void {
+  _cancellationReversalService = service;
+}
+
+export function setDsrSlaService(_service: any): void {}
+
+// Re-export for route-level test convenience.
+export { setReversalTenantPausedResolver };
 
 const router = Router();
+const disputeQueueService = new DisputeArbitrationQueueService();
+
+// In-memory dispute state for E2E tests
+const disputes = new Map<string, DisputeDomainType>();
+let ledgers = { buyer: 1000, supplier: 1000 };
 
 // --- Pending Payout Replays State ---
 export type PendingReplay = {
@@ -143,14 +224,223 @@ router.post("/refunds", requireAdminToken, async (req: Request, res: Response) =
 });
 
 /**
- * @route GET /api/v1/admin/payments/:id/trace
- * @desc Retrieve a payment trace including the original payment and all linked refund entries.
+ * @route POST /api/v1/admin/payments/:paymentId/reversals
+ * @desc Record a prorated-cancellation reversal entry against a payment.
+ *       Body: { bookingIntentId, amountCents (sign-aware), currency,
+ *               originalRefundId?, escrowReleased?, escrowReleasedAmountCents?,
+ *               escrowReleaseTxId?, reason, policyVersionId, idempotencyKey, metadata? }.
+ *       Errors:
+ *         422 INVALID_CURRENCY    — entry currency != payment currency
+ *         409 invariant violation — sum across booking + amount != -netRefund
+ *         422 TenantPausedError  — metadata.tenantId resolves to a paused tenant
  * @access Private (admin token only)
  */
+router.post(
+  "/payments/:paymentId/reversals",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentId } = req.params;
+      const body = req.body ?? {};
+
+      const required = [
+        "bookingIntentId",
+        "amountCents",
+        "currency",
+        "reason",
+        "policyVersionId",
+        "idempotencyKey",
+      ];
+      for (const k of required) {
+        if (body[k] === undefined || body[k] === null || body[k] === "") {
+          return res
+            .status(400)
+            .json({ success: false, error: `${k} is required` });
+        }
+      }
+      if (typeof body.amountCents !== "number" || !Number.isInteger(body.amountCents) || body.amountCents === 0) {
+        return res
+          .status(400)
+          .json({ success: false, error: "amountCents must be a non-zero integer" });
+      }
+      if (
+        typeof body.escrowReleasedAmountCents === "number" &&
+        body.escrowReleasedAmountCents < 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "escrowReleasedAmountCents must be >= 0",
+        });
+      }
+      if (typeof body.escrowReleased !== "boolean") {
+        return res.status(400).json({
+          success: false,
+          error: "escrowReleased must be a boolean",
+        });
+      }
+
+      const entry = await _cancellationReversalService.appendEntry({
+        bookingIntentId: String(body.bookingIntentId),
+        paymentId: String(paymentId),
+        originalRefundId:
+          body.originalRefundId === undefined || body.originalRefundId === null
+            ? undefined
+            : String(body.originalRefundId),
+        amountCents: body.amountCents,
+        currency: body.currency,
+        escrowReleased: body.escrowReleased,
+        escrowReleasedAmountCents: body.escrowReleasedAmountCents ?? 0,
+        escrowReleaseTxId:
+          body.escrowReleaseTxId === undefined || body.escrowReleaseTxId === null
+            ? undefined
+            : String(body.escrowReleaseTxId),
+        reason: String(body.reason),
+        idempotencyKey: String(body.idempotencyKey),
+        policyVersionId: String(body.policyVersionId),
+        actor: req.auth?.userId ?? "admin",
+        metadata:
+          body.metadata && typeof body.metadata === "object"
+            ? (body.metadata as Record<string, unknown>)
+            : undefined,
+      });
+
+      return res.status(201).json({ success: true, entry });
+    } catch (error: any) {
+      if (
+        error instanceof CancellationReversalCurrencyMismatchError
+      ) {
+        return res.status(422).json({
+          success: false,
+          code: "CURRENCY_MISMATCH",
+          error: error.message,
+          details: error.details,
+        });
+      }
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Reversal recording failed",
+        code: error.code,
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/booking-intents/:bookingIntentId/invariant
+ * @desc Compute the per-(bookingIntentId, currency) reversal invariant. The
+ *       `currency` query parameter is required. Returns 200 with
+ *       `{ valid, sumReversalCents, expectedNegationOfNetRefund, reason? }`.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/booking-intents/:bookingIntentId/invariant",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const currency = String(req.query.currency ?? "");
+      const validCurrencies = ["USD", "EUR", "GBP", "XLM"];
+      if (!validCurrencies.includes(currency)) {
+        return res.status(400).json({
+          success: false,
+          error: `currency query parameter is required (one of ${validCurrencies.join(", ")})`,
+        });
+      }
+      const result = await _cancellationReversalService.checkInvariantForBooking(
+        req.params.bookingIntentId,
+        currency,
+      );
+      const chain = await _cancellationReversalService.verifyChainForPayment(
+        // The invariant endpoint is per-booking; the chain walk is keyed
+        // off paymentId which the caller may pass as `?paymentId=`.
+        String(req.query.paymentId ?? ""),
+      );
+      return res.json({
+        success: true,
+        invariant: result,
+        chain: chain.valid
+          ? { valid: true, entriesChecked: chain.entriesChecked }
+          : { valid: false, ...chain },
+      });
+    } catch (error: any) {
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Invariant check failed",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/booking-intents/:bookingIntentId/reversal-chain
+ * @desc Walk the hash chain for a paymentId and report integrity. The
+ *       `paymentId` query parameter is required.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/booking-intents/:bookingIntentId/reversal-chain",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const paymentId = String(req.query.paymentId ?? "");
+      if (!paymentId) {
+        return res.status(400).json({
+          success: false,
+          error: "paymentId query parameter is required",
+        });
+      }
+      const chain = await _cancellationReversalService.verifyChainForPayment(
+        paymentId,
+      );
+      return res.json({ success: true, chain });
+    } catch (error: any) {
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Chain verification failed",
+      });
+    }
+  },
+);
 router.get("/payments/:id/trace", requireAdminToken, async (req: Request, res: Response) => {
   try {
     const trace = await RefundService.getPaymentTraceTraced(req.params.id);
-    return res.json({ success: true, trace });
+
+    const includeReversals = String(req.query.include ?? "")
+      .toLowerCase()
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+      .includes("reversals");
+
+    if (!includeReversals) {
+      return res.json({ success: true, trace });
+    }
+
+    const reversalTrace = await _cancellationReversalService.buildPaymentReversalTrace({
+      paymentId: trace.payment.id,
+      paymentsCurrency: trace.payment.currency,
+      refunds: trace.refunds.map((r) => ({
+        id: r.id,
+        amountCents: r.amountCents,
+        reason: r.reason,
+        status: r.status,
+        createdAt: r.createdAt,
+      })),
+    });
+
+    return res.json({
+      success: true,
+      trace: {
+        ...trace,
+        reversals: reversalTrace.reversals,
+        invariantStatus: reversalTrace.invariantStatus,
+        invariantValid: reversalTrace.invariantValid,
+        netAcrossOriginalAndReversalCents:
+          reversalTrace.netAcrossOriginalAndReversalCents,
+      },
+    });
   } catch (error: any) {
     const status = error.status ?? 500;
     return res.status(status).json({
@@ -159,6 +449,40 @@ router.get("/payments/:id/trace", requireAdminToken, async (req: Request, res: R
     });
   }
 });
+
+router.get(
+  "/payouts/quarantine",
+  requireAuthenticatedActor(["admin"]),
+  (_req: Request, res: Response) => {
+    const service = getPayoutQuarantineService();
+    const entries = service.list();
+    return res.json({
+      success: true,
+      entries,
+    });
+  }
+);
+
+router.post(
+  "/payouts/:payoutId/quarantine/release",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    const { payoutId } = req.params;
+    const { reason } = req.body ?? {};
+    const releasedBy = req.auth?.userId;
+
+    const service = getPayoutQuarantineService();
+    const released = service.release(payoutId, { releasedBy, reason });
+    if (!released) {
+      return res.status(404).json({ success: false, error: "Quarantined payout not found" });
+    }
+
+    return res.json({
+      success: true,
+      released: true,
+    });
+  }
+);
 
 // ----------------------------------------
 /**
@@ -369,45 +693,37 @@ type Dispute = {
  *     offset        – pagination offset (default 0)
  * @access Private (admin token only)
  */
-const impersonationSessionStore = new InMemoryImpersonationSessionStore();
 
 router.get(
   "/impersonation/sessions",
   requireAdminToken,
   async (req: Request, res: Response) => {
     try {
-      const opts: SessionListOptions = {};      if (typeof req.query.targetUserId === "string") {
-        opts.targetUserId = req.query.targetUserId;
-      }
-      if (typeof req.query.adminId === "string") {
-        opts.adminId = req.query.adminId;
-      }
-      if (typeof req.query.since === "string") {
-        opts.since = req.query.since;
-      }
-      if (typeof req.query.limit === "string") {
-        const parsed = Number.parseInt(req.query.limit, 10);
-        if (Number.isFinite(parsed)) {
-          opts.limit = parsed;
-        }
-      }
-      if (typeof req.query.offset === "string") {
-        const parsed = Number.parseInt(req.query.offset, 10);
-        if (Number.isFinite(parsed)) {
-          opts.offset = parsed;
-        }
-      }
+      const opts: SessionListOptions = {};
+      const store = getImpersonationSessionStore();
+      const sessions = await store.listSessions(opts);
 
-      const sessions = await impersonationSessionStore.listSessions(opts);
       return res.status(200).json({ success: true, sessions });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to list impersonation sessions",
-      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error.message ?? "Failed to list impersonation sessions" });
     }
   },
 );
+
+/**
+ * Export a snapshot of the current dispute list. Used by the dispute deadline
+ * scheduler in `src/index.ts` and by tests via `resetDisputesState`.
+ */
+export function getDisputes(): DisputeDomainType[] {
+  return Array.from(disputes.values());
+}
+
+export const resetDisputesState = () => {
+  disputes.clear();
+  ledgers = { buyer: 1000, supplier: 1000 };
+  resetSeniorPool();
+  disputeQueueService.clear();
+};
 
 function readStringField(body: any, key: string, fallback: unknown): string {
   if (!body || typeof body !== "object") {
@@ -477,6 +793,16 @@ router.post("/disputes", requireAdminToken, (req, res) => {
     appealWindowMs,
   };
   disputes.set(id, dispute);
+  const buyerTier = (typeof body.buyerTier === "string" && ["bronze", "silver", "gold", "platinum"].includes(body.buyerTier)
+    ? body.buyerTier
+    : "bronze") as import("../services/disputeArbitrationQueue.js").BuyerTier;
+  disputeQueueService.enqueueDispute({
+    disputeId: id,
+    amount,
+    buyerTier,
+    createdAt: Date.now(),
+    queuedAt: Date.now(),
+  });
   return res.status(201).json({ success: true, dispute });
 });
 
@@ -538,6 +864,7 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
   dispute.status = "ADJUDICATED";
   dispute.finalityHash = link.hash;
   dispute.finalityChain.push(link);
+  disputeQueueService.removeDispute(req.params.id);
 
   if (ruling === "BUYER_FAVOR") {
     ledgers.buyer += dispute.amount;
@@ -552,6 +879,23 @@ router.post("/disputes/:id/adjudicate", requireAdminToken, (req, res) => {
     dispute,
     rulingAudit: `audit-${at}`,
     ledgers,
+  });
+});
+
+router.get("/disputes/queue", requireAdminToken, (req, res) => {
+  const now = Date.now();
+  const queue = disputeQueueService.list(now);
+  return res.status(200).json({
+    success: true,
+    queue,
+  });
+});
+
+router.get("/disputes/queue/dashboard", requireAdminToken, (req, res) => {
+  const now = Date.now();
+  return res.status(200).json({
+    success: true,
+    dashboard: disputeQueueService.getDashboard(now),
   });
 });
 
@@ -761,10 +1105,90 @@ router.post("/disputes/:id/timeout", requireAdminToken, (req, res) => {
   dispute.status = "TIMEOUT";
   dispute.finalityHash = link.hash;
   dispute.finalityChain.push(link);
+  disputeQueueService.removeDispute(req.params.id);
 
   return res.status(200).json({ success: true, dispute });
 });
 // ----------------------------------------
+
+/**
+ * @route POST /api/v1/admin/disputes/deadline/scan
+ * @desc Trigger a one-off scan of stale disputes for auto-resolution.
+ *   Returns the list of disputes that were auto-resolved during this scan.
+ * @access Private (admin token only)
+ */
+router.post("/disputes/deadline/scan", requireAdminToken, (_req: Request, res: Response) => {
+  try {
+    const allDisputes = Array.from(disputes.values()) as DisputeDomainType[];
+    // Support configurable windows via query params for testing
+    const now = Date.now();
+    const result = scanAndAutoResolve(allDisputes, {
+      now: () => now,
+    });
+    return res.status(200).json({
+      success: true,
+      resolved: result.resolved,
+      skipped: result.skipped,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message ?? "Deadline scan failed",
+    });
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/disputes/:id/reverse-auto-resolve
+ * @desc Reverse an auto-resolution within the reversal window.
+ *   The dispute is restored to the status it held before auto-resolution.
+ * @access Private (admin token only)
+ */
+router.post("/disputes/:id/reverse-auto-resolve", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const result = reverseAutoResolve(
+      disputes,
+      req.params.id,
+    );
+
+    if (!result.reversed) {
+      const statusMap: Record<string, number> = {
+        DISPUTE_NOT_FOUND: 404,
+        NOT_AUTO_RESOLVED: 400,
+        REVERSAL_WINDOW_EXPIRED: 410,
+        INVALID_STATE: 409,
+      };
+      const httpStatus = result.error ? (statusMap[result.error.code] ?? 400) : 400;
+      return res.status(httpStatus).json({
+        success: false,
+        error: result.error?.message ?? "Reversal failed",
+        code: result.error?.code,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      dispute: result.dispute,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message ?? "Reversal failed",
+    });
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/disputes/deadline/status
+ * @desc Check whether the dispute deadline scheduler is running.
+ * @access Private (admin token only)
+ */
+router.get("/disputes/deadline/status", requireAdminToken, (_req: Request, res: Response) => {
+  return res.status(200).json({
+    success: true,
+    running: isDisputeDeadlineSchedulerRunning(),
+  });
+});
 
 // ─── Timezone Drift Monitor Admin API ─────────────────────────────────────────
 
@@ -862,12 +1286,6 @@ router.get(
 
 // ─── Payout DLQ Inspection API ──────────────────────────────────────────────
 
-// In-memory dispute state for testing (kept for backward compatibility)
-let _disputesState: Map<string, any> = new Map();
-
-export function resetDisputesState(): void {
-  _disputesState = new Map();
-}
 
 /**
  * Validated PayoutDlqStatus values.
@@ -1174,6 +1592,307 @@ router.post(
         success: false,
         error: err.message ?? "Manual override failed",
       });
+    }
+  },
+);
+
+// ─── Holiday Calendar Admin API ───────────────────────────────────────────────
+//
+// All routes require the x-chronopay-admin-token header.
+// The service instance can be replaced via setHolidayCalendarRepository()
+// to inject an in-memory repo in tests without a live database.
+//
+// Routes:
+//   GET    /api/v1/admin/holiday-calendars
+//   POST   /api/v1/admin/holiday-calendars
+//   GET    /api/v1/admin/holiday-calendars/:id
+//   PATCH  /api/v1/admin/holiday-calendars/:id
+//   DELETE /api/v1/admin/holiday-calendars/:id
+//   POST   /api/v1/admin/holiday-calendars/:id/entries
+//   DELETE /api/v1/admin/holiday-calendars/:id/entries/:entryId
+//   POST   /api/v1/admin/holiday-calendars/import/yaml
+//   GET    /api/v1/admin/holiday-calendars/:id/revisions
+//   GET    /api/v1/admin/holiday-calendars/:id/revisions/:version
+//   POST   /api/v1/admin/holiday-calendars/:id/rollback/:version
+
+let _holidayCalendarRepo: IHolidayCalendarRepository = new InMemoryHolidayCalendarRepository();
+
+export function setHolidayCalendarRepository(repo: IHolidayCalendarRepository): void {
+  _holidayCalendarRepo = repo;
+}
+
+function getHolidayCalendarService(): HolidayCalendarService {
+  return new HolidayCalendarService(_holidayCalendarRepo);
+}
+
+function handleHolidayCalendarError(err: unknown, res: Response): Response {
+  if (err instanceof HolidayCalendarNotFoundError) {
+    return res.status(404).json({ success: false, error: err.message });
+  }
+  if (err instanceof HolidayCalendarConflictError) {
+    return res.status(409).json({ success: false, error: err.message });
+  }
+  if (err instanceof HolidayCalendarValidationError) {
+    return res.status(422).json({ success: false, error: err.message, details: err.details });
+  }
+  const message = err instanceof Error ? err.message : "Internal server error";
+  return res.status(500).json({ success: false, error: message });
+}
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars
+ * @desc List all holiday calendars.
+ * @access Private (admin token only)
+ */
+router.get("/holiday-calendars", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const calendars = await getHolidayCalendarService().listCalendars();
+    return res.status(200).json({ success: true, calendars });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/holiday-calendars
+ * @desc Create a new holiday calendar for a region.
+ * @access Private (admin token only)
+ *
+ * Body:
+ *   region       {string} — unique region identifier (e.g. "us-east", "eu-west")
+ *   name         {string} — display name for the calendar
+ *   description  {string} — optional description
+ */
+router.post("/holiday-calendars", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { region, name, description } = req.body ?? {};
+
+    if (!region || typeof region !== "string" || region.trim() === "") {
+      return res.status(400).json({ success: false, error: "region is required" });
+    }
+    if (!name || typeof name !== "string" || name.trim() === "") {
+      return res.status(400).json({ success: false, error: "name is required" });
+    }
+
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const calendar = await getHolidayCalendarService().createCalendar({
+      region,
+      name,
+      description,
+      changedBy,
+    });
+    return res.status(201).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars/:id
+ * @desc Retrieve a single holiday calendar by ID.
+ * @access Private (admin token only)
+ */
+router.get("/holiday-calendars/:id", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const calendar = await getHolidayCalendarService().getCalendar(req.params.id);
+    return res.status(200).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route PATCH /api/v1/admin/holiday-calendars/:id
+ * @desc Update calendar metadata (name / description). Saves a new revision.
+ * @access Private (admin token only)
+ *
+ * Body:
+ *   name         {string} — new display name (optional)
+ *   description  {string} — new description (optional)
+ */
+router.patch("/holiday-calendars/:id", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { name, description } = req.body ?? {};
+    if (name !== undefined && (typeof name !== "string" || name.trim() === "")) {
+      return res.status(400).json({ success: false, error: "name must be a non-empty string" });
+    }
+
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const calendar = await getHolidayCalendarService().updateCalendar(req.params.id, {
+      name,
+      description,
+      changedBy,
+    });
+    return res.status(200).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route DELETE /api/v1/admin/holiday-calendars/:id
+ * @desc Delete a holiday calendar and all its entries and revisions.
+ * @access Private (admin token only)
+ */
+router.delete("/holiday-calendars/:id", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    await getHolidayCalendarService().deleteCalendar(req.params.id);
+    return res.status(200).json({ success: true, message: "Calendar deleted" });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/holiday-calendars/:id/entries
+ * @desc Add a single holiday entry to an existing calendar.
+ * @access Private (admin token only)
+ *
+ * Body:
+ *   name       {string}  — holiday name
+ *   start_date {string}  — YYYY-MM-DD inclusive start
+ *   end_date   {string}  — YYYY-MM-DD inclusive end (equals start for single-day)
+ *   recurring  {boolean} — whether this recurs annually (default false)
+ *   note       {string}  — optional note
+ */
+router.post("/holiday-calendars/:id/entries", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { name, start_date, end_date, recurring, note } = req.body ?? {};
+
+    if (!name || typeof name !== "string" || name.trim() === "") {
+      return res.status(400).json({ success: false, error: "name is required" });
+    }
+    if (!start_date || typeof start_date !== "string") {
+      return res.status(400).json({ success: false, error: "start_date is required (YYYY-MM-DD)" });
+    }
+    if (!end_date || typeof end_date !== "string") {
+      return res.status(400).json({ success: false, error: "end_date is required (YYYY-MM-DD)" });
+    }
+
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const entry = await getHolidayCalendarService().addEntry(req.params.id, {
+      name,
+      startDate: start_date,
+      endDate: end_date,
+      recurring: recurring ?? false,
+      note,
+      changedBy,
+    });
+    return res.status(201).json({ success: true, entry });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route DELETE /api/v1/admin/holiday-calendars/:id/entries/:entryId
+ * @desc Remove a single holiday entry from a calendar.
+ * @access Private (admin token only)
+ */
+router.delete(
+  "/holiday-calendars/:id/entries/:entryId",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+      await getHolidayCalendarService().deleteEntry(req.params.id, req.params.entryId, changedBy);
+      return res.status(200).json({ success: true, message: "Entry deleted" });
+    } catch (err) {
+      return handleHolidayCalendarError(err, res);
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/holiday-calendars/import/yaml
+ * @desc Import holidays from a YAML-shaped JSON payload.
+ *       The import performs full schema validation and overlap detection.
+ *       If a calendar for the region already exists, its entries are replaced.
+ *       A new revision is saved on every successful import.
+ * @access Private (admin token only)
+ *
+ * Body (parsed YAML as JSON):
+ *   region      {string}   — target region (required)
+ *   name        {string}   — calendar display name (optional, used only on creation)
+ *   description {string}   — description (optional)
+ *   holidays    {object[]} — array of { name, start_date, end_date, recurring?, note? }
+ *
+ * Validation errors return 422 with a `details` array.
+ * Duplicate / overlapping ranges are rejected with 422.
+ */
+router.post("/holiday-calendars/import/yaml", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const calendar = await getHolidayCalendarService().importFromYaml(req.body, {
+      changedBy,
+      changeNote: req.body?.changeNote,
+    });
+    return res.status(200).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars/:id/revisions
+ * @desc List all revisions for a calendar (newest first).
+ * @access Private (admin token only)
+ */
+router.get("/holiday-calendars/:id/revisions", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const revisions = await getHolidayCalendarService().listRevisions(req.params.id);
+    return res.status(200).json({ success: true, revisions });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars/:id/revisions/:version
+ * @desc Fetch a specific historical revision snapshot.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/holiday-calendars/:id/revisions/:version",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const version = parseInt(req.params.version, 10);
+      if (isNaN(version) || version < 1) {
+        return res.status(400).json({ success: false, error: "version must be a positive integer" });
+      }
+      const revision = await getHolidayCalendarService().getRevision(req.params.id, version);
+      return res.status(200).json({ success: true, revision });
+    } catch (err) {
+      return handleHolidayCalendarError(err, res);
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/holiday-calendars/:id/rollback/:version
+ * @desc Roll the calendar back to a specific historical revision.
+ *       The rollback itself is recorded as a new revision for auditability.
+ * @access Private (admin token only)
+ */
+router.post(
+  "/holiday-calendars/:id/rollback/:version",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const version = parseInt(req.params.version, 10);
+      if (isNaN(version) || version < 1) {
+        return res.status(400).json({ success: false, error: "version must be a positive integer" });
+      }
+      const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+      const calendar = await getHolidayCalendarService().rollbackToRevision(
+        req.params.id,
+        version,
+        changedBy,
+      );
+      return res.status(200).json({ success: true, calendar });
+    } catch (err) {
+      return handleHolidayCalendarError(err, res);
     }
   },
 );

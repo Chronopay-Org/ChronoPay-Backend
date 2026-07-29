@@ -11,6 +11,8 @@ import { z } from "zod";
 const MAX_CATEGORIES = 10;
 const MAX_RESULTS = 100;
 const MIN_RESULTS = 1;
+const MAX_SUPPLIER_CAP = 20;
+const MIN_SUPPLIER_CAP = 1;
 
 // ─── Zod Schemas ───────────────────────────────────────────────────────────
 
@@ -18,38 +20,48 @@ const MIN_RESULTS = 1;
  * Single price range filter: { min: number, max: number }
  * Both in cents, non-negative, max must be >= min
  */
-const PriceRangeSchema = z.object({
-  min: z.number().int().nonnegative("min price must be non-negative").optional(),
-  max: z.number().int().nonnegative("max price must be non-negative").optional(),
-}).refine(
-  (data) => !data.min || !data.max || data.max >= data.min,
-  { message: "max price must be >= min price", path: ["max"] }
-);
+const PriceRangeSchema = z
+  .object({
+    min: z.number().int().nonnegative("min price must be non-negative").optional(),
+    max: z.number().int().nonnegative("max price must be non-negative").optional(),
+  })
+  .refine((data) => !data.min || !data.max || data.max >= data.min, {
+    message: "max price must be >= min price",
+    path: ["max"],
+  });
 
 /**
  * Rating range filter: { min: number, max: number }
  * Both in range [0, 5], max must be >= min
  */
-const RatingRangeSchema = z.object({
-  min: z.number().min(0, "min rating must be >= 0").max(5, "min rating must be <= 5").optional(),
-  max: z.number().min(0, "max rating must be >= 0").max(5, "max rating must be <= 5").optional(),
-}).refine(
-  (data) => !data.min || !data.max || data.max >= data.min,
-  { message: "max rating must be >= min rating", path: ["max"] }
-);
+const RatingRangeSchema = z
+  .object({
+    min: z.number().min(0, "min rating must be >= 0").max(5, "min rating must be <= 5").optional(),
+    max: z.number().min(0, "max rating must be >= 0").max(5, "max rating must be <= 5").optional(),
+  })
+  .refine((data) => !data.min || !data.max || data.max >= data.min, {
+    message: "max rating must be >= min rating",
+    path: ["max"],
+  });
 
 /**
  * Time window filter: { startTime: timestamp, endTime: timestamp }
  * Represents a time range for when slots should fall
  * endTime must be > startTime
  */
-const TimeWindowSchema = z.object({
-  startTime: z.number().int().nonnegative("startTime must be non-negative Unix timestamp").optional(),
-  endTime: z.number().int().nonnegative("endTime must be non-negative Unix timestamp").optional(),
-}).refine(
-  (data) => !data.startTime || !data.endTime || data.endTime > data.startTime,
-  { message: "endTime must be > startTime", path: ["endTime"] }
-);
+const TimeWindowSchema = z
+  .object({
+    startTime: z
+      .number()
+      .int()
+      .nonnegative("startTime must be non-negative Unix timestamp")
+      .optional(),
+    endTime: z.number().int().nonnegative("endTime must be non-negative Unix timestamp").optional(),
+  })
+  .refine((data) => !data.startTime || !data.endTime || data.endTime > data.startTime, {
+    message: "endTime must be > startTime",
+    path: ["endTime"],
+  });
 
 /**
  * Main search query schema
@@ -58,16 +70,17 @@ const TimeWindowSchema = z.object({
 export const MarketplaceSearchSchema = z.object({
   // Pagination
   page: z.number().int().min(1, "page must be >= 1").default(1),
-  limit: z.number().int()
+  limit: z
+    .number()
+    .int()
     .min(MIN_RESULTS, `limit must be >= ${MIN_RESULTS}`)
     .max(MAX_RESULTS, `limit must be <= ${MAX_RESULTS}`)
     .default(10),
   cursor: z.string().trim().optional(),
 
   // Filters
-  categories: z.array(
-    z.string().trim().min(1, "category cannot be empty").max(100, "category too long")
-  )
+  categories: z
+    .array(z.string().trim().min(1, "category cannot be empty").max(100, "category too long"))
     .max(MAX_CATEGORIES, `maximum ${MAX_CATEGORIES} categories allowed`)
     .optional(),
 
@@ -77,11 +90,38 @@ export const MarketplaceSearchSchema = z.object({
 
   timeWindow: TimeWindowSchema.optional(),
 
+  /**
+   * When true (default), slots that are currently held are excluded from
+   * browse results. Set to false only in admin / operator contexts where
+   * held slots must still be visible.
+   */
+  suppressHeld: z.boolean().default(true),
+
+  /**
+   * When true, the estimated hold-release time is included in each
+   * returned slot where policy allows disclosure.  Ignored when
+   * suppressHeld is true (held slots are not returned at all).
+   */
+  showHeldReleaseEta: z.boolean().default(false),
+
   // Sorting/ranking
   sortBy: z.enum(["rating", "price", "relevance"]).default("relevance"),
+
+  // Facet counts
+  includeFacets: z.boolean().default(false),
+
+  // Result diversification
+  diversify: z.boolean().default(true),
+  supplierCap: z
+    .number()
+    .int()
+    .min(MIN_SUPPLIER_CAP, `supplierCap must be >= ${MIN_SUPPLIER_CAP}`)
+    .max(MAX_SUPPLIER_CAP, `supplierCap must be <= ${MAX_SUPPLIER_CAP}`)
+    .optional(),
 });
 
-export type MarketplaceSearchQuery = z.infer<typeof MarketplaceSearchSchema>;
+export type MarketplaceSearchQueryInput = z.input<typeof MarketplaceSearchSchema>;
+export type MarketplaceSearchQuery = z.output<typeof MarketplaceSearchSchema>;
 
 /**
  * Validate and parse marketplace search query parameters.
