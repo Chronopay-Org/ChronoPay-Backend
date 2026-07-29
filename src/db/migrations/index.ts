@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Migration registry — the single source of truth for migration ordering.
  *

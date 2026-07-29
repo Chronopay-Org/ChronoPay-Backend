@@ -8,7 +8,6 @@
  *  - Edge cases: cause_id null guard, backfill (custom occurredAt), unknown cause
  */
 
-import { jest } from "@jest/globals";
 import express from "express";
 import request from "supertest";
 import adminRouter from "../admin.js";

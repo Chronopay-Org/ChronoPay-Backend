@@ -5,7 +5,6 @@
  * state machine, hash chain integrity, panel COI selection, and senior
  * decision validation without any HTTP layer.
  */
-import { jest } from "@jest/globals";
 import crypto from "node:crypto";
 
 import {
