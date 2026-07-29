@@ -140,7 +140,7 @@ describe("StrikeService Unit Tests", () => {
       expect(s3.buyerSuspension.isSuspended).toBe(true);
 
       // Appeal strike 3
-      const appealRes = await service.appealStrike(s3.strike.id, "Medical emergency justification", t0 + 500);
+      const appealRes = await service.appealStrike(s3.strike.id, "Medical emergency justification", undefined, t0 + 500);
 
       expect(appealRes.strike.status).toBe("appealed");
       expect(appealRes.strike.appealReason).toBe("Medical emergency justification");
@@ -151,7 +151,7 @@ describe("StrikeService Unit Tests", () => {
       expect(service.getActiveStrikes(buyerId, t0 + 500).length).toBe(2);
 
       // Attempting to appeal already appealed strike throws error
-      await expect(service.appealStrike(s3.strike.id, "Another appeal", t0 + 600)).rejects.toThrow("is not active");
+      await expect(service.appealStrike(s3.strike.id, "Another appeal", undefined, t0 + 600)).rejects.toThrow("is not active");
     });
   });
 
