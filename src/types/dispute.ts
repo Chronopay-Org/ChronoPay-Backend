@@ -94,4 +94,13 @@ export interface Dispute {
   seniorDecisionAt?: number;
   /** Final ruling from the senior panel; may overturn or uphold the original. */
   finalRuling?: "UPHELD" | "OVERTURNED";
+
+  // ── Auto-resolution fields ──────────────────────────────────────────────
+  /** Wall-clock ms when auto-resolution was applied by the deadline scheduler. */
+  autoResolvedAt?: number;
+  /**
+   * Window length (ms) within which an auto-resolution can be reversed.
+   * Defaults to `DEFAULT_AUTO_RESOLVE_REVERSAL_WINDOW_MS` (24 h).
+   */
+  autoResolveWindowMs?: number;
 }

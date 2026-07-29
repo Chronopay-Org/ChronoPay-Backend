@@ -1142,3 +1142,118 @@ describe("circuit breaker integration", () => {
     expect(mockFetch).toHaveBeenCalledTimes(5);
   });
 });
+
+// ─── Partial Refund Stellar Path Payment & FX Slippage Protection (Issue #477) ──
+
+describe("HorizonContractClient.findPathPaymentQuote()", () => {
+  const nativeAsset = { asset_type: "native" as const };
+  const usdcAsset = {
+    asset_type: "credit_alphanum4" as const,
+    asset_code: "USDC",
+    asset_issuer: "GA5ZSEJYB37JRC5AVCIA5XY24DZ36LAK5C4AWM4C6NRPCHCYK3DYB7K5",
+  };
+
+  it("calculates min-received guard and returns quote for valid path payment", async () => {
+    const client = makeClient();
+    mockOk({
+      _embedded: {
+        records: [
+          {
+            source_asset_type: "native",
+            source_amount: "100.0000000",
+            destination_asset_type: "credit_alphanum4",
+            destination_asset_code: "USDC",
+            destination_asset_issuer: usdcAsset.asset_issuer,
+            destination_amount: "10.0000000",
+            path: [],
+          },
+        ],
+      },
+    });
+
+    const quote = await client.findPathPaymentQuote({
+      sourceAsset: nativeAsset,
+      sourceAmount: 1000000000, // 100 XLM in stroops
+      destinationAsset: usdcAsset,
+      maxSlippageTolerancePercent: 0.5,
+      tenantId: "tenant-1",
+    });
+
+    expect(quote.tenantId).toBe("tenant-1");
+    expect(quote.sourceAmount).toBe("100.0000000");
+    expect(quote.destinationAmount).toBe("10.0000000");
+    // 10.0 * (1 - 0.005) = 9.95
+    expect(quote.minDestinationAmount).toBe("9.9500000");
+    expect(quote.maxSlippageTolerancePercent).toBe(0.5);
+  });
+
+  it("throws ContractInvalidRequestError when source amount is a dust amount", async () => {
+    const client = makeClient();
+    await expect(
+      client.findPathPaymentQuote({
+        sourceAsset: nativeAsset,
+        sourceAmount: 50, // Below default dust threshold of 100
+        destinationAsset: usdcAsset,
+      }),
+    ).rejects.toThrow("below minimum threshold");
+  });
+
+  it("throws ContractInvalidRequestError when oracle timestamp is stale", async () => {
+    const client = makeClient();
+    const staleTimestamp = Math.floor(Date.now() / 1000) - 600; // 600s old (max age 300s)
+
+    await expect(
+      client.findPathPaymentQuote({
+        sourceAsset: nativeAsset,
+        sourceAmount: 1000000,
+        destinationAsset: usdcAsset,
+        oracleTimestamp: staleTimestamp,
+        oracleMaxAgeSeconds: 300,
+      }),
+    ).rejects.toThrow("Stale oracle rate");
+  });
+
+  it("throws ContractInvalidRequestError when no path is found by Horizon", async () => {
+    const client = makeClient();
+    mockOk({ _embedded: { records: [] } });
+
+    await expect(
+      client.findPathPaymentQuote({
+        sourceAsset: nativeAsset,
+        sourceAmount: 1000000,
+        destinationAsset: usdcAsset,
+      }),
+    ).rejects.toThrow("No path found for Stellar path payment");
+  });
+
+  it("throws ContractInvalidRequestError when quoted slippage exceeds tolerance", async () => {
+    const client = makeClient();
+    // Quoted rate: 5 USDC / 100 XLM = 0.05
+    mockOk({
+      _embedded: {
+        records: [
+          {
+            source_asset_type: "native",
+            source_amount: "100.0000000",
+            destination_asset_type: "credit_alphanum4",
+            destination_asset_code: "USDC",
+            destination_asset_issuer: usdcAsset.asset_issuer,
+            destination_amount: "5.0000000",
+            path: [],
+          },
+        ],
+      },
+    });
+
+    // Oracle expects 0.1 USDC per XLM (10 USDC for 100 XLM)
+    await expect(
+      client.findPathPaymentQuote({
+        sourceAsset: nativeAsset,
+        sourceAmount: "100.0000000",
+        destinationAsset: usdcAsset,
+        oracleRate: 0.1,
+        maxSlippageTolerancePercent: 1.0, // 1% tolerance, but actual slippage is 50%
+      }),
+    ).rejects.toThrow("Slippage tolerance exceeded");
+  });
+});

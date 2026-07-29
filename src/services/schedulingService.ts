@@ -19,15 +19,15 @@ export class SlotNotFoundError extends Error {
 }
 
 export class SlotExpiredError extends Error {
+  readonly slotId: string;
+  readonly validUntil: number;
+
   constructor(slotId: string, validUntil: number) {
     super(`Slot ${slotId} bundle has expired (valid until ${new Date(validUntil).toISOString()})`);
     this.name = "SlotExpiredError";
     this.slotId = slotId;
     this.validUntil = validUntil;
   }
-
-  readonly slotId: string;
-  readonly validUntil: number;
 }
 
 export class EscrowPausedError extends Error {
@@ -136,6 +136,15 @@ export function deriveRefundLedgerHash(
  * When a slot carries a validUntil deadline the reservation is rejected
  * once the current time exceeds the window, returning SlotExpiredError.
  *
+ * Grace-window awareness
+ * ----------------------
+ * Each slot carries an optional `category` field (e.g. "medical",
+ * "fitness").  The `resolveGraceWindow` method looks up the effective
+ * grace-window duration (in **seconds**) for that category via the
+ * injected GraceWindowService.  Callers (e.g. the no-show detection
+ * job) use this to determine how long to wait after `slot.startTime`
+ * before evaluating absence.
+ *
  * In a production DB these operations would be wrapped in a single
  * transaction so the slot update and intent update commit or roll back
  * together.
@@ -150,7 +159,13 @@ export class SchedulingService {
   constructor(
     private readonly slotRepository: SlotRepository,
     private readonly bookingIntentRepository: BookingIntentRepository,
-  ) {}
+    graceWindowService?: GraceWindowService,
+  ) {
+    // Accept an injected instance (for testing) or fall back to the singleton.
+    this.graceWindowService = graceWindowService ?? getGraceWindowService();
+  }
+
+  // ── Reservation ───────────────────────────────────────────────────────────
 
   reserveSlot(slotId: string, now?: number): void {
     if (escrowMigrationState.isPaused()) {
@@ -195,7 +210,7 @@ export class SchedulingService {
       }
       this.reservedBundles.set(bundleId, new Set(uniqueSlotIds));
     } catch (error) {
-      // Rollback
+      // Rollback all already-reserved slots so the operation is atomic.
       for (const slotId of reserved) {
         this.releaseSlot(slotId);
       }
