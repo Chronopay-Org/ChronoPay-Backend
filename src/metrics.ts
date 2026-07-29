@@ -473,6 +473,20 @@ export function recordSmallCellSuppression(tenantId: string, category: string): 
   reputationSmallCellSuppressionsTotal.labels(tenantId, category).inc();
 }
 
+// ─── Query-budget breach metrics ─────────────────────────────────────────────
+
+/**
+ * Counter incremented each time a request-scoped query budget is exceeded.
+ * Label `route` identifies which endpoint triggered the breach.
+ */
+export const queryBudgetBreaches = createBudgetedCounter({
+  name: "db_query_budget_breaches_total",
+  help: "Total number of per-request query budget breaches",
+  labels: ["route"],
+  budget: 64,
+  registers: [register],
+});
+
 // ─── Slow-query metrics ───────────────────────────────────────────────────────
 
 /**

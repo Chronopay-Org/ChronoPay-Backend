@@ -52,6 +52,9 @@ import reputationRouter from "./routes/reputation.js";
 import webhookRoutes, { registerWebhookRoutes } from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 import fraudModelsRouter from "./routes/fraudModels.js";
+import redactionPolicyRouter from "./routes/redactionPolicy.js";
+import { gdprExportRouter } from "./routes/gdprExport.js";
+import reputationRouter from "./routes/reputation.js";
 import { requireAdminToken } from "./middleware/authorization.js";
 import { listReputationEvents } from "./services/reputationWriteAudit.js";
 import {
