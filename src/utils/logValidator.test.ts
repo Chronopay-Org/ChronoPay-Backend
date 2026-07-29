@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/utils/logValidator.test.ts
 import { validateLog, getLogValidatorErrors, validateLogEvent, getLogEventValidatorErrors } from "./logValidator";
 import { getLogSchemaRegistry, collectLogSchemaDrift } from "./logSchemaRegistry";

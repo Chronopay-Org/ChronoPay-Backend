@@ -7,14 +7,14 @@
  */
 
 import { describe, it, expect, jest, afterEach } from "@jest/globals";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import {  mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
   defaultIO,
   hashFileWithTimeout,
   looksLikeStorageError,
-  StorageTimeoutError,
+  
 } from "../walIntegrityChecker";
 import { main } from "../../../scripts/check-wal-integrity";
 

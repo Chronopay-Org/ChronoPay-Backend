@@ -23,7 +23,7 @@ import fs from "fs/promises";
 import path from "path";
 import {
   ImpersonationSession,
-  ImpersonationSessionStatus,
+  
   ImpersonationRequestRecord,
   ImpersonationSessionSummary,
   OpenSessionParams,
