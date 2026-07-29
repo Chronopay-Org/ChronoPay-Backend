@@ -413,6 +413,53 @@ export const outboxCompactionDurationMs = createBudgetedHistogram({
   registers: [register],
 });
 
+// ─── Outbox relay metrics ──────────────────────────────────────────────────────
+
+/**
+ * Counter incremented for each event successfully published and acked by the relay.
+ */
+export const outboxRelayPublished = createBudgetedCounter({
+  name: "outbox_relay_published_total",
+  help: "Total number of outbox events successfully published and acknowledged",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time the relay fails to publish an event.
+ */
+export const outboxRelayPublishErrors = createBudgetedCounter({
+  name: "outbox_relay_publish_errors_total",
+  help: "Total number of outbox events that failed to publish",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Histogram tracking the duration (in milliseconds) of a single relay sweep.
+ */
+export const outboxRelayDurationMs = createBudgetedHistogram({
+  name: "outbox_relay_duration_ms",
+  help: "Duration in milliseconds of an outbox relay sweep",
+  labels: [],
+  budget: 0,
+  buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000],
+  registers: [register],
+});
+
+/**
+ * Counter incremented for each relay sweep performed.
+ */
+export const outboxRelaySweepsTotal = createBudgetedCounter({
+  name: "outbox_relay_sweeps_total",
+  help: "Total number of outbox relay sweeps performed",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
 export const reputationQueriesTotal = createBudgetedCounter({
   name: "reputation_queries_total",
   help: "Total number of reputation transparency queries grouped by tenant and result",
