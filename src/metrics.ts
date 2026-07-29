@@ -376,6 +376,34 @@ export const expiryCleanupSafetyBrakeTriggers = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Refundable hold expiry sweeper metrics ────────────────────────────────────
+
+export const refundableHoldReleaseLagSeconds = createBudgetedHistogram({
+  name: "refundable_hold_release_lag_seconds",
+  help: "Release lag in seconds between hold expiry deadline and actual release",
+  labels: ["tenant_id"],
+  budget: 64,
+  buckets: [0.1, 0.5, 1, 5, 10, 30, 60, 300, 600, 1800, 3600],
+  registers: [register],
+});
+
+export const refundableHoldsReleasedTotal = createBudgetedCounter({
+  name: "refundable_holds_released_total",
+  help: "Total number of expired refundable holds released by the sweeper",
+  labels: ["tenant_id"],
+  budget: 64,
+  registers: [register],
+});
+
+export const refundableHoldSweeperSafetyBrakeTriggers = createBudgetedCounter({
+  name: "refundable_hold_sweeper_safety_brake_triggers_total",
+  help: "Total number of refundable hold sweeper runs skipped because candidate count exceeded safety threshold",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+
 // ─── Outbox compaction metrics ────────────────────────────────────────────────
 
 /**
