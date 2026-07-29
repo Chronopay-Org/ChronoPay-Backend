@@ -143,8 +143,6 @@ describe("AuditExportService", () => {
 
 describe("AuditExportService — DP analytics summary", () => {
   let tempDir: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-  let logger: AuditLogger;
 
   /** Create a service with an isolated large-budget tracker and DP enabled. */
   function makeService(auditLogFile: string, budgetOverrides?: Record<string, number>): AuditExportService {

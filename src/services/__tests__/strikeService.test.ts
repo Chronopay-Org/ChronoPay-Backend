@@ -85,8 +85,7 @@ describe("StrikeService Unit Tests", () => {
 
       const t0 = 1000;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-      const { strike } = await service.issueStrike({ buyerId, issuedAt: t0 });
+      await service.issueStrike({ buyerId, issuedAt: t0 });
 
       // Before decay boundary (t0 + 9999ms): Active
       expect(service.getActiveStrikes(buyerId, t0 + 9999).length).toBe(1);
@@ -134,10 +133,8 @@ describe("StrikeService Unit Tests", () => {
       service.updateConfig({ maxStrikesThreshold: 3 });
 
       const t0 = 1000;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-      const s1 = await service.issueStrike({ buyerId, issuedAt: t0 });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-      const s2 = await service.issueStrike({ buyerId, issuedAt: t0 + 100 });
+      await service.issueStrike({ buyerId, issuedAt: t0 });
+      await service.issueStrike({ buyerId, issuedAt: t0 + 100 });
       const s3 = await service.issueStrike({ buyerId, issuedAt: t0 + 200 });
 
       expect(s3.buyerSuspension.isSuspended).toBe(true);

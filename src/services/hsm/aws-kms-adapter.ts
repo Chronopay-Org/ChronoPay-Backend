@@ -52,16 +52,16 @@ export class AccessDeniedException extends KMSServiceException {
 }
 
 import type { IHsmAdapter } from "./hsm-adapter.interface.js";
-import type {
-  SignRequest,
-  SignResponse,
-  VerifyRequest,
-  VerifyResponse,
-  RotateRequest,
-  RotateResponse,
-  SigningAlgorithm,
+import {
+  HsmError,
+  type SignRequest,
+  type SignResponse,
+  type VerifyRequest,
+  type VerifyResponse,
+  type RotateRequest,
+  type RotateResponse,
+  type SigningAlgorithm,
 } from "./types.js";
-import { HsmError } from "./types.js";
 import { RetryPolicy, DEFAULT_RETRY_CONFIG } from "../../utils/retry-policy.js";
 
 // ---------------------------------------------------------------------------

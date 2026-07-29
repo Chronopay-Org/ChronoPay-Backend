@@ -32,28 +32,6 @@ function makeRecord(overrides: Partial<DsrRecord> = {}): DsrRecord {
   };
 }
 
-/** Minimal spy — records calls, resolves with undefined by default. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-function makeSpy<T extends unknown[] = unknown[], R = void>(
-  impl?: (...args: T) => Promise<R>,
-) {
-  const calls: T[] = [];
-  const errors: Error[] = [];
-  let callIndex = 0;
-  const fn = async (...args: T): Promise<R> => {
-    calls.push(args);
-    if (errors[callIndex] !== undefined) {
-      const err = errors[callIndex++];
-      throw err;
-    }
-    callIndex++;
-    return impl ? impl(...args) : (undefined as unknown as R);
-  };
-  fn.calls = calls;
-  fn.mockRejectedValueOnce = (err: Error) => { errors[calls.length] = err; };
-  return fn;
-}
-
 function makeMockService(pendingByThreshold: Partial<Record<number, DsrRecord[]>> = {}) {
   const findPendingAlertsCalls: [number, Date][] = [];
   const markAlertSentCalls: [string, number][] = [];

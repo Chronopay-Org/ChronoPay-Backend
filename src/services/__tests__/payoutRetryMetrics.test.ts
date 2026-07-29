@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from "@jest/globals";
 import {
   payoutRetryRollup,
   resolveRetryOutcome,
-  type PayoutRetryOutcome,
 } from "../../scheduler/payoutRetryMetrics.js";
 
 // ─── Suite ────────────────────────────────────────────────────────────────────

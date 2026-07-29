@@ -5,7 +5,6 @@ import { auditExportService } from "../services/auditExportService.js";
 import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
-import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
 import {
   HolidayCalendarService,
   InMemoryHolidayCalendarRepository,
@@ -694,8 +693,6 @@ type Dispute = {
  *     offset        – pagination offset (default 0)
  * @access Private (admin token only)
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-const impersonationSessionStore = new InMemoryImpersonationSessionStore();
 
 router.get(
   "/impersonation/sessions",

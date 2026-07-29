@@ -66,16 +66,6 @@ function makeMockService(overrides: Partial<Record<string, unknown>> = {}) {
   } as any;
 }
 
-// ─── Spy wrapper that records calls ──────────────────────────────────────────
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-function spyOn<T extends (...a: any[]) => any>(fn: T): T & { calls: Parameters<T>[] } {
-  const calls: Parameters<T>[] = [];
-  const spy = ((...args: Parameters<T>) => { calls.push(args); return fn(...args); }) as T & { calls: Parameters<T>[] };
-  spy.calls = calls;
-  return spy;
-}
-
 // ─── Test setup ───────────────────────────────────────────────────────────────
 
 let mockSvc: ReturnType<typeof makeMockService>;

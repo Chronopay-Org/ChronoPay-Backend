@@ -39,12 +39,6 @@ function makeAuditLogger(): { logger: AuditLogger; events: Array<{ action: strin
   return { logger, events };
 }
 
-let tick = 0;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-function makeClock(startMs = 1_000_000) {
-  return () => startMs + tick * 1000;
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("PartialRefundApprovalService – #478", () => {
@@ -53,7 +47,6 @@ describe("PartialRefundApprovalService – #478", () => {
   let nowMs: number;
 
   beforeEach(() => {
-    tick = 0;
     nowMs = 1_000_000;
     const { logger, events } = makeAuditLogger();
     auditEvents = events;
@@ -249,8 +242,7 @@ describe("PartialRefundApprovalService – #478", () => {
 
     it("filters by status correctly", async () => {
       const { pendingRequest: r1 } = await service.initiate(makeLargeRequest({ paymentId: "pay-1" }), "admin-a");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-      const { pendingRequest: r2 } = await service.initiate(makeLargeRequest({ paymentId: "pay-2" }), "admin-a");
+      await service.initiate(makeLargeRequest({ paymentId: "pay-2" }), "admin-a");
 
       await service.approve(r1!.id, "admin-b");
 

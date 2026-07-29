@@ -3,8 +3,6 @@
 // compatibility with Jest's --experimental-vm-modules ESM test environment.
 import * as rruleLib from "rrule";
 import type { RRule as RRuleType } from "rrule";
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-import rruleLib from "rrule";
 import { AuditLogger, defaultAuditLogger } from "./auditLogger.js";
 import { SupplierTimezoneContext } from "../modules/slots/slot-repository.js";
 import {

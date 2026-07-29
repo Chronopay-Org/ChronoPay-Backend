@@ -49,16 +49,6 @@ function makeQueryFn(rows: unknown[] = [], rowCount = 1): QueryFn {
   return async () => ({ rows, rowCount, command: "", oid: 0, fields: [] } as any);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, unused-imports/no-unused-vars, @typescript-eslint/no-var-requires
-function makeQueryFnSequence(responses: { rows: unknown[]; rowCount?: number }[]): QueryFn {
-  let call = 0;
-  return async () => {
-    const resp = responses[call] ?? { rows: [], rowCount: 0 };
-    call++;
-    return { rows: resp.rows, rowCount: resp.rowCount ?? resp.rows.length, command: "", oid: 0, fields: [] } as any;
-  };
-}
-
 // Spy query fn: records all calls and delegates to inner fn
 function makeSpyQueryFn(inner: QueryFn): { queryFn: QueryFn; calls: { text: string; params: unknown[] }[] } {
   const calls: { text: string; params: unknown[] }[] = [];
