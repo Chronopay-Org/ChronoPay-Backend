@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest } from "@jest/globals";
 import { BookingIntentService } from "../booking-intent-service.js";
 

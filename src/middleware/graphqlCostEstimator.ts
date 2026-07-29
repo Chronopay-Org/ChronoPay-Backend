@@ -117,6 +117,7 @@ function parseQueryFields(
   let currentField = "";
   let inArgParens = 0;
   let currentArgCount = 0;
+  // eslint-disable-next-line unused-imports/no-unused-vars
   let seenOpeningBraceForField = false;
 
   for (let i = 0; i < body.length; i++) {

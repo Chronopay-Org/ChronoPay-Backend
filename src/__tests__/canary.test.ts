@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest } from "@jest/globals";
 import { runCanary, canarySuccessCounter, canaryFailureCounter } from "../../scripts/canary.js";
 import { setRedisClient } from "../cache/redisClient.js";

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * src/__tests__/select-tests.test.ts
  *

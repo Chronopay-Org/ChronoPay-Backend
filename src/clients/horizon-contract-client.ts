@@ -1,11 +1,73 @@
+import { randomUUID } from "crypto";
 import { IContractClient } from "./contract-client.interface.js";
 import { ContractInteractionArgs, ContractCallResult, TransactionResult } from "./types.js";
 import { ContractService } from "../services/contract.service.js";
-import { ContractInvalidRequestError, ContractRateLimitError } from "../errors/contractErrors.js";
+import {
+  ContractInvalidRequestError,
+  ContractRateLimitError,
+  ContractProviderUnavailableError,
+} from "../errors/contractErrors.js";
 import { withTimeout } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
 import { validateFeeBumpTransaction } from "./fee-bump-validator.js";
 import { CursorStore, InMemoryCursorStore } from "./cursor-store.js";
+
+export interface StellarAsset {
+  asset_type: "native" | "credit_alphanum4" | "credit_alphanum12";
+  asset_code?: string;
+  asset_issuer?: string;
+}
+
+export interface HorizonPathRecord {
+  source_asset_type: string;
+  source_asset_code?: string;
+  source_asset_issuer?: string;
+  source_amount: string;
+  destination_asset_type: string;
+  destination_asset_code?: string;
+  destination_asset_issuer?: string;
+  destination_amount: string;
+  path: Array<{
+    asset_type: string;
+    asset_code?: string;
+    asset_issuer?: string;
+  }>;
+}
+
+export interface HorizonPathResponse {
+  _embedded: {
+    records: HorizonPathRecord[];
+  };
+}
+
+export interface PathPaymentQuoteOptions {
+  sourceAsset: StellarAsset;
+  sourceAmount: string | number;
+  destinationAsset: StellarAsset;
+  destinationAmount?: string | number;
+  tenantId?: string;
+  maxSlippageTolerancePercent?: number;
+  oracleRate?: number;
+  oracleTimestamp?: number;
+  oracleMaxAgeSeconds?: number;
+  dustThresholdStroops?: number;
+}
+
+export interface ExecutedPathPaymentQuote {
+  quoteId: string;
+  tenantId: string;
+  sourceAsset: StellarAsset;
+  sourceAmount: string;
+  destinationAsset: StellarAsset;
+  destinationAmount: string;
+  minDestinationAmount: string;
+  effectiveSlippagePercent: number;
+  maxSlippageTolerancePercent: number;
+  oracleRateUsed?: number;
+  oracleAgeSeconds?: number;
+  path: StellarAsset[];
+  quotedAt: number;
+}
 
 // ─── SSE reconnection constants ──────────────────────────────────────────────
 
@@ -164,6 +226,76 @@ export class HorizonInsufficientBalanceError extends Error {
   }
 }
 
+export interface StellarPayoutBalanceOptions {
+  amount?: string | number;
+  baseReserve?: number;
+  subentries?: number;
+  trustlines?: number;
+  offers?: number;
+}
+
+interface HorizonAccountResponse {
+  id?: string;
+  subentry_count?: number;
+  balances?: Array<{
+    asset_type: string;
+    balance: string;
+  }>;
+}
+
+export function computeMinBalance(subentries: number, baseReserve = 5_000_000): number {
+  if (!Number.isInteger(subentries) || subentries < 0) {
+    throw new ContractInvalidRequestError("Subentry count must be a non-negative integer");
+  }
+
+  if (!Number.isFinite(baseReserve) || baseReserve <= 0) {
+    throw new ContractInvalidRequestError("Base reserve must be a positive number");
+  }
+
+  return (2 + subentries) * baseReserve;
+}
+
+function parseStellarAmount(amount: string | number | undefined): number {
+  if (amount === undefined || amount === null) {
+    return 0;
+  }
+
+  if (typeof amount === "number") {
+    return Math.trunc(amount);
+  }
+
+  const trimmed = amount.trim();
+  if (trimmed === "") {
+    return 0;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return Number.parseInt(trimmed, 10);
+  }
+
+  const match = trimmed.match(/^(\d+)(?:\.(\d{1,7}))?$/);
+  if (!match) {
+    throw new ContractInvalidRequestError(`Invalid Stellar amount: ${amount}`);
+  }
+
+  const whole = Number.parseInt(match[1], 10);
+  const fractional = match[2] ?? "";
+  return whole * 10_000_000 + Number.parseInt(fractional.padEnd(7, "0"), 10);
+}
+
+export class HorizonInsufficientBalanceError extends Error {
+  constructor(
+    public readonly accountId: string,
+    public readonly balance: number,
+    public readonly minimumBalance: number,
+  ) {
+    super(
+      `Account ${accountId} does not have enough balance to cover the Stellar reserve minimum: ${balance} < ${minimumBalance}`,
+    );
+    this.name = "HorizonInsufficientBalanceError";
+  }
+}
+
 /**
  * Options for paginated Horizon endpoint queries.
  */
@@ -211,6 +343,13 @@ export interface FetchAllPagesOptions {
   maxRecords?: number;
   maxRetriesOnRateLimit?: number;
   onRateLimit?: (attempt: number) => Promise<void>;
+}
+
+export interface SequenceRecoveryOptions {
+  maxRetries?: number;
+  initialDelayMs?: number;
+  useJitter?: boolean;
+  onRetry?: (attempt: number, newSequence: string) => void;
 }
 
 /**
@@ -315,6 +454,39 @@ export class HorizonContractClient implements IContractClient {
     } catch {
       return false;
     }
+  }
+  /**
+   * Checks the account balance against the Stellar minimum reserve before submitting a payout.
+   * The reserve is derived from the effective subentry count, including trustlines and offers.
+   */
+  async submitPayout(accountId: string, xdr: string, options: StellarPayoutBalanceOptions = {}): Promise<TransactionResult> {
+    const accountResponse = await this.call<HorizonAccountResponse>({
+      address: accountId,
+      abi: null,
+      method: "getAccount",
+      args: [accountId],
+    });
+
+    const account = accountResponse.data;
+    const baseReserve = options.baseReserve ?? 5_000_000;
+    const effectiveSubentries = (options.subentries ?? account.subentry_count ?? 0) + (options.trustlines ?? 0) + (options.offers ?? 0);
+    const minimumBalance = computeMinBalance(effectiveSubentries, baseReserve);
+    const payoutAmount = parseStellarAmount(options.amount);
+    const nativeBalance = account.balances?.find((balance) => balance.asset_type === "native")?.balance;
+    const balanceInStroops = nativeBalance === undefined ? 0 : parseStellarAmount(nativeBalance);
+
+    if (balanceInStroops < minimumBalance + payoutAmount) {
+      throw new HorizonInsufficientBalanceError(accountId, balanceInStroops, minimumBalance + payoutAmount);
+    }
+
+    return this.sendTransaction({
+      address: accountId,
+      abi: null,
+      method: "submitTransaction",
+      args: [xdr],
+    });
+  }
+
   /**
    * Checks the account balance against the Stellar minimum reserve before submitting a payout.
    * The reserve is derived from the effective subentry count, including trustlines and offers.
@@ -377,6 +549,70 @@ export class HorizonContractClient implements IContractClient {
       args: [txHash],
     });
     return res.data;
+  }
+
+  /**
+   * Fetches the current sequence number for a Stellar account from Horizon.
+   * Returns the sequence as a string (matching the Stellar Horizon API format).
+   */
+  async getAccountSequence(accountId: string): Promise<string> {
+    const result = await this.call<{ sequence: string }>({
+      address: accountId,
+      abi: null,
+      method: "getAccount",
+      args: [accountId],
+    });
+    return result.data.sequence;
+  }
+
+  /**
+   * Submits a transaction with sequence-number collision recovery.
+   *
+   * On tx_bad_seq, re-reads the account sequence from Horizon and retries
+   * with jitter after the caller rebuilds the XDR using the fresh sequence.
+   *
+   * @param rebuildXdr - Callback that receives the fresh sequence string and returns a rebuilt XDR envelope.
+   * @param options - Recovery tuning: maxRetries, initialDelayMs, useJitter, onRetry.
+   */
+  async sendTransactionWithSequenceRecovery(
+    initialXdr: string,
+    accountId: string,
+    rebuildXdr: (freshSequence: string) => Promise<string>,
+    options: SequenceRecoveryOptions = {},
+  ): Promise<TransactionResult> {
+    const maxRetries = options.maxRetries ?? 5;
+    let delayMs = options.initialDelayMs ?? 100;
+    const useJitter = options.useJitter ?? true;
+
+    let currentXdr = initialXdr;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await this.sendTransaction({
+          address: accountId,
+          abi: null,
+          method: "submitTransaction",
+          args: [currentXdr],
+        });
+      } catch (err: unknown) {
+        if (!(err instanceof ContractSequenceCollisionError) || attempt === maxRetries) {
+          throw err;
+        }
+
+        const freshSequence = await this.getAccountSequence(accountId);
+        currentXdr = await rebuildXdr(freshSequence);
+
+        if (options.onRetry) {
+          options.onRetry(attempt + 1, freshSequence);
+        }
+
+        const jitterDelay = useJitter ? Math.floor(Math.random() * delayMs) : delayMs;
+        await new Promise((resolve) => setTimeout(resolve, jitterDelay));
+        delayMs = Math.min(delayMs * 2, 10_000);
+      }
+    }
+
+    throw new ContractSequenceCollisionError("Sequence collision recovery exhausted all retries");
   }
 
   /**
@@ -467,6 +703,148 @@ export class HorizonContractClient implements IContractClient {
     return records;
   }
 
+  /**
+   * Finds payment paths on Stellar Horizon, validates against dust amounts, oracle staleness,
+   * and FX slippage tolerance, and returns an executed quote with a minimum-received guard.
+   */
+  async findPathPaymentQuote(options: PathPaymentQuoteOptions): Promise<ExecutedPathPaymentQuote> {
+    const rawSourceAmount = options.sourceAmount;
+    let numericSourceAmount: number;
+    if (typeof rawSourceAmount === "number") {
+      numericSourceAmount = rawSourceAmount;
+    } else {
+      numericSourceAmount = parseFloat(rawSourceAmount);
+    }
+
+    const dustThreshold = options.dustThresholdStroops ?? 100;
+    if (!Number.isFinite(numericSourceAmount) || numericSourceAmount <= 0 || numericSourceAmount < dustThreshold) {
+      throw new ContractInvalidRequestError(
+        `Dust amount error: Source amount ${numericSourceAmount} is below minimum threshold ${dustThreshold}`,
+      );
+    }
+
+    if (options.oracleTimestamp !== undefined) {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const oracleTimeSec =
+        options.oracleTimestamp > 1e11
+          ? Math.floor(options.oracleTimestamp / 1000)
+          : options.oracleTimestamp;
+      const oracleAgeSeconds = nowSeconds - oracleTimeSec;
+      const maxAge = options.oracleMaxAgeSeconds ?? 300;
+
+      if (oracleAgeSeconds > maxAge || oracleAgeSeconds < 0) {
+        throw new ContractInvalidRequestError(
+          `Stale oracle rate: rate age ${oracleAgeSeconds}s exceeds maximum allowed age ${maxAge}s`,
+        );
+      }
+    }
+
+    const queryParams: Record<string, string> = {
+      source_asset_type: options.sourceAsset.asset_type,
+      source_amount:
+        typeof rawSourceAmount === "number"
+          ? (rawSourceAmount / 1e7).toFixed(7)
+          : rawSourceAmount,
+    };
+    if (options.sourceAsset.asset_code) {
+      queryParams.source_asset_code = options.sourceAsset.asset_code;
+    }
+    if (options.sourceAsset.asset_issuer) {
+      queryParams.source_asset_issuer = options.sourceAsset.asset_issuer;
+    }
+
+    queryParams.destination_asset_type = options.destinationAsset.asset_type;
+    if (options.destinationAsset.asset_code) {
+      queryParams.destination_asset_code = options.destinationAsset.asset_code;
+    }
+    if (options.destinationAsset.asset_issuer) {
+      queryParams.destination_asset_issuer = options.destinationAsset.asset_issuer;
+    }
+
+    const url = `${this.horizonUrl}/paths/strict-send?${new URLSearchParams(queryParams).toString()}`;
+
+    let response: HorizonPathResponse;
+    try {
+      response = await this.contractService.call<HorizonPathResponse>(
+        "horizon:findPaths",
+        () =>
+          withTimeout(
+            async (signal) => this.fetchJson<HorizonPathResponse>(url, { signal }),
+            timeoutConfig.http.contractMs,
+            "horizon",
+          ),
+      );
+    } catch (err: unknown) {
+      if (
+        err instanceof ContractInvalidRequestError ||
+        err instanceof ContractProviderUnavailableError
+      ) {
+        throw err;
+      }
+      throw new ContractInvalidRequestError(
+        `No path found for Stellar path payment: ${(err as Error).message}`,
+      );
+    }
+
+    const records = response?._embedded?.records;
+    if (!records || records.length === 0) {
+      throw new ContractInvalidRequestError("No path found for Stellar path payment");
+    }
+
+    const bestRecord = records.reduce((best, curr) => {
+      return parseFloat(curr.destination_amount) > parseFloat(best.destination_amount)
+        ? curr
+        : best;
+    }, records[0]);
+
+    const quotedDestAmountNum = parseFloat(bestRecord.destination_amount);
+    const quotedSrcAmountNum = parseFloat(bestRecord.source_amount);
+    const quotedRate = quotedSrcAmountNum > 0 ? quotedDestAmountNum / quotedSrcAmountNum : 0;
+    const tolerance = options.maxSlippageTolerancePercent ?? 0.5;
+
+    let effectiveSlippagePercent = 0;
+    if (options.oracleRate !== undefined && options.oracleRate > 0) {
+      effectiveSlippagePercent = ((options.oracleRate - quotedRate) / options.oracleRate) * 100;
+      if (effectiveSlippagePercent > tolerance) {
+        throw new ContractInvalidRequestError(
+          `Slippage tolerance exceeded: quoted slippage ${effectiveSlippagePercent.toFixed(2)}% exceeds maximum tolerance ${tolerance}%`,
+        );
+      }
+    }
+
+    const minDestNum = quotedDestAmountNum * (1 - tolerance / 100);
+    const minDestinationAmount = (Math.floor(minDestNum * 1e7) / 1e7).toFixed(7);
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const oracleAgeSeconds =
+      options.oracleTimestamp !== undefined
+        ? nowSeconds -
+          (options.oracleTimestamp > 1e11
+            ? Math.floor(options.oracleTimestamp / 1000)
+            : options.oracleTimestamp)
+        : undefined;
+
+    return {
+      quoteId: `quote_${randomUUID()}`,
+      tenantId: options.tenantId ?? "default",
+      sourceAsset: options.sourceAsset,
+      sourceAmount: bestRecord.source_amount,
+      destinationAsset: options.destinationAsset,
+      destinationAmount: bestRecord.destination_amount,
+      minDestinationAmount,
+      effectiveSlippagePercent: Math.max(0, effectiveSlippagePercent),
+      maxSlippageTolerancePercent: tolerance,
+      oracleRateUsed: options.oracleRate,
+      oracleAgeSeconds,
+      path: (bestRecord.path || []).map((p) => ({
+        asset_type: p.asset_type as StellarAsset["asset_type"],
+        asset_code: p.asset_code,
+        asset_issuer: p.asset_issuer,
+      })),
+      quotedAt: nowSeconds,
+    };
+  }
+
   private buildReadUrl(method: string, methodArgs: any[]): string {
     const id = methodArgs[0] as string;
     switch (method) {
@@ -491,6 +869,11 @@ export class HorizonContractClient implements IContractClient {
         return `${this.horizonUrl}/transactions/${encodeURIComponent(id)}`;
       case "getLatestLedger":
         return `${this.horizonUrl}/ledgers?limit=1&order=desc`;
+      case "findPaths": {
+        const queryParams = methodArgs[0] as Record<string, string>;
+        const params = new URLSearchParams(queryParams);
+        return `${this.horizonUrl}/paths/strict-send?${params.toString()}`;
+      }
       default:
         throw new ContractInvalidRequestError(`Unknown Horizon method: ${method}`);
     }
