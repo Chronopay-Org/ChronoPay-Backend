@@ -84,6 +84,45 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   }).start();
 })();
 
+// ─── Outbox Relay Worker ─────────────────────────────────────────────────────
+// Polls the outbox_events table for un-acked events, publishes them via the
+// configured callback, and marks them as acknowledged.  Guarantees at-least-once
+// delivery.  Set OUTBOX_RELAY_DISABLED=true to skip.
+const _shutdownHooks: Array<() => void> = [];
+(async () => {
+  if (process.env.OUTBOX_RELAY_DISABLED === "true") {
+    console.log("[outbox-relay] Disabled via OUTBOX_RELAY_DISABLED");
+    return;
+  }
+
+  const { runOutboxRelayWorker, SqlOutboxStore } = await import(
+    "./services/outboxRelay.js"
+  );
+  const { getPool } = await import("./db/connection.js");
+  const { logger } = await import("./utils/logger.js");
+
+  const pool = getPool();
+  const store = new SqlOutboxStore(pool);
+
+  // Default publish callback: log the event (production deployments replace
+  // this with a real publisher, e.g. Kafka producer or webhook dispatcher).
+  const publish = async (event: { id: string; event_type: string; aggregate_id: string; payload: unknown }) => {
+    logger.info(
+      { eventId: event.id, eventType: event.event_type, aggregateId: event.aggregate_id },
+      "outbox relay: publishing event",
+    );
+  };
+
+  const controller = new AbortController();
+  _shutdownHooks.push(() => controller.abort());
+
+  runOutboxRelayWorker(controller.signal, store, publish).catch((err: Error) => {
+    logger.error({ err }, "outbox relay worker exited unexpectedly");
+  });
+
+  console.log("[outbox-relay] Worker started");
+})();
+
 const PORT = config.port || 3001;
 const server = app.listen(PORT, () => {
   console.log(`ChronoPay API listening on http://localhost:${PORT}`);
@@ -103,6 +142,12 @@ export function resetShutdownFlag(): void {
 export async function gracefulShutdown(): Promise<void> {
   if (_isShuttingDown) return;
   _isShuttingDown = true;
+
+  // Abort all background workers first
+  for (const hook of _shutdownHooks) {
+    try { hook(); } catch { /* ignore */ }
+  }
+
   if (_serverInstance) {
     await new Promise<void>((resolve) => {
       try {

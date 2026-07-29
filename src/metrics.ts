@@ -441,6 +441,53 @@ export const outboxCompactionDurationMs = createBudgetedHistogram({
   registers: [register],
 });
 
+// ─── Outbox relay metrics ──────────────────────────────────────────────────────
+
+/**
+ * Counter incremented for each event successfully published and acked by the relay.
+ */
+export const outboxRelayPublished = createBudgetedCounter({
+  name: "outbox_relay_published_total",
+  help: "Total number of outbox events successfully published and acknowledged",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time the relay fails to publish an event.
+ */
+export const outboxRelayPublishErrors = createBudgetedCounter({
+  name: "outbox_relay_publish_errors_total",
+  help: "Total number of outbox events that failed to publish",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Histogram tracking the duration (in milliseconds) of a single relay sweep.
+ */
+export const outboxRelayDurationMs = createBudgetedHistogram({
+  name: "outbox_relay_duration_ms",
+  help: "Duration in milliseconds of an outbox relay sweep",
+  labels: [],
+  budget: 0,
+  buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000],
+  registers: [register],
+});
+
+/**
+ * Counter incremented for each relay sweep performed.
+ */
+export const outboxRelaySweepsTotal = createBudgetedCounter({
+  name: "outbox_relay_sweeps_total",
+  help: "Total number of outbox relay sweeps performed",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
 export const reputationQueriesTotal = createBudgetedCounter({
   name: "reputation_queries_total",
   help: "Total number of reputation transparency queries grouped by tenant and result",
@@ -469,22 +516,28 @@ export const webhookHmacVerified = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Partner token quota metrics ───────────────────────────────────────────────
+
 /**
- * Counter tracking outcomes of internal fair-queue bypass header verification.
- *
- * Label `result` values:
- *   - `valid`       — signature matched, bypass granted
- *   - `missing`     — no bypass headers present (request treated normally)
- *   - `expired`     — timestamp outside tolerance window (replay blocked)
- *   - `wrong_route` — signed route does not match actual request path
- *   - `invalid_sig` — HMAC mismatch against all known secrets
- *   - `bad_format`  — header values could not be parsed
+ * Counter incremented each time a partner token's quota usage crosses the
+ * approaching-limit threshold (>= 80 % of daily or monthly limit).
  */
-export const fairQueueBypassAttempts = createBudgetedCounter({
-  name: "fair_queue_bypass_attempts_total",
-  help: "Total number of internal fair-queue rate-limit bypass attempts by result",
-  labels: ["result"],
-  budget: 8,
+export const partnerQuotaApproachingLimit = createBudgetedCounter({
+  name: "partner_quota_approaching_limit_total",
+  help: "Total number of approaching-quota notifications emitted per token",
+  labels: ["token_id"],
+  budget: 512,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time a request is blocked because a quota was exceeded.
+ */
+export const partnerQuotaExceededTotal = createBudgetedCounter({
+  name: "partner_quota_exceeded_total",
+  help: "Total number of blocked requests due to quota exhaustion per token",
+  labels: ["token_id"],
+  budget: 512,
   registers: [register],
 });
 
@@ -502,6 +555,20 @@ export function recordDependencyFault(
 ): void {
   dependencyFaults.labels(dependency, fault).inc();
 }
+
+// ─── Residency egress guard metrics ───────────────────────────────────────────
+
+/**
+ * Counter incremented each time a cross-region egress attempt is blocked
+ * because no active waiver was found.
+ */
+export const residencyEgressBreachAttempts = createBudgetedCounter({
+  name: "residency_egress_breach_attempts_total",
+  help: "Total number of cross-region egress attempts blocked by the residency guard",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
 
 export function recordReputationQuery(
   tenantId: string,

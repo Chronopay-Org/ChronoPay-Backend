@@ -60,6 +60,7 @@ import flagRolloutsRouter from "./routes/flagRollouts.js";
 import redactionPolicyRouter from "./routes/redactionPolicy.js";
 import { gdprExportRouter } from "./routes/gdprExport.js";
 import reputationRouter from "./routes/reputation.js";
+import partnerQuotaRouter from "./routes/partnerQuota.js";
 import { requireAdminToken } from "./middleware/authorization.js";
 import { listReputationEvents } from "./services/reputationWriteAudit.js";
 import {
@@ -607,6 +608,9 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3d. Reputation Transparency Routes
   app.use("/api/v1/suppliers", reputationRouter);
+
+  // 3d-i. Partner Quota Dashboard
+  app.use("/api/v1/partner", partnerQuotaRouter);
 
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
