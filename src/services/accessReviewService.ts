@@ -18,8 +18,7 @@ import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
 import { AuditLogger } from "./auditLogger.js";
-import { buildRoleHierarchy } from "../middleware/rbac.js";
-import type { RoleHierarchy } from "../middleware/rbac.js";
+import { buildRoleHierarchy, type RoleHierarchy } from "../middleware/rbac.js";
 import type {
   AccessGrantEntry,
   AccessGrantSnapshot,

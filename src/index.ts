@@ -18,7 +18,6 @@ if (pinnedHash) {
 const app = createApp({
   enableDocs: true,
   enableTestRoutes: config.nodeEnv !== "production",
-  horizonContractService,
 });
 
 // Optional fraud score drift detector. Operators opt in via env so unit tests
@@ -65,9 +64,56 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   );
 })();
 
+// ─── Feature-Flag Rollout Scheduler (#570) ──────────────────────────────────
+// Advances scheduled percentage rollouts (src/flags/rolloutScheduleRegistry.ts)
+// to whatever step is due. Enabled by default; set
+// FLAG_ROLLOUT_SCHEDULER_DISABLED=true to skip (e.g. in single-shot scripts).
+(async () => {
+  if (process.env.FLAG_ROLLOUT_SCHEDULER_DISABLED === "true") {
+    console.log(
+      "[flag-rollout-scheduler] Disabled via FLAG_ROLLOUT_SCHEDULER_DISABLED",
+    );
+    return;
+  }
+
+  const { createFlagRolloutScheduler } = await import(
+    "./scheduler/flagRolloutScheduler.js"
+  );
+  createFlagRolloutScheduler({
+    runIntervalMs: Number(process.env.FLAG_ROLLOUT_INTERVAL_MS) || undefined,
+  }).start();
+})();
+
 const PORT = config.port || 3001;
 const server = app.listen(PORT, () => {
   console.log(`ChronoPay API listening on http://localhost:${PORT}`);
 });
+
+let _serverInstance: any = server;
+let _isShuttingDown = false;
+
+export function setServer(srv: any): void {
+  _serverInstance = srv;
+}
+
+export function resetShutdownFlag(): void {
+  _isShuttingDown = false;
+}
+
+export async function gracefulShutdown(): Promise<void> {
+  if (_isShuttingDown) return;
+  _isShuttingDown = true;
+  if (_serverInstance) {
+    await new Promise<void>((resolve) => {
+      try {
+        _serverInstance.close(() => resolve());
+      } catch {
+        resolve();
+      }
+    });
+  }
+}
+
+export function getActiveRequestCount(): number { return 0; }
 
 export default server;

@@ -10,7 +10,6 @@ import {
   DsrSlaService,
   DSR_SLA_DAYS,
   ALERT_THRESHOLDS,
-  type DsrRecord,
   type QueryFn,
 } from "../dsrSlaService.js";
 import type { AuditLogger } from "../auditLogger.js";
@@ -48,15 +47,6 @@ function makeRow(overrides: Partial<Record<string, unknown>> = {}): Record<strin
 
 function makeQueryFn(rows: unknown[] = [], rowCount = 1): QueryFn {
   return async () => ({ rows, rowCount, command: "", oid: 0, fields: [] } as any);
-}
-
-function makeQueryFnSequence(responses: { rows: unknown[]; rowCount?: number }[]): QueryFn {
-  let call = 0;
-  return async () => {
-    const resp = responses[call] ?? { rows: [], rowCount: 0 };
-    call++;
-    return { rows: resp.rows, rowCount: resp.rowCount ?? resp.rows.length, command: "", oid: 0, fields: [] } as any;
-  };
 }
 
 // Spy query fn: records all calls and delegates to inner fn

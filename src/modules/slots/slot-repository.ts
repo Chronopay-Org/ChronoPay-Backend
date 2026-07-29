@@ -100,6 +100,8 @@ export interface SlotRecord {
    * default grace window applies.
    */
   category?: string;
+  /** Whether bundle is transferable */
+  transferable?: boolean;
 }
 
 export interface SlotRepository {

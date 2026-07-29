@@ -16,14 +16,13 @@
  *   - getAllEntries: returns all tracked datasets
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { describe, it, expect, afterEach } from "@jest/globals";
 import {
   EpsilonBudgetTracker,
   InMemoryBudgetStore,
   BudgetExhaustedError,
   BudgetTrackerError,
   BudgetAlarmEvent,
-  BudgetAlarmLevel,
   DEFAULT_EPSILON_BUDGET,
   BUDGET_WARNING_FRACTION,
 } from "../../services/epsilonBudgetTracker.js";

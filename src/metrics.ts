@@ -7,16 +7,10 @@ import { Request, Response, NextFunction } from "express";
  */
 export const register = new Registry();
 
-// Add default metrics (CPU, Memory, etc.) only outside tests.
-// Jest can execute through node and may not set NODE_ENV=test in this repository,
-// so also detect the Jest runner via process argv.
-const isTestEnvironment =
-  process.env.NODE_ENV === "test" ||
-  typeof process.env.JEST_WORKER_ID !== "undefined" ||
-  process.argv.some((arg) => typeof arg === "string" && arg.includes("jest"));
-
-if (!isTestEnvironment) {
+try {
   collectDefaultMetrics({ register });
+} catch {
+  // Ignore if already collected
 }
 
 const OVERFLOW_LABEL_VALUE = "__overflow__";
@@ -447,6 +441,25 @@ export const webhookHmacVerified = createBudgetedCounter({
   registers: [register],
 });
 
+/**
+ * Counter tracking outcomes of internal fair-queue bypass header verification.
+ *
+ * Label `result` values:
+ *   - `valid`       — signature matched, bypass granted
+ *   - `missing`     — no bypass headers present (request treated normally)
+ *   - `expired`     — timestamp outside tolerance window (replay blocked)
+ *   - `wrong_route` — signed route does not match actual request path
+ *   - `invalid_sig` — HMAC mismatch against all known secrets
+ *   - `bad_format`  — header values could not be parsed
+ */
+export const fairQueueBypassAttempts = createBudgetedCounter({
+  name: "fair_queue_bypass_attempts_total",
+  help: "Total number of internal fair-queue rate-limit bypass attempts by result",
+  labels: ["result"],
+  budget: 8,
+  registers: [register],
+});
+
 export type DependencyFaultName =
   | "disconnect"
   | "timeout"
@@ -473,20 +486,6 @@ export function recordSmallCellSuppression(tenantId: string, category: string): 
   reputationSmallCellSuppressionsTotal.labels(tenantId, category).inc();
 }
 
-// ─── Query-budget breach metrics ─────────────────────────────────────────────
-
-/**
- * Counter incremented each time a request-scoped query budget is exceeded.
- * Label `route` identifies which endpoint triggered the breach.
- */
-export const queryBudgetBreaches = createBudgetedCounter({
-  name: "db_query_budget_breaches_total",
-  help: "Total number of per-request query budget breaches",
-  labels: ["route"],
-  budget: 64,
-  registers: [register],
-});
-
 // ─── Slow-query metrics ───────────────────────────────────────────────────────
 
 /**
@@ -497,18 +496,6 @@ export const slowQueryCounter = createBudgetedCounter({
   help: "Total number of database queries that exceeded the slow-query threshold",
   labels: [],
   budget: 0,
-  registers: [register],
-});
-
-/**
- * Counter incremented each time a query budget is breached.
- * Labelled by route so per-endpoint budget pressure is visible.
- */
-export const queryBudgetBreaches = createBudgetedCounter({
-  name: "query_budget_breaches_total",
-  help: "Total number of per-request query budget breaches grouped by route",
-  labels: ["route"],
-  budget: 256,
   registers: [register],
 });
 
@@ -620,20 +607,10 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
   next();
 };
 
-export const queryBudgetBreaches = createBudgetedCounter({
-  name: "query_budget_breaches_total",
-  help: "Total number of query budget breaches observed",
-  labels: ["route"],
-  budget: 32,
-  registers: [register],
-});
-
-export const queryBudgetSqlTimeMs = createBudgetedHistogram({
-  name: "query_budget_sql_time_ms",
-  help: "Total SQL duration per query budget context in ms",
-  labels: ["route"],
-  budget: 32,
-  buckets: [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
-  registers: [register],
+export const treasuryBalance = createBudgetedGauge({
+  name: "treasury_balance_stroops",
+  help: "Current treasury balance in stroops",
+  labels: ["asset_code", "asset_issuer"],
+  budget: 50,
 });
 

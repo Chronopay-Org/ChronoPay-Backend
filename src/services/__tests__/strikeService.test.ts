@@ -1,4 +1,4 @@
-import { StrikeService, strikeService, DEFAULT_STRIKE_CONFIG } from "../strikeService.js";
+import { StrikeService, strikeService } from "../strikeService.js";
 
 describe("StrikeService Unit Tests", () => {
   let service: StrikeService;
@@ -85,7 +85,7 @@ describe("StrikeService Unit Tests", () => {
 
       const t0 = 1000;
 
-      const { strike } = await service.issueStrike({ buyerId, issuedAt: t0 });
+      await service.issueStrike({ buyerId, issuedAt: t0 });
 
       // Before decay boundary (t0 + 9999ms): Active
       expect(service.getActiveStrikes(buyerId, t0 + 9999).length).toBe(1);
@@ -133,14 +133,14 @@ describe("StrikeService Unit Tests", () => {
       service.updateConfig({ maxStrikesThreshold: 3 });
 
       const t0 = 1000;
-      const s1 = await service.issueStrike({ buyerId, issuedAt: t0 });
-      const s2 = await service.issueStrike({ buyerId, issuedAt: t0 + 100 });
+      await service.issueStrike({ buyerId, issuedAt: t0 });
+      await service.issueStrike({ buyerId, issuedAt: t0 + 100 });
       const s3 = await service.issueStrike({ buyerId, issuedAt: t0 + 200 });
 
       expect(s3.buyerSuspension.isSuspended).toBe(true);
 
       // Appeal strike 3
-      const appealRes = await service.appealStrike(s3.strike.id, "Medical emergency justification", t0 + 500);
+      const appealRes = await service.appealStrike(s3.strike.id, "Medical emergency justification", undefined, t0 + 500);
 
       expect(appealRes.strike.status).toBe("appealed");
       expect(appealRes.strike.appealReason).toBe("Medical emergency justification");
@@ -151,7 +151,7 @@ describe("StrikeService Unit Tests", () => {
       expect(service.getActiveStrikes(buyerId, t0 + 500).length).toBe(2);
 
       // Attempting to appeal already appealed strike throws error
-      await expect(service.appealStrike(s3.strike.id, "Another appeal", t0 + 600)).rejects.toThrow("is not active");
+      await expect(service.appealStrike(s3.strike.id, "Another appeal", undefined, t0 + 600)).rejects.toThrow("is not active");
     });
   });
 

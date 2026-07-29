@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
-import { DisputeArbitrationQueueService, type BuyerTier } from "../disputeArbitrationQueue.js";
+import { DisputeArbitrationQueueService } from "../disputeArbitrationQueue.js";
 
 describe("DisputeArbitrationQueueService", () => {
   let service: DisputeArbitrationQueueService;

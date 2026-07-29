@@ -18,9 +18,8 @@ jest.mock("../../middleware/rateLimiter.js", () => ({
 import express from "express";
 import request from "supertest";
 import { createGdprErasureRouter } from "../../routes/gdprErasure.js";
-import {
-  LegalHoldViolationError,
-} from "../../services/gdprErasure/GdprErasureOrchestrator.js";
+
+
 import {
   InMemoryErasureEventLog,
 } from "../../services/gdprErasure/eventLog.js";

@@ -255,8 +255,7 @@ describe("releasePartial – error paths", () => {
     // (simulate a corrupted milestone or test the guard directly)
     const booking = svc.getBooking("b-001")!;
     const small = booking.milestones.find((m) => m.milestoneId === "small")!;
-    // @ts-expect-error — intentionally bypassing type safety to test the guard
-    small.amountStroops = 100_000_000; // now exceeds remaining 50M
+    (small as any).amountStroops = 100_000_000; // now exceeds remaining 50M
 
     svc.authorizeMilestone("b-001", "small", "admin");
     await expect(svc.releasePartial("b-001", "small", mockNow)).rejects.toThrow(

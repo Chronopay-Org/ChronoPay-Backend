@@ -214,24 +214,24 @@ describe("Marketplace Search Validation", () => {
 
   describe("Pathological Query Detection", () => {
     it("should detect contradictory price range", () => {
-      const query: MarketplaceSearchQuery = {
+      const query: MarketplaceSearchQuery = validateSearchQuery({
         page: 1,
         limit: 10,
         priceRange: { min: 5000, max: 1000 },
         sortBy: "relevance",
-      };
+      });
       const error = detectPathologicalQuery(query);
       expect(error).not.toBeNull();
       expect(error).toContain("Price range");
     });
 
     it("should detect contradictory rating range", () => {
-      const query: MarketplaceSearchQuery = {
+      const query: MarketplaceSearchQuery = validateSearchQuery({
         page: 1,
         limit: 10,
         ratingRange: { min: 5, max: 2 },
         sortBy: "relevance",
-      };
+      });
       const error = detectPathologicalQuery(query);
       expect(error).not.toBeNull();
       expect(error).toContain("Rating range");
@@ -240,26 +240,26 @@ describe("Marketplace Search Validation", () => {
     it("should detect contradictory time window", () => {
       const start = new Date("2026-02-02T00:00:00Z").getTime();
       const end = new Date("2026-02-01T00:00:00Z").getTime();
-      const query: MarketplaceSearchQuery = {
+      const query: MarketplaceSearchQuery = validateSearchQuery({
         page: 1,
         limit: 10,
         timeWindow: { startTime: start, endTime: end },
         sortBy: "relevance",
-      };
+      });
       const error = detectPathologicalQuery(query);
       expect(error).not.toBeNull();
       expect(error).toContain("Time window");
     });
 
     it("should pass valid queries", () => {
-      const query: MarketplaceSearchQuery = {
+      const query: MarketplaceSearchQuery = validateSearchQuery({
         page: 1,
         limit: 10,
         categories: ["haircut"],
         priceRange: { min: 1000, max: 5000 },
         ratingRange: { min: 3.5, max: 5 },
         sortBy: "relevance",
-      };
+      });
       const error = detectPathologicalQuery(query);
       expect(error).toBeNull();
     });
@@ -322,12 +322,12 @@ describe("Marketplace Search Validation", () => {
     });
 
     it("should handle equal price ranges (not pathological)", () => {
-      const query: MarketplaceSearchQuery = {
+      const query: MarketplaceSearchQuery = validateSearchQuery({
         page: 1,
         limit: 10,
         priceRange: { min: 5000, max: 5000 },
         sortBy: "relevance",
-      };
+      });
       const error = detectPathologicalQuery(query);
       expect(error).toBeNull(); // Equal ranges are OK
     });

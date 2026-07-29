@@ -25,7 +25,7 @@ const HOUR_MS = 1000 * 60 * 60;
 
 function makeAuditLogger() {
   return {
-    log: jest.fn().mockResolvedValue(undefined),
+    log: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(undefined),
   } as unknown as AuditLogger;
 }
 
@@ -323,7 +323,7 @@ describe("CancellationPolicyService with supplier overrides", () => {
   ) {
     return new CancellationPolicyService({
       getPolicyRegistrySync: createDefaultRegistry,
-      auditLogger: { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditLogger,
+      auditLogger: { log: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(undefined) } as unknown as AuditLogger,
       nowMs,
       nowIso: () => new Date(nowMs()).toISOString(),
       supplierOverrideStore: overrideStore,

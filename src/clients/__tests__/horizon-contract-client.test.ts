@@ -559,6 +559,7 @@ import {
   makeCreateAccountOperation,
   makeMemoHash,
   makeMemoId,
+  makeMemoNone,
   makeMemoText,
   makePaymentOperation,
   makePreAuthTxSigner,

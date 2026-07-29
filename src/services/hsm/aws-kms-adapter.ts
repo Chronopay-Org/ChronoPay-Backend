@@ -36,21 +36,32 @@ import {
   NotFoundException,
   DisabledException,
   KMSInvalidSignatureException,
-  AccessDeniedException,
   SigningAlgorithmSpec,
 } from "@aws-sdk/client-kms";
 
+export class AccessDeniedException extends KMSServiceException {
+  constructor(options: { message: string; $metadata?: any }) {
+    super({
+      name: "AccessDeniedException",
+      $fault: "client",
+      $metadata: options.$metadata ?? {},
+      message: options.message,
+    });
+    this.name = "AccessDeniedException";
+  }
+}
+
 import type { IHsmAdapter } from "./hsm-adapter.interface.js";
-import type {
-  SignRequest,
-  SignResponse,
-  VerifyRequest,
-  VerifyResponse,
-  RotateRequest,
-  RotateResponse,
-  SigningAlgorithm,
+import {
+  HsmError,
+  type SignRequest,
+  type SignResponse,
+  type VerifyRequest,
+  type VerifyResponse,
+  type RotateRequest,
+  type RotateResponse,
+  type SigningAlgorithm,
 } from "./types.js";
-import { HsmError } from "./types.js";
 import { RetryPolicy, DEFAULT_RETRY_CONFIG } from "../../utils/retry-policy.js";
 
 // ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ import { createRequestLogger } from "./middleware/requestLogger.js";
 import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
-import { ContractService, type HorizonHealthStatus } from "./services/contract.service.js";
+import { ContractService } from "./services/contract.service.js";
 
 // Simple cookie parser middleware
 function parseCookies(req: Request, _res: Response, next: any): void {
@@ -53,10 +53,10 @@ import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
 import graceWindowRouter from "./routes/graceWindow.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
-import { registerWebhookRoutes } from "./routes/webhooks.js";
-import webhookRoutes from "./routes/webhooks.js";
+import webhookRoutes, { registerWebhookRoutes } from "./routes/webhooks.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 import fraudModelsRouter from "./routes/fraudModels.js";
+import flagRolloutsRouter from "./routes/flagRollouts.js";
 import redactionPolicyRouter from "./routes/redactionPolicy.js";
 import { gdprExportRouter } from "./routes/gdprExport.js";
 import reputationRouter from "./routes/reputation.js";
@@ -515,6 +515,9 @@ export function createApp(options: AppFactoryOptions = {}) {
   // 3b-i. Fraud model admin routes (#455 rollback hotkey)
   app.use("/api/v1/admin/fraud-models", fraudModelsRouter);
 
+  // 3b-i-a. Scheduled feature-flag rollout admin routes (#570)
+  app.use("/api/v1/admin/flag-rollouts", flagRolloutsRouter);
+
   // 3b-ii. Reputation write-audit history (#457)
   app.get(
     "/api/v1/admin/suppliers/:supplierId/reputation/history",
@@ -688,3 +691,5 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   return app;
 }
+
+export default createApp;

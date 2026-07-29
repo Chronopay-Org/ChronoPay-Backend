@@ -294,6 +294,51 @@ describe("requireFeatureFlag", () => {
   });
 });
 
+describe("featureFlagContextMiddleware isEnabledForTenant (#570)", () => {
+  beforeEach(async () => {
+    const { setFeatureFlagsFromEnv } = await import("../service.js");
+    setFeatureFlagsFromEnv({});
+    const { resetRolloutScheduleRegistry } = await import("../rolloutScheduleRegistry.js");
+    resetRolloutScheduleRegistry();
+  });
+
+  it("attaches isEnabledForTenant and it matches the plain flag when no schedule exists", async () => {
+    const { featureFlagContextMiddleware } = await import("../../middleware/featureFlags.js");
+    const req = {} as Request;
+    const res = {} as Response;
+    const next = jest.fn() as NextFunction;
+
+    featureFlagContextMiddleware(req, res, next);
+
+    expect(req.flags!.isEnabledForTenant("CREATE_SLOT", "tenant-a", "user-1", "production")).toBe(true);
+    expect(req.flags!.isEnabledForTenant("CREATE_BOOKING_INTENT", "tenant-a", "user-1", "production")).toBe(false);
+  });
+
+  it("narrows to a scheduled rollout percentage for the tenant", async () => {
+    const { featureFlagContextMiddleware } = await import("../../middleware/featureFlags.js");
+    const { getRolloutScheduleRegistry } = await import("../rolloutScheduleRegistry.js");
+    const { hashToBucket } = await import("../rolloutEvaluator.js");
+
+    getRolloutScheduleRegistry().create({
+      flag: "CREATE_SLOT",
+      tenantId: "tenant-a",
+      environment: "production",
+      actor: "alice",
+      steps: [{ percentage: 50, at: "2026-01-01T00:00:00.000Z" }],
+    });
+    getRolloutScheduleRegistry().advanceDue(new Date("2026-01-01T00:00:00.000Z"));
+
+    const req = {} as Request;
+    const res = {} as Response;
+    const next = jest.fn() as NextFunction;
+    featureFlagContextMiddleware(req, res, next);
+
+    const key = "user-42";
+    const expected = hashToBucket(key) < 50;
+    expect(req.flags!.isEnabledForTenant("CREATE_SLOT", "tenant-a", key, "production")).toBe(expected);
+  });
+});
+
 describe("initializeFeatureFlagsFromEnv", () => {
   it("reinitializes flags from process.env", async () => {
     process.env.FF_CREATE_SLOT = "false";

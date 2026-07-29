@@ -7,6 +7,7 @@ import {
 import { BookingIntentError } from "../modules/booking-intents/booking-intent-service.js";
 import { AuditLogger, defaultAuditLogger } from "./auditLogger.js";
 import { HoldFeePolicyService } from "./holdFeePolicy.js";
+import type { SupplierCancellationOverrideStore } from "./supplierCancellationOverrideStore.js";
 
 export interface RefundBreakdown {
   fee: number;
@@ -354,6 +355,16 @@ export class CancellationPolicyService {
       policyVersionId: chosen.version.versionId,
       policyTerms: terms,
       capturedAtMs: this.nowMs(),
+    };
+  }
+
+  resolveTermsForSupplier(supplierId: string): { policyVersionId: string; terms: ProratedCancellationTerms } | null {
+    if (!this.supplierOverrideStore) return null;
+    const override = this.supplierOverrideStore.getOverride(supplierId);
+    if (!override) return null;
+    return {
+      policyVersionId: `supplier-override:${supplierId}`,
+      terms: override.terms,
     };
   }
 

@@ -120,7 +120,8 @@ export const MarketplaceSearchSchema = z.object({
     .optional(),
 });
 
-export type MarketplaceSearchQuery = z.infer<typeof MarketplaceSearchSchema>;
+export type MarketplaceSearchQueryInput = z.input<typeof MarketplaceSearchSchema>;
+export type MarketplaceSearchQuery = z.output<typeof MarketplaceSearchSchema>;
 
 /**
  * Validate and parse marketplace search query parameters.

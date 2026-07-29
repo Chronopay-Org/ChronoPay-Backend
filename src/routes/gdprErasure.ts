@@ -43,9 +43,10 @@ import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import {
   GdprErasureOrchestrator,
   LegalHoldViolationError,
+  type DbPool,
+  type LegalHoldChecker,
 } from "../services/gdprErasure/GdprErasureOrchestrator.js";
 import type { ErasureEventLog } from "../services/gdprErasure/eventLog.js";
-import type { DbPool, LegalHoldChecker } from "../services/gdprErasure/GdprErasureOrchestrator.js";
 import { AuditLogger } from "../services/auditLogger.js";
 
 export interface GdprErasureRouterOptions {
