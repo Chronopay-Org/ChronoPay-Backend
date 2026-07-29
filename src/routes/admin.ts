@@ -9,6 +9,30 @@ import { InMemoryImpersonationSessionStore } from "../services/impersonationSess
 
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import {
+  PartialRefundApprovalService,
+  RefundApprovalError,
+} from "../services/partialRefundApprovalService.js";
+
+// Singleton approval service – per-currency thresholds can be overridden via
+// environment variables using the format REFUND_APPROVAL_THRESHOLD_<CURRENCY>.
+function buildApprovalThresholds(): Record<string, number> | undefined {
+  const overrides: Record<string, number> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    const match = key.match(/^REFUND_APPROVAL_THRESHOLD_([A-Z]+)$/);
+    if (match && val) {
+      const parsed = parseInt(val, 10);
+      if (!isNaN(parsed) && parsed >= 0) {
+        overrides[match[1]] = parsed;
+      }
+    }
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+export const refundApprovalService = new PartialRefundApprovalService({
+  thresholds: buildApprovalThresholds(),
+});
 
 const router = Router();
 
@@ -141,6 +165,184 @@ router.post("/refunds", requireAdminToken, async (req: Request, res: Response) =
     });
   }
 });
+
+/**
+ * @route POST /api/v1/admin/refunds/approvals
+ * @desc Initiate an approval request for a large partial refund (above threshold).
+ *       If the amount is below the per-currency threshold the refund is auto-approved
+ *       and the caller can execute it immediately.
+ * @access Private (admin role required)
+ */
+router.post(
+  "/refunds/approvals",
+  requireAuthenticatedActor(["admin"]),
+  async (req: Request, res: Response) => {
+    const initiatorId = req.auth?.userId;
+    if (!initiatorId) {
+      return res.status(401).json({ success: false, error: "Missing admin identity" });
+    }
+
+    const { paymentId, amountCents, currency, reason, refundedBy } = req.body;
+
+    if (!paymentId) {
+      return res.status(400).json({ success: false, error: "paymentId is required" });
+    }
+    if (!amountCents || typeof amountCents !== "number" || !Number.isInteger(amountCents) || amountCents <= 0) {
+      return res.status(400).json({ success: false, error: "amountCents must be a positive integer" });
+    }
+
+    try {
+      const result = await refundApprovalService.initiate(
+        { paymentId, amountCents, currency, reason, refundedBy },
+        initiatorId,
+      );
+
+      if (!result.requiresApproval) {
+        // Below threshold – execute immediately
+        const refund = await RefundService.createRefundTraced(result.autoApproved!);
+        return res.status(201).json({ success: true, requiresApproval: false, refund });
+      }
+
+      return res.status(202).json({
+        success: true,
+        requiresApproval: true,
+        pendingRequest: result.pendingRequest,
+      });
+    } catch (error: any) {
+      if (error instanceof RefundApprovalError) {
+        return res.status(400).json({ success: false, error: error.message, code: error.code });
+      }
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Approval initiation failed",
+        code: error.code,
+        details: error.details,
+      });
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/refunds/approvals/:id/approve
+ * @desc Approve a pending large-refund request.  Must be a different admin from the initiator.
+ *       On success the caller receives the refund record that should now be executed.
+ * @access Private (admin role required)
+ */
+router.post(
+  "/refunds/approvals/:id/approve",
+  requireAuthenticatedActor(["admin"]),
+  async (req: Request, res: Response) => {
+    const approverId = req.auth?.userId;
+    if (!approverId) {
+      return res.status(401).json({ success: false, error: "Missing admin identity" });
+    }
+
+    try {
+      const { approvedRequest, refundRequest } = await refundApprovalService.approve(
+        req.params.id,
+        approverId,
+      );
+
+      // Execute the refund now that it has been signed off
+      const refund = await RefundService.createRefundTraced(refundRequest);
+
+      return res.status(200).json({ success: true, approvedRequest, refund });
+    } catch (error: any) {
+      if (error instanceof RefundApprovalError) {
+        const statusMap: Record<string, number> = {
+          NOT_FOUND: 404,
+          EXPIRED: 410,
+          ALREADY_RESOLVED: 409,
+          SELF_APPROVAL: 403,
+        };
+        const status = statusMap[error.code] ?? 400;
+        return res.status(status).json({ success: false, error: error.message, code: error.code });
+      }
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Approval failed",
+        code: error.code,
+        details: error.details,
+      });
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/refunds/approvals/:id/deny
+ * @desc Deny a pending large-refund approval request.
+ * @access Private (admin role required)
+ */
+router.post(
+  "/refunds/approvals/:id/deny",
+  requireAuthenticatedActor(["admin"]),
+  async (req: Request, res: Response) => {
+    const deniedById = req.auth?.userId;
+    if (!deniedById) {
+      return res.status(401).json({ success: false, error: "Missing admin identity" });
+    }
+
+    const { reason } = req.body;
+
+    try {
+      const denied = await refundApprovalService.deny(req.params.id, deniedById, reason);
+      return res.status(200).json({ success: true, deniedRequest: denied });
+    } catch (error: any) {
+      if (error instanceof RefundApprovalError) {
+        const statusMap: Record<string, number> = {
+          NOT_FOUND: 404,
+          EXPIRED: 410,
+          ALREADY_RESOLVED: 409,
+        };
+        const status = statusMap[error.code] ?? 400;
+        return res.status(status).json({ success: false, error: error.message, code: error.code });
+      }
+      return res.status(500).json({ success: false, error: error.message ?? "Denial failed" });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/refunds/approvals
+ * @desc List refund approval requests, optionally filtered by status.
+ * @access Private (admin role required)
+ * @query status  pending | approved | denied | expired
+ */
+router.get(
+  "/refunds/approvals",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    const status = req.query.status as string | undefined;
+    const validStatuses = ["pending", "approved", "denied", "expired"];
+    if (status && !validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: `status must be one of: ${validStatuses.join(", ")}`,
+      });
+    }
+    const requests = refundApprovalService.list(status ? { status: status as any } : undefined);
+    return res.json({ success: true, requests });
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/refunds/approvals/:id
+ * @desc Get a single refund approval request by ID.
+ * @access Private (admin role required)
+ */
+router.get(
+  "/refunds/approvals/:id",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    const request = refundApprovalService.getById(req.params.id);
+    if (!request) {
+      return res.status(404).json({ success: false, error: "Approval request not found" });
+    }
+    return res.json({ success: true, request });
+  },
+);
 
 /**
  * @route GET /api/v1/admin/payments/:id/trace
