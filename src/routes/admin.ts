@@ -2,37 +2,20 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
+import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
 
 import { _settlements } from "../services/settlementReconciler.js";
-import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
-import { AUDIT_SCHEMA_VERSION } from "../types/auditEvent.js";
+import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 import {
-  canTransition,
-  appendFinalityLink,
-  isWithinAppealWindow,
-  selectSeniorPanel,
-  getSeniorPool,
-  SENIOR_PANEL_MIN_SIZE,
-  validateSeniorDecision,
-  decideByMajority,
-  resetSeniorPool,
-} from "../services/disputeAppeals.js";
-import { getPayoutDlqStore } from "../services/payoutDlqStore.js";
-import type { PayoutDlqStatus } from "../services/payoutDlqStore.js";
-import { getImpersonationSessionStore } from "../services/impersonationSessionStore.js";
-import type { SessionListOptions } from "../types/impersonation.types.js";
-import type { Dispute as DisputeDomainType, SeniorPanelVote } from "../types/dispute.js";
+  defaultSupplierCancellationOverrideStore,
+} from "../services/supplierCancellationOverrideStore.js";
 import {
-  scanAndAutoResolve,
-  reverseAutoResolve,
-} from "../services/disputeDeadlineService.js";
-import { startDisputeDeadlineScheduler, isDisputeDeadlineSchedulerRunning } from "../scheduler/disputeDeadlineScheduler.js";
-import type { LocalIntentStatus } from "../services/escrowDriftReconciler.js";
-import { getTzDriftMetricsSnapshot } from "../metrics/tzDriftMetrics.js";
-import { getLastScanFindings } from "../scheduler/tzDriftMonitor.js";
+  accessReviewService,
+} from "../services/accessReviewService.js";
+import type { ReportFormat } from "../types/accessReview.js";
 
 const router = Router();
 const disputeQueueService = new DisputeArbitrationQueueService();
@@ -1170,6 +1153,10 @@ router.get(
 
 // ─── Payout DLQ Inspection API ──────────────────────────────────────────────
 
+export function resetDisputesState(): void {
+  // Placeholder for backward compatibility — state was removed in cleanup
+}
+
 /**
  * Validated PayoutDlqStatus values.
  */
@@ -1642,6 +1629,403 @@ router.delete(
       return res.status(500).json({
         success: false,
         error: err.message ?? "Failed to delete cancellation override",
+      });
+    }
+  },
+);
+
+// ─── SOC2 Access Review API ────────────────────────────────────────────────
+
+/**
+ * @route POST /api/v1/admin/access-review/snapshots
+ * @desc Create a new access grant snapshot for the current quarter.
+ *   Query params:
+ *     force – if "true", forces creation even if a snapshot already exists for this quarter
+ * @access Private (admin token only)
+ */
+router.post(
+  "/access-review/snapshots",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const force = req.query.force === "true";
+      const snapshot = await accessReviewService.createSnapshot(force);
+
+      await defaultAuditLogger.log(
+        "access-review.api.snapshot_created",
+        {
+          context: {
+            snapshotId: snapshot.snapshotId,
+            quarterLabel: snapshot.quarterLabel,
+            grantCount: snapshot.grants.length,
+            forced: force,
+          },
+        },
+        {
+          actorIp: getActorIp(req),
+          resource: req.originalUrl,
+          status: 201,
+        },
+      );
+
+      return res.status(201).json({ success: true, snapshot });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to create access review snapshot",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/snapshots
+ * @desc List access grant snapshots with optional filtering and pagination.
+ *   Query params:
+ *     quarterLabel – filter by quarter (e.g. "2026-Q2")
+ *     limit        – max results (default 50, max 200)
+ *     offset       – pagination offset (default 0)
+ *     summaries    – if "true", return lightweight summaries without full grants
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/snapshots",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const quarterLabel =
+        typeof req.query.quarterLabel === "string"
+          ? req.query.quarterLabel
+          : undefined;
+      let limit = 50;
+      let offset = 0;
+
+      if (typeof req.query.limit === "string") {
+        const parsed = Number.parseInt(req.query.limit, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 200) {
+          limit = parsed;
+        }
+      }
+      if (typeof req.query.offset === "string") {
+        const parsed = Number.parseInt(req.query.offset, 10);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          offset = parsed;
+        }
+      }
+
+      if (req.query.summaries === "true") {
+        const result = accessReviewService.listSnapshotSummaries({
+          quarterLabel,
+          limit,
+          offset,
+        });
+        return res.status(200).json({ success: true, ...result });
+      }
+
+      const result = accessReviewService.listSnapshots({
+        quarterLabel,
+        limit,
+        offset,
+      });
+      return res.status(200).json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list snapshots",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/snapshots/:snapshotId
+ * @desc Get a single access grant snapshot by ID.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/snapshots/:snapshotId",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const snapshot = accessReviewService.getSnapshot(req.params.snapshotId);
+      if (!snapshot) {
+        return res.status(404).json({
+          success: false,
+          error: `Snapshot not found: ${req.params.snapshotId}`,
+        });
+      }
+      return res.status(200).json({ success: true, snapshot });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to get snapshot",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/snapshots/:snapshotId/report
+ * @desc Generate an access review report for a snapshot.
+ *   Query params:
+ *     format – report format: "json" (default) or "csv"
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/snapshots/:snapshotId/report",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const format: ReportFormat =
+        req.query.format === "csv" ? "csv" : "json";
+
+      const snapshot = accessReviewService.getSnapshot(req.params.snapshotId);
+      if (!snapshot) {
+        return res.status(404).json({
+          success: false,
+          error: `Snapshot not found: ${req.params.snapshotId}`,
+        });
+      }
+
+      const content = accessReviewService.generateFormattedReport(
+        req.params.snapshotId,
+        format,
+      );
+
+      void defaultAuditLogger.log(
+        "access-review.api.report_generated",
+        {
+          context: {
+            snapshotId: req.params.snapshotId,
+            quarterLabel: snapshot.quarterLabel,
+            format,
+          },
+        },
+        {
+          actorIp: getActorIp(req),
+          resource: req.originalUrl,
+          status: 200,
+        },
+      );
+
+      if (format === "csv") {
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="access-review-${snapshot.quarterLabel}.csv"`,
+        );
+      } else {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="access-review-${snapshot.quarterLabel}.json"`,
+        );
+      }
+
+      return res.send(content);
+    } catch (err: any) {
+      const status = err.message?.includes("not found") ? 404 : 500;
+      return res.status(status).json({
+        success: false,
+        error: err.message ?? "Failed to generate report",
+      });
+    }
+  },
+);
+
+/**
+ * @route POST /api/v1/admin/access-review/snapshots/:snapshotId/attestations
+ * @desc Record a reviewer sign-off for a snapshot.
+ *   Body:
+ *     reviewer – identifier of the reviewer (required)
+ *     outcome  – "approved", "rejected", or "needs_revision" (required)
+ *     notes    – optional notes or justification
+ * @access Private (admin token only)
+ */
+router.post(
+  "/access-review/snapshots/:snapshotId/attestations",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { reviewer, outcome, notes } = req.body as {
+        reviewer?: string;
+        outcome?: string;
+        notes?: string;
+      };
+
+      if (!reviewer || typeof reviewer !== "string" || reviewer.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: "reviewer is required and must be a non-empty string",
+        });
+      }
+
+      if (!outcome || !["approved", "rejected", "needs_revision"].includes(outcome)) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'outcome is required and must be one of: approved, rejected, needs_revision',
+        });
+      }
+
+      const attestation = await accessReviewService.createAttestation(
+        req.params.snapshotId,
+        reviewer,
+        outcome as "approved" | "rejected" | "needs_revision",
+        notes,
+      );
+
+      return res.status(201).json({ success: true, attestation });
+    } catch (err: any) {
+      const isValidation =
+        err.message?.includes("not found") ||
+        err.message?.includes("already exists") ||
+        err.message?.includes("Invalid attestation") ||
+        err.message?.includes("Reviewer identifier");
+      const status = isValidation ? 400 : 500;
+      return res.status(status).json({
+        success: false,
+        error: err.message ?? "Failed to create attestation",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/attestations
+ * @desc List attestations with optional filtering and pagination.
+ *   Query params:
+ *     snapshotId   – filter by snapshot ID
+ *     quarterLabel – filter by quarter label
+ *     outcome      – filter by outcome (approved, rejected, needs_revision)
+ *     limit        – max results (default 50, max 200)
+ *     offset       – pagination offset (default 0)
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/attestations",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const snapshotId =
+        typeof req.query.snapshotId === "string"
+          ? req.query.snapshotId
+          : undefined;
+      const quarterLabel =
+        typeof req.query.quarterLabel === "string"
+          ? req.query.quarterLabel
+          : undefined;
+      const outcome =
+        typeof req.query.outcome === "string" &&
+          ["approved", "rejected", "needs_revision"].includes(req.query.outcome)
+          ? (req.query.outcome as "approved" | "rejected" | "needs_revision")
+          : undefined;
+      let limit = 50;
+      let offset = 0;
+
+      if (typeof req.query.limit === "string") {
+        const parsed = Number.parseInt(req.query.limit, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 200) {
+          limit = parsed;
+        }
+      }
+      if (typeof req.query.offset === "string") {
+        const parsed = Number.parseInt(req.query.offset, 10);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          offset = parsed;
+        }
+      }
+
+      const result = accessReviewService.listAttestations({
+        snapshotId,
+        quarterLabel,
+        outcome,
+        limit,
+        offset,
+      });
+
+      return res.status(200).json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to list attestations",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/gaps
+ * @desc Detect gaps in quarterly access review snapshots.
+ *   Query params:
+ *     lookback – number of quarters to check back (default 8)
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/gaps",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      let lookback = 8;
+      if (typeof req.query.lookback === "string") {
+        const parsed = Number.parseInt(req.query.lookback, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 40) {
+          lookback = parsed;
+        }
+      }
+
+      const gaps = accessReviewService.detectGaps(lookback);
+      return res.status(200).json({ success: true, gaps });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to detect gaps",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/access-review/bundled-report
+ * @desc Generate a bundled report of all attested snapshots.
+ *   Query params:
+ *     format – report format: "json" (default) or "csv"
+ * @access Private (admin token only)
+ */
+router.get(
+  "/access-review/bundled-report",
+  requireAdminToken,
+  (req: Request, res: Response) => {
+    try {
+      const format: ReportFormat =
+        req.query.format === "csv" ? "csv" : "json";
+
+      let content: string;
+      if (format === "csv") {
+        content = accessReviewService.generateAttestedReportsCsvBundle();
+      } else {
+        content = accessReviewService.generateAttestedReportsBundle();
+      }
+
+      if (format === "csv") {
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader(
+          "Content-Disposition",
+          'attachment; filename="access-review-bundled-attestations.csv"',
+        );
+      } else {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader(
+          "Content-Disposition",
+          'attachment; filename="access-review-bundled-attestations.json"',
+        );
+      }
+
+      return res.send(content);
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err.message ?? "Failed to generate bundled report",
       });
     }
   },
