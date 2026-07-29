@@ -68,6 +68,18 @@ Currently validated variables used by `src`:
   - optional for startup, but required for `POST /api/v1/webhooks/settlements`
   - must be a non-empty secret used to verify webhook payload signatures
 
+- `INTERNAL_OVERRIDE_SECRET`
+  - optional
+  - signing secret for the internal fair-queue rate-limit bypass header
+  - when absent, bypass is disabled and any bypass attempt returns `403`
+- `INTERNAL_OVERRIDE_SECRET_PREV`
+  - optional
+  - previous signing secret, accepted during zero-downtime rotation overlap
+- `INTERNAL_BYPASS_TOLERANCE_MS`
+  - optional
+  - default: `30000`
+  - clock-skew tolerance (ms) for the bypass timestamp; must be a positive integer
+
 ### Startup failure behavior
 
 If configuration is invalid, the app fails fast before serving requests. Errors are aggregated and sanitized so they identify variable names and reasons without echoing raw values.

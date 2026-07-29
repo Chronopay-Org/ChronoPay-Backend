@@ -26,6 +26,7 @@ import { migration as migration011a } from "./011_add_slot_valid_until.js";
 import { migration as migration011b } from "./011_create_outbox_table.js";
 import { migration as migration011c } from "./011_create_refund_entries_table.js";
 import { migration as migration012 } from "./012_create_redemption_ledger.js";
+import { migration as migration014 } from "./014_add_slot_geo_fields.js";
 import { migration as migration013 } from "./013_enable_row_level_security.js";
 import { migration as migration014a } from "./014_add_reputation_bootstrap_columns.js";
 import { migration as migration014b } from "./014_create_reputation_events.js";
@@ -49,6 +50,7 @@ export const migrations: Migration[] = [
   migration011b,
   migration011c,
   migration012,
+  migration014,
   migration013,
   migration014a,
   migration014b,

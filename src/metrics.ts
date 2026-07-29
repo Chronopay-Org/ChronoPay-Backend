@@ -488,6 +488,25 @@ export const webhookHmacVerified = createBudgetedCounter({
   registers: [register],
 });
 
+/**
+ * Counter tracking outcomes of internal fair-queue bypass header verification.
+ *
+ * Label `result` values:
+ *   - `valid`       — signature matched, bypass granted
+ *   - `missing`     — no bypass headers present (request treated normally)
+ *   - `expired`     — timestamp outside tolerance window (replay blocked)
+ *   - `wrong_route` — signed route does not match actual request path
+ *   - `invalid_sig` — HMAC mismatch against all known secrets
+ *   - `bad_format`  — header values could not be parsed
+ */
+export const fairQueueBypassAttempts = createBudgetedCounter({
+  name: "fair_queue_bypass_attempts_total",
+  help: "Total number of internal fair-queue rate-limit bypass attempts by result",
+  labels: ["result"],
+  budget: 8,
+  registers: [register],
+});
+
 export type DependencyFaultName =
   | "disconnect"
   | "timeout"
