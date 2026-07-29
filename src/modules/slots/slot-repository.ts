@@ -94,6 +94,12 @@ export interface SlotRecord {
   storeId?: string;
   /** Tenant context */
   tenantId?: string;
+  /**
+   * Whether this slot's bundle is transferable in the secondary market.
+   * Defaults to true for backward compatibility. When false, resale listing
+   * via createIntent is blocked unless overridden by an admin.
+   */
+  transferable?: boolean;
 }
 
 export interface SlotRepository {

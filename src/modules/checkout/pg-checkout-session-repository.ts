@@ -84,7 +84,10 @@ export class PgCheckoutSessionRepository {
     return this.mapRow(res.rows[0]);
   }
 
-  private mapRow(row: Record<string, unknown>): CheckoutSession {
+  private mapRow(row: Record<string, unknown> | undefined): CheckoutSession {
+    if (!row) {
+      return {} as CheckoutSession;
+    }
     return {
       id: row.id as string,
       payment: row.payment as CheckoutSession["payment"],

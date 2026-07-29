@@ -42,7 +42,7 @@ function setup(opts: { allowList?: string[]; withIntent?: "yes" | "no" }) {
     slots,
     opts.allowList ?? [CONTRACT],
   );
-  let intentId: string | undefined;
+  let _intentId: string | undefined;
   if (opts.withIntent === "yes") {
     intents
       .create({
@@ -55,7 +55,7 @@ function setup(opts: { allowList?: string[]; withIntent?: "yes" | "no" }) {
         createdAt: new Date(1_700_000_000_000).toISOString(),
       })
       .then((record) => {
-        intentId = record.id;
+        _intentId = record.id;
       });
   }
   return { slots, intents, projector };

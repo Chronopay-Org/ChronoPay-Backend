@@ -14,7 +14,7 @@
  *  - Report shape / metrics
  */
 
-import { describe, it, expect, jest, beforeEach } from "@jest/globals";
+import { describe, it, expect, jest } from "@jest/globals";
 import {
   WalIntegrityChecker,
   WalCheckerIO,
@@ -38,7 +38,7 @@ function buildIO(overrides: Partial<WalCheckerIO> = {}): WalCheckerIO {
 }
 
 /** Segment name helpers */
-const tl1 = (seq: number) =>
+const _tl1 = (seq: number) =>
   `00000001${seq.toString(16).padStart(16, "0")}`;
 
 // ---------------------------------------------------------------------------
