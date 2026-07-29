@@ -48,7 +48,6 @@ import {
 } from "../services/schedulingService.js";
 import type { EscrowEvent } from "./escrowEventTypes.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
-import { defaultAuditLogger } from "../services/auditLogger.js";
 
 export type ProjectionResultKind =
   | "applied"

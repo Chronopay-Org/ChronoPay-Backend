@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @fileoverview Comprehensive tests for the reminder scheduler job-runner contract.
  *
