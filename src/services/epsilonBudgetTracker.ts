@@ -29,6 +29,8 @@
  * No I/O other than alarm sink calls. Fully unit-testable in isolation.
  */
 
+import { logger } from "../utils/logger.js";
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -335,14 +337,14 @@ function buildAlarmEvent(
 }
 
 function defaultAlarmSink(event: BudgetAlarmEvent): void {
-  console.warn(event.message, {
+  logger.warn({
     datasetId: event.datasetId,
     level: event.level,
     epsilonSpent: event.epsilonSpent,
     epsilonBudget: event.epsilonBudget,
     fractionSpent: event.fractionSpent,
     timestamp: event.timestamp,
-  });
+  }, event.message);
 }
 
 // ---------------------------------------------------------------------------

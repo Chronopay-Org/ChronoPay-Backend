@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError, MalformedJsonError, type AppErrorEnvelope } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
+import { logger } from "../utils/logger.js";
 
 function withRequestContext(envelope: AppErrorEnvelope, req: Request): AppErrorEnvelope {
   const requestId = req.requestId ?? req.id;
@@ -41,7 +42,7 @@ export function genericErrorHandler(
   res: Response,
   _next: NextFunction,
 ) {
-  console.error("[ERROR]", err);
+  logger.error({ err, requestId: req.requestId ?? req.id }, "unhandled error");
   if (err instanceof Error && "statusCode" in err && "code" in err) {
     const e = err as any;
     if (typeof e.statusCode === "number" && typeof e.code === "string") {

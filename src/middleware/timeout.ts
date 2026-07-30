@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { timeoutConfig } from "../config/timeouts.js";
+import { logger } from "../utils/logger.js";
 
 export interface TimeoutOptions {
   timeoutMs?: number;
@@ -20,8 +21,9 @@ export function timeoutMiddleware(options: TimeoutOptions = {}) {
       });
 
       // Log with requestId, route, and duration
-      console.warn(
-        `[TIMEOUT] requestId=${requestId} route=${req.originalUrl} duration=${timeoutMs}ms`,
+      logger.warn(
+        { requestId, route: req.originalUrl, durationMs: timeoutMs },
+        "request timed out",
       );
     }, timeoutMs);
 

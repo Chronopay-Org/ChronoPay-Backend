@@ -16,6 +16,8 @@ import {
   type RolloutScheduleRegistry,
 } from "../flags/rolloutScheduleRegistry.js";
 import type { RolloutSchedule } from "../flags/rolloutTypes.js";
+import { logger } from "../utils/logger.js";
+
 
 export interface FlagRolloutSchedulerOptions {
   registry?: RolloutScheduleRegistry;
@@ -69,7 +71,7 @@ export class FlagRolloutScheduler {
         this.runCount++;
         this.runOnce();
       } catch (err) {
-        console.error(
+        logger.error(
           "[flag-rollout-scheduler] Advance tick failed:",
           err instanceof Error ? err.message : err,
         );

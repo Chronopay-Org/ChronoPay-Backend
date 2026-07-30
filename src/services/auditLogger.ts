@@ -1,5 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
+import { logger } from "../utils/logger.js";
+
 import {
   createAuditEvent,
   encodeAuditEvent,
@@ -133,7 +135,7 @@ export class AuditLogger {
       await fs.appendFile(this.logFilePath, logLine, "utf8");
     } catch (error) {
       // Failure mode handling: We log to console rather than breaking the application flow
-      console.error("Failed to write to audit log:", error);
+      logger.error("Failed to write to audit log:", error);
     }
   }
 
