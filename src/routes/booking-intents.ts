@@ -21,6 +21,7 @@ import {
   BookingIntentError,
   parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
+import { isAppError } from "../errors/AppError.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
@@ -40,6 +41,15 @@ export function createBookingIntentsRouter() {
   function handleServiceError(error: unknown, res: Response): void {
     if (error instanceof BookingIntentError) {
       res.status(error.status).json({
+        success: false,
+        error: error.message,
+        code: error.code,
+      });
+      return;
+    }
+
+    if (isAppError(error)) {
+      res.status(error.statusCode).json({
         success: false,
         error: error.message,
         code: error.code,

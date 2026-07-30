@@ -1,4 +1,5 @@
 import { query } from "../../db/pool.js";
+import { ConflictError } from "../../errors/AppError.js";
 import {
   BookingIntentRecord,
   BookingIntentRepository,
@@ -41,8 +42,18 @@ export class PgBookingIntentRepository implements BookingIntentRepository {
       new Date(intent.createdAt),
     ];
 
-    const res = await this.dbQuery(sql, values);
-    return this.mapRowToRecord(res.rows[0]);
+    try {
+      const res = await this.dbQuery(sql, values);
+      return this.mapRowToRecord(res.rows[0]);
+    } catch (err: any) {
+      // Partial unique index violation — another active intent exists for this slot.
+      if (err?.code === "23505") {
+        throw new ConflictError(
+          "An active booking intent already exists for this slot.",
+        );
+      }
+      throw err;
+    }
   }
 
   // @ts-expect-error - Auto-fixed by script
