@@ -16,6 +16,7 @@ function makeApp() {
 
 describe("Admin Synonym Registry Routes", () => {
   let app: express.Application;
+  let agent: any;
   let mockSynonyms: any[] = [];
   let querySpy: any;
 
@@ -25,6 +26,7 @@ describe("Admin Synonym Registry Routes", () => {
     ];
 
     app = makeApp();
+    agent = request(app);
 
     if (querySpy) {
       querySpy.mockRestore();
@@ -66,12 +68,12 @@ describe("Admin Synonym Registry Routes", () => {
 
   describe("GET /api/v1/admin/synonyms", () => {
     it("requires admin token header", async () => {
-      const res = await request(app).get("/api/v1/admin/synonyms");
+      const res = await agent.get("/api/v1/admin/synonyms");
       expect(res.status).toBe(401);
     });
 
     it("returns synonyms list when authorized", async () => {
-      const res = await request(app)
+      const res = await agent
         .get("/api/v1/admin/synonyms")
         .set("x-chronopay-admin-token", ADMIN_TOKEN);
 
@@ -84,14 +86,14 @@ describe("Admin Synonym Registry Routes", () => {
 
   describe("POST /api/v1/admin/synonyms", () => {
     it("requires admin token", async () => {
-      const res = await request(app)
+      const res = await agent
         .post("/api/v1/admin/synonyms")
         .send({ word: "cleaning", synonyms: ["wash"] });
       expect(res.status).toBe(401);
     });
 
     it("creates a synonym mapping", async () => {
-      const res = await request(app)
+      const res = await agent
         .post("/api/v1/admin/synonyms")
         .set("x-chronopay-admin-token", ADMIN_TOKEN)
         .send({ word: "cleaning", synonyms: ["wash", "sweep"] });
@@ -103,7 +105,7 @@ describe("Admin Synonym Registry Routes", () => {
     });
 
     it("validates bad input schema", async () => {
-      const res = await request(app)
+      const res = await agent
         .post("/api/v1/admin/synonyms")
         .set("x-chronopay-admin-token", ADMIN_TOKEN)
         .send({ word: "", synonyms: [] });
@@ -115,7 +117,7 @@ describe("Admin Synonym Registry Routes", () => {
 
   describe("PUT /api/v1/admin/synonyms/:id", () => {
     it("updates synonym mapping", async () => {
-      const res = await request(app)
+      const res = await agent
         .put("/api/v1/admin/synonyms/1")
         .set("x-chronopay-admin-token", ADMIN_TOKEN)
         .send({ word: "plumbing", synonyms: ["pipe", "leak"] });
@@ -126,7 +128,7 @@ describe("Admin Synonym Registry Routes", () => {
     });
 
     it("returns 404 if not found", async () => {
-      const res = await request(app)
+      const res = await agent
         .put("/api/v1/admin/synonyms/999")
         .set("x-chronopay-admin-token", ADMIN_TOKEN)
         .send({ word: "plumbing" });
@@ -137,7 +139,7 @@ describe("Admin Synonym Registry Routes", () => {
 
   describe("DELETE /api/v1/admin/synonyms/:id", () => {
     it("deletes synonym mapping", async () => {
-      const res = await request(app)
+      const res = await agent
         .delete("/api/v1/admin/synonyms/1")
         .set("x-chronopay-admin-token", ADMIN_TOKEN);
 
@@ -146,7 +148,7 @@ describe("Admin Synonym Registry Routes", () => {
     });
 
     it("returns 404 if not found", async () => {
-      const res = await request(app)
+      const res = await agent
         .delete("/api/v1/admin/synonyms/999")
         .set("x-chronopay-admin-token", ADMIN_TOKEN);
 
