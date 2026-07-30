@@ -3,6 +3,9 @@ import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { auditExportService } from "../services/auditExportService.js";
 import { RefundService } from "../services/refund.js";
+import { pool } from "../db/pool.js";
+import { SynonymService } from "../services/synonymService.js";
+import { z } from "zod";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import {
@@ -2165,6 +2168,116 @@ router.get(
       total: queue.length,
     });
   },
+);
+
+const SynonymPayloadSchema = z.object({
+  word: z.string().trim().min(1, "word cannot be empty").max(100, "word too long"),
+  synonyms: z.array(z.string().trim().min(1, "synonym cannot be empty").max(100, "synonym too long")).min(1, "must provide at least one synonym"),
+});
+
+const UpdateSynonymPayloadSchema = SynonymPayloadSchema.partial();
+
+/**
+ * @route GET /api/v1/admin/synonyms
+ * @desc Get all synonym records from registry.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/synonyms",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const synonymService = new SynonymService(pool);
+      const list = await synonymService.getAll();
+      return res.status(200).json({ success: true, synonyms: list });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message ?? "Failed to fetch synonyms" });
+    }
+  }
+);
+
+/**
+ * @route POST /api/v1/admin/synonyms
+ * @desc Create a new synonym mapping.
+ * @access Private (admin token only)
+ */
+router.post(
+  "/synonyms",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const validated = SynonymPayloadSchema.parse(req.body);
+      const synonymService = new SynonymService(pool);
+      
+      const record = await synonymService.create(validated.word, validated.synonyms);
+      return res.status(201).json({ success: true, synonym: record });
+    } catch (err: any) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: "Validation failed", details: err.errors });
+      }
+      if (err.message?.includes("unique")) {
+        return res.status(409).json({ success: false, error: "Synonym entry already exists for this word" });
+      }
+      return res.status(500).json({ success: false, error: err.message ?? "Failed to create synonym" });
+    }
+  }
+);
+
+/**
+ * @route PUT /api/v1/admin/synonyms/:id
+ * @desc Update an existing synonym mapping.
+ * @access Private (admin token only)
+ */
+router.put(
+  "/synonyms/:id",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ success: false, error: "Invalid id" });
+      }
+      const validated = UpdateSynonymPayloadSchema.parse(req.body);
+      const synonymService = new SynonymService(pool);
+      
+      const record = await synonymService.update(id, validated.word, validated.synonyms);
+      if (!record) {
+        return res.status(404).json({ success: false, error: "Synonym mapping not found" });
+      }
+      return res.status(200).json({ success: true, synonym: record });
+    } catch (err: any) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: "Validation failed", details: err.errors });
+      }
+      return res.status(500).json({ success: false, error: err.message ?? "Failed to update synonym" });
+    }
+  }
+);
+
+/**
+ * @route DELETE /api/v1/admin/synonyms/:id
+ * @desc Delete a synonym mapping.
+ * @access Private (admin token only)
+ */
+router.delete(
+  "/synonyms/:id",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ success: false, error: "Invalid id" });
+      }
+      const synonymService = new SynonymService(pool);
+      const deleted = await synonymService.delete(id);
+      if (!deleted) {
+        return res.status(404).json({ success: false, error: "Synonym mapping not found" });
+      }
+      return res.status(200).json({ success: true, message: "Synonym mapping deleted successfully" });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message ?? "Failed to delete synonym" });
+    }
+  }
 );
 
 export default router;

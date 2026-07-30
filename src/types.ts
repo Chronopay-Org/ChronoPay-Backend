@@ -6,6 +6,7 @@ export interface Slot {
   category?: string;
   price_cents?: number;
   supplier_rating?: number;
+  tags?: string[];
   // Populated only for geo-radius search results (see marketplaceSearchService.ts)
   latitude?: number;
   longitude?: number;

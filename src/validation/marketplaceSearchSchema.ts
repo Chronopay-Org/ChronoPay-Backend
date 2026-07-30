@@ -99,6 +99,11 @@ export const MarketplaceSearchSchema = z.object({
     .max(MAX_CATEGORIES, `maximum ${MAX_CATEGORIES} categories allowed`)
     .optional(),
 
+  tags: z
+    .array(z.string().trim().min(1, "tag cannot be empty").max(50, "tag too long"))
+    .max(10, "maximum 10 tags allowed")
+    .optional(),
+
   priceRange: PriceRangeSchema.optional(),
 
   ratingRange: RatingRangeSchema.optional(),
@@ -107,23 +112,6 @@ export const MarketplaceSearchSchema = z.object({
 
   geo: GeoFilterSchema.optional(),
 
-  // Sorting/ranking
-  sortBy: z.enum(["rating", "price", "relevance", "distance"]).default("relevance"),
-}).superRefine((data, ctx) => {
-  if (data.sortBy === "distance" && !data.geo) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "sortBy 'distance' requires a geo filter",
-      path: ["sortBy"],
-    });
-  }
-  if (data.geo && data.cursor) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "cursor-based pagination is not supported with a geo filter; use page-based pagination",
-      path: ["cursor"],
-    });
-  }
   /**
    * When true (default), slots that are currently held are excluded from
    * browse results. Set to false only in admin / operator contexts where
@@ -139,7 +127,7 @@ export const MarketplaceSearchSchema = z.object({
   showHeldReleaseEta: z.boolean().default(false),
 
   // Sorting/ranking
-  sortBy: z.enum(["rating", "price", "relevance"]).default("relevance"),
+  sortBy: z.enum(["rating", "price", "relevance", "distance"]).default("relevance"),
 
   // Facet counts
   includeFacets: z.boolean().default(false),
@@ -152,6 +140,21 @@ export const MarketplaceSearchSchema = z.object({
     .min(MIN_SUPPLIER_CAP, `supplierCap must be >= ${MIN_SUPPLIER_CAP}`)
     .max(MAX_SUPPLIER_CAP, `supplierCap must be <= ${MAX_SUPPLIER_CAP}`)
     .optional(),
+}).superRefine((data, ctx) => {
+  if (data.sortBy === "distance" && !data.geo) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "sortBy 'distance' requires a geo filter",
+      path: ["sortBy"],
+    });
+  }
+  if (data.geo && data.cursor) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "cursor-based pagination is not supported with a geo filter; use page-based pagination",
+      path: ["cursor"],
+    });
+  }
 });
 
 export type MarketplaceSearchQueryInput = z.input<typeof MarketplaceSearchSchema>;
