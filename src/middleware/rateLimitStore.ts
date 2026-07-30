@@ -31,6 +31,12 @@ function createNoopStore() {
       // @ts-expect-error - Auto-fixed by script
       _callback?.();
     },
+    async increment(_key: string) {
+      return { totalHits: 1, resetTime: undefined };
+    },
+    async decrement(_key: string) {
+      return;
+    },
   };
 }
 
