@@ -80,6 +80,18 @@ export class ConfigService {
     return this.envConfig.trustProxy;
   }
 
+  public get horizonMode() {
+    return this.envConfig.horizonMode;
+  }
+
+  public get horizonUrl() {
+    return this.envConfig.horizonUrl;
+  }
+
+  public get networkPassphrase() {
+    return this.envConfig.networkPassphrase;
+  }
+
   public get webhookSecret() {
     return this.envConfig.webhookSecret;
   }

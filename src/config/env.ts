@@ -21,6 +21,8 @@ export type IdempotencyRedisEncryptionConfig =
       decryptionKeys: readonly EncryptionKey[];
     };
 
+export type HorizonMode = "live" | "fixture";
+
 export interface EnvConfig {
   nodeEnv: NodeEnv;
   port: number;
@@ -35,6 +37,8 @@ export interface EnvConfig {
   corsAllowedOrigins?: string[];
   /** Stellar Horizon base URL (e.g. https://horizon-testnet.stellar.org) */
   horizonUrl?: string;
+  /** Horizon operation mode: "live" (real API) or "fixture" (in-memory fixture) */
+  horizonMode: HorizonMode;
   /** Stellar network passphrase used to identify the target network */
   networkPassphrase?: string;
   /** Pinned hash for the current active escrow contract */
@@ -79,6 +83,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   const jwtAudience = parseOptionalString(env.JWT_AUDIENCE);
   const corsAllowedOrigins = parseStringList(env.CORS_ALLOWED_ORIGINS);
   const horizonUrl = parseOptionalUrl(env.HORIZON_URL, "HORIZON_URL", issues);
+  const horizonMode = parseHorizonMode(env.HORIZON_MODE, issues);
   const networkPassphrase = parseOptionalString(env.STELLAR_NETWORK_PASSPHRASE);
   const escrowContractHash = parseOptionalString(env.ESCROW_CONTRACT_HASH);
 
@@ -108,6 +113,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     jwtAudience,
     corsAllowedOrigins,
     horizonUrl,
+    horizonMode,
     networkPassphrase,
     escrowContractHash,
     internalOverrideSecret,
@@ -258,6 +264,16 @@ function parseOptionalUrl(rawValue: string | undefined, key: string, issues: str
     issues.push(`${key} must be a valid URL.`);
     return undefined;
   }
+}
+
+function parseHorizonMode(rawValue: string | undefined, issues: string[]): HorizonMode {
+  if (rawValue === undefined) return "live";
+  const value = rawValue.trim().toLowerCase() as HorizonMode;
+  if (value !== "live" && value !== "fixture") {
+    issues.push("HORIZON_MODE must be one of: live, fixture.");
+    return "live";
+  }
+  return value;
 }
 
 function parseReplicaId(rawValue: string | undefined): string {
