@@ -13,6 +13,8 @@ import { normalizeSlots, normalizeSlotTimes } from "../services/timezoneService.
 import { ConflictPreviewBodySchema, CreateSlotBodySchema } from "../middleware/schemas.js";
 import { validateBody } from "../middleware/validation.js";
 import { isValidIANATimezone } from "../validation/reminderValidation.js";
+import { requireAuthenticatedActor } from "../middleware/auth.js";
+import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 
 const router = Router();
 const SLOT_NOT_FOUND = "Slot not found";
@@ -90,6 +92,72 @@ router.get("/:id", parseSlotIdParam, resolveBuyerTimezone(), async (req: Request
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 });
+
+/**
+ * GET /api/v1/slots/:id/reservations
+ *
+ * Returns active holds (status='held', expires_at > now) for a slot.
+ * Only the slot owner (professional) or an admin may call this endpoint.
+ *
+ * Query parameters:
+ *   page  - page number, 1-based (default 1)
+ *   limit - results per page, 1-100 (default 10)
+ */
+router.get(
+  "/:id/reservations",
+  parseSlotIdParam,
+  requireAuthenticatedActor(["professional", "admin"]),
+  createAuthAwareRateLimiter(),
+  async (req: Request, res: Response) => {
+    try {
+      const slotId = req.params.id;
+
+      // Load slot to verify ownership
+      let slot;
+      try {
+        slot = await slotService.findById(slotId);
+      } catch (error) {
+        if (error instanceof SlotNotFoundError) {
+          return res.status(404).json({ success: false, error: SLOT_NOT_FOUND });
+        }
+        throw error;
+      }
+
+      // Only the slot's professional or an admin may read its reservations
+      const isAdmin = req.auth!.role === "admin";
+      const isOwner = slot.professional === req.auth!.userId;
+      if (!isAdmin && !isOwner) {
+        return res.status(403).json({ success: false, error: "Insufficient permissions" });
+      }
+
+      // Parse and validate pagination params
+      const pageStr = req.query.page as string | undefined;
+      const limitStr = req.query.limit as string | undefined;
+
+      const page = pageStr !== undefined ? parseInt(pageStr, 10) : 1;
+      const limit = limitStr !== undefined ? parseInt(limitStr, 10) : 10;
+
+      if (!Number.isInteger(page) || page < 1) {
+        return res.status(400).json({ success: false, error: "page must be a positive integer" });
+      }
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        return res.status(400).json({ success: false, error: "limit must be between 1 and 100" });
+      }
+
+      const result = slotService.listReservations(String(slotId), true, { page, limit });
+
+      return res.json({
+        success: true,
+        data: result.data,
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  },
+);
 
 /**
  * POST /api/v1/slots
