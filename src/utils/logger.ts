@@ -152,21 +152,46 @@ const createLoggerConfig = (): any => {
       }),
     },
     /**
-     * Redact option provides additional security by completely removing sensitive paths
+     * Redact option provides additional security by completely removing sensitive paths.
+     *
+     * Buyer PII paths cover the canonical booking-intent payload shape:
+     *   { buyer: { name, email, phone } }
+     * as well as arrays of buyers (e.g. bulk intents):
+     *   { buyers[*].name, buyers[*].email, buyers[*].phone }
+     *
+     * `remove: true` drops the key entirely rather than replacing it with a
+     * censor string, so no PII placeholder ever reaches log stores.
      */
     redact: {
       paths: [
+        // HTTP transport headers
         "headers.authorization",
         "headers.cookie",
         "headers['x-api-key']",
         "req.headers.authorization",
         "req.headers.cookie",
         "req.headers['x-api-key']",
+        // Generic body secrets
         "body.password",
         "body.secret",
         "query.token",
+        // Buyer PII — top-level buyer object (booking-intent payload)
+        "buyer.name",
+        "buyer.email",
+        "buyer.phone",
+        // Buyer PII — arrays of buyers (e.g. bulk intents)
+        "buyers[*].name",
+        "buyers[*].email",
+        "buyers[*].phone",
+        // Nested inside intent or booking objects
+        "intent.buyer.name",
+        "intent.buyer.email",
+        "intent.buyer.phone",
+        "booking.buyer.name",
+        "booking.buyer.email",
+        "booking.buyer.phone",
       ],
-      censor: "[REDACTED]",
+      remove: true,
     },
     /**
      * Ensure error causes are serialized
