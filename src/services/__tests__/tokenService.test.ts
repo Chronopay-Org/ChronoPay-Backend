@@ -1,7 +1,10 @@
 import { jest } from "@jest/globals";
 import { TokenService } from "../tokenService.js";
 import { ContractService } from "../contract.service.js";
-import { BookingIntentRepository } from "../../modules/booking-intents/booking-intent-repository.js";
+import {
+  BookingIntentRepository,
+  InMemoryBookingIntentRepository,
+} from "../../modules/booking-intents/booking-intent-repository.js";
 import { AppError } from "../../errors/AppError.js";
 
 describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
@@ -16,6 +19,7 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
 
     mockRepo = {
       findById: jest.fn(),
+      listAll: jest.fn().mockReturnValue([]),
       updateTokenInfo: jest.fn(),
     } as any;
 
@@ -67,7 +71,6 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
       assetIssuer: "G_ISSUER_123",
       amountOrLimit: "10",
     });
-    // @ts-expect-error - Auto-fixed by script
     expect(mockRepo.updateTokenInfo).toHaveBeenCalledWith(
       intentId,
       result.asset,
@@ -81,7 +84,6 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockContractService.sendTransaction.mockImplementation(async (desc, action) => {
       return await action();
     });
-    // @ts-expect-error - Auto-fixed by script
     mockRepo.updateTokenInfo.mockResolvedValue(undefined);
 
     const result = await service.mintTimeToken(intentId, {
@@ -108,7 +110,6 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockContractService.sendTransaction.mockImplementation(async (desc, action) => {
       return await action();
     });
-    // @ts-expect-error - Auto-fixed by script
     mockRepo.updateTokenInfo.mockResolvedValue(undefined);
 
     const result = await service.mintTimeToken(intentId, {
@@ -162,7 +163,6 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     );
 
     // Rollback assertion: token info was NOT updated
-    // @ts-expect-error - Auto-fixed by script
     expect(mockRepo.updateTokenInfo).not.toHaveBeenCalled();
   });
 
@@ -183,7 +183,6 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
       trustlineCreated: false,
     });
     expect(mockContractService.sendTransaction).not.toHaveBeenCalled();
-    // @ts-expect-error - Auto-fixed by script
     expect(mockRepo.updateTokenInfo).not.toHaveBeenCalled();
   });
 
@@ -196,3 +195,142 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     );
   });
 });
+
+describe("TokenService - Cumulative Issuance Overflow Safety & Concurrency", () => {
+  it("enforces supplier maximum limit under 10 concurrent issuance requests and returns 409 for rejected ones", async () => {
+    const repo = new InMemoryBookingIntentRepository();
+    const contractService = {
+      sendTransaction: jest.fn(async (desc, action: any) => await action()),
+    } as any;
+
+    const supplierId = "G_ISSUER_CONCURRENT";
+    const cap = 5;
+    const periodStart = new Date("2026-01-01T00:00:00.000Z");
+    const periodEnd = new Date("2026-12-31T23:59:59.999Z");
+
+    const service = new TokenService(contractService, repo, {
+      getSupplierLimit: (sId) =>
+        sId === supplierId ? { maxUnits: cap, periodStart, periodEnd } : null,
+    });
+
+    // Create 10 booking intents near cap (1 unit each)
+    const intentIds: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const intent = await repo.create({
+        slotId: `slot-${i}`,
+        professional: supplierId,
+        customerId: `customer-${i}`,
+        startTime: 1000 + i * 100,
+        endTime: 2000 + i * 100,
+        status: "pending",
+        createdAt: "2026-06-01T12:00:00.000Z",
+      });
+      intentIds.push(intent.id);
+    }
+
+    // Spin up 10 parallel issuance requests
+    const promises = intentIds.map((id) =>
+      service.mintTimeToken(id, {
+        issuerPublicKey: supplierId,
+        amount: "1",
+      }),
+    );
+
+    const results = await Promise.allSettled(promises);
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+
+    expect(fulfilled).toHaveLength(5);
+    expect(rejected).toHaveLength(5);
+
+    // Each rejected request returns 409 CONFLICT
+    for (const rej of rejected) {
+      if (rej.status === "rejected") {
+        expect(rej.reason).toBeInstanceOf(AppError);
+        expect((rej.reason as AppError).statusCode).toBe(409);
+        expect((rej.reason as AppError).code).toBe("CONFLICT");
+      }
+    }
+
+    // Assert final total <= cap
+    const allIntents = repo.listAll();
+    const mintedIntents = allIntents.filter((i) => i.tokenAsset && i.mintTxHash);
+    expect(mintedIntents).toHaveLength(5);
+  });
+
+  it("asserts idempotency-key replay doesn't double-count against cumulative limit", async () => {
+    const repo = new InMemoryBookingIntentRepository();
+    const contractService = {
+      sendTransaction: jest.fn(async (desc, action: any) => await action()),
+    } as any;
+
+    const supplierId = "G_ISSUER_REPLAY";
+    const cap = 2;
+    const periodStart = new Date("2026-01-01T00:00:00.000Z");
+    const periodEnd = new Date("2026-12-31T23:59:59.999Z");
+
+    const service = new TokenService(contractService, repo);
+
+    const intent1 = await repo.create({
+      slotId: "slot-1",
+      professional: supplierId,
+      customerId: "customer-1",
+      startTime: 1000,
+      endTime: 2000,
+      status: "pending",
+      createdAt: "2026-06-01T12:00:00.000Z",
+    });
+
+    const intent2 = await repo.create({
+      slotId: "slot-2",
+      professional: supplierId,
+      customerId: "customer-2",
+      startTime: 1000,
+      endTime: 2000,
+      status: "pending",
+      createdAt: "2026-06-01T12:00:00.000Z",
+    });
+
+    const limitOption = {
+      supplierLimit: { maxUnits: cap, periodStart, periodEnd },
+      issuerPublicKey: supplierId,
+      amount: "1",
+    };
+
+    // Mint intent 1 (1 unit, total = 1)
+    const res1 = await service.mintTimeToken(intent1.id, limitOption);
+    expect(res1.trustlineCreated).toBe(true);
+
+    // Mint intent 2 (1 unit, total = 2 - at cap)
+    const res2 = await service.mintTimeToken(intent2.id, limitOption);
+    expect(res2.trustlineCreated).toBe(true);
+
+    // Replay intent 1 (already minted): should succeed idempotently and NOT throw 409
+    const replayRes1 = await service.mintTimeToken(intent1.id, limitOption);
+    expect(replayRes1.txHash).toBe(res1.txHash);
+    expect(replayRes1.trustlineCreated).toBe(false);
+
+    // A 3rd distinct intent should be rejected with 409 because cap is 2
+    const intent3 = await repo.create({
+      slotId: "slot-3",
+      professional: supplierId,
+      customerId: "customer-3",
+      startTime: 1000,
+      endTime: 2000,
+      status: "pending",
+      createdAt: "2026-06-01T12:00:00.000Z",
+    });
+
+    await expect(
+      service.mintTimeToken(intent3.id, limitOption),
+    ).rejects.toThrow(
+      new AppError(
+        `Supplier ${supplierId} token issuance limit exceeded (3 > 2) for period`,
+        409,
+        "CONFLICT",
+      ),
+    );
+  });
+});
+
