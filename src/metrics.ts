@@ -292,6 +292,22 @@ export const webhookHmacVerified = createBudgetedCounter({
   registers: [register],
 });
 
+export const webhookRedeliveryAttempts = createBudgetedGauge({
+  name: "webhook_redelivery_attempts",
+  help: "Tracked redelivery attempts per webhook endpoint and state",
+  labels: ["endpoint", "status"],
+  budget: 16,
+  registers: [register],
+});
+
+export const webhookRedeliveryHealth = createBudgetedGauge({
+  name: "webhook_redelivery_health",
+  help: "Health score for webhook redelivery tracking per endpoint (1=healthy, 0=quarantined)",
+  labels: ["endpoint"],
+  budget: 16,
+  registers: [register],
+});
+
 export type DependencyFaultName =
   | "disconnect"
   | "timeout"

@@ -1,7 +1,9 @@
 import { Router, Express, Request, Response } from "express";
 import { validateRequiredFields } from "../middleware/validation.js";
 import { internalHmacAuth } from "../middleware/internalHmacAuth.js";
+import { webhookRedeliveryAttempts, webhookRedeliveryHealth } from "../metrics.js";
 import { _settlements } from "../services/settlementReconciler.js";
+import { QuarantineStore } from "../services/quarantineStore.js";
 
 const allowedEventTypes = new Set([
   "settlement_completed",
@@ -17,7 +19,19 @@ interface ProcessedEvent {
   response: { success: boolean; received: unknown };
 }
 
+interface WebhookRedeliveryState {
+  endpoint: string;
+  transactionId: string;
+  attempts: number;
+  processed: boolean;
+  response?: { success: boolean; received: unknown };
+  quarantined: boolean;
+  quarantineId?: string;
+  quarantinedAt?: number;
+}
+
 let _processedTransactions: Map<string, ProcessedEvent> = new Map();
+let _webhookDeliveryStates: Map<string, WebhookRedeliveryState> = new Map();
 
 export function _setProcessedTransactions(store: Map<string, ProcessedEvent>): void {
   _processedTransactions = store;
@@ -27,13 +41,58 @@ export function _resetProcessedTransactions(): void {
   _processedTransactions = new Map();
 }
 
+export function _setWebhookDeliveryStates(store: Map<string, WebhookRedeliveryState>): void {
+  _webhookDeliveryStates = store;
+}
+
+export function _resetWebhookDeliveryStates(): void {
+  _webhookDeliveryStates = new Map();
+}
+
 export interface WebhookRouteOptions {
   signingSecret?: string;
   kycSigningSecret?: string;
   kycProvider?: KycProvider;
+  redeliveryMaxAttempts?: number;
+  redeliveryMaxAttemptsByEndpoint?: Record<string, number>;
+  quarantineStore?: QuarantineStore;
 }
 
-const handleSettlementWebhook = (req: Request, res: Response) => {
+function resolveWebhookEndpoint(req: Request): string {
+  const routePath = req.route?.path ?? req.originalUrl ?? req.path ?? "";
+  if (routePath.includes("/kyc")) {
+    return "kyc";
+  }
+  if (routePath.includes("/settlements")) {
+    return "settlements";
+  }
+  return routePath || "default";
+}
+
+function getRedeliveryMaxAttempts(endpoint: string, options: WebhookRouteOptions): number {
+  const endpointOverride = options.redeliveryMaxAttemptsByEndpoint?.[endpoint];
+  if (typeof endpointOverride === "number" && Number.isFinite(endpointOverride) && endpointOverride > 0) {
+    return endpointOverride;
+  }
+
+  if (typeof options.redeliveryMaxAttempts === "number" && Number.isFinite(options.redeliveryMaxAttempts) && options.redeliveryMaxAttempts > 0) {
+    return options.redeliveryMaxAttempts;
+  }
+
+  const envValue = Number.parseInt(process.env.WEBHOOK_REDELIVERY_MAX_ATTEMPTS ?? "", 10);
+  if (Number.isFinite(envValue) && envValue > 0) {
+    return envValue;
+  }
+
+  return 3;
+}
+
+function updateRedeliveryMetrics(endpoint: string, state: WebhookRedeliveryState): void {
+  webhookRedeliveryAttempts.labels(endpoint, state.quarantined ? "quarantined" : state.processed ? "processed" : "active").set(state.attempts);
+  webhookRedeliveryHealth.labels(endpoint).set(state.quarantined ? 0 : 1);
+}
+
+const handleSettlementWebhook = (options: WebhookRouteOptions = {}) => (req: Request, res: Response) => {
   const { eventType, amount, timestamp } = req.body;
 
   if (!allowedEventTypes.has(eventType)) {
@@ -73,8 +132,57 @@ const handleSettlementWebhook = (req: Request, res: Response) => {
     }
   }
 
+  const endpoint = resolveWebhookEndpoint(req);
+  const transactionId = String(req.body.transactionId);
+  const maxAttempts = getRedeliveryMaxAttempts(endpoint, options);
+  const stateKey = `${endpoint}:${transactionId}`;
+  let state = _webhookDeliveryStates.get(stateKey);
+
+  if (!state) {
+    state = {
+      endpoint,
+      transactionId,
+      attempts: 0,
+      processed: false,
+      quarantined: false,
+    };
+    _webhookDeliveryStates.set(stateKey, state);
+  }
+
+  state.attempts += 1;
+  updateRedeliveryMetrics(endpoint, state);
+
+  if (state.attempts > maxAttempts) {
+    if (!state.quarantined) {
+      state.quarantined = true;
+      state.quarantinedAt = Date.now();
+      state.quarantineId = `${endpoint}-${transactionId}-${state.attempts}`;
+      const quarantineStore = options.quarantineStore ?? new QuarantineStore();
+      quarantineStore.add({
+        endpoint,
+        transactionId,
+        attempts: state.attempts,
+        reason: "max_redelivery_attempts_exceeded",
+      });
+    }
+
+    return res.status(429).json({
+      success: false,
+      error: "Webhook delivery quarantined after exceeding the configured redelivery attempts.",
+      quarantineId: state.quarantineId,
+    });
+  }
+
+  if (state.processed) {
+    return res.status(200).json(state.response);
+  }
+
   const responseBody = { success: true, received: req.body };
-  _processedTransactions.set(String(req.body.transactionId), {
+  state.processed = true;
+  state.response = responseBody;
+  updateRedeliveryMetrics(endpoint, state);
+
+  _processedTransactions.set(transactionId, {
     eventType: String(eventType),
     processedAt: Date.now(),
     response: responseBody,
@@ -101,7 +209,7 @@ const router = Router();
 router.post(
   "/settlements",
   validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
-  handleSettlementWebhook,
+  handleSettlementWebhook(),
 );
 
 export default router;
@@ -111,6 +219,6 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
     "/api/v1/webhooks/settlements",
     internalHmacAuth(options.signingSecret),
     validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
-    handleSettlementWebhook,
+    handleSettlementWebhook(options),
   );
 }

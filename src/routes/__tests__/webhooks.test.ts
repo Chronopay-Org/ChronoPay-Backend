@@ -1,11 +1,11 @@
 import { createHmac } from "node:crypto";
 import express from "express";
 import request from "supertest";
-import { registerWebhookRoutes, _resetProcessedTransactions } from "../webhooks.js";
+import { registerWebhookRoutes, _resetProcessedTransactions, _resetWebhookDeliveryStates } from "../webhooks.js";
 
 const SECRET = "test-webhook-secret";
 
-function buildApp() {
+function buildApp(options: Record<string, unknown> = {}) {
   const app = express();
 
   // Capture raw body for HMAC verification (mirrors production setup)
@@ -17,7 +17,7 @@ function buildApp() {
     }),
   );
 
-  registerWebhookRoutes(app, { signingSecret: SECRET });
+  registerWebhookRoutes(app, { signingSecret: SECRET, ...options } as any);
   return app;
 }
 
@@ -50,6 +50,7 @@ describe("POST /api/v1/webhooks/settlements", () => {
   beforeEach(() => {
     app = buildApp();
     _resetProcessedTransactions();
+    _resetWebhookDeliveryStates();
   });
 
   // ── Auth ──────────────────────────────────────────────────────────────────
