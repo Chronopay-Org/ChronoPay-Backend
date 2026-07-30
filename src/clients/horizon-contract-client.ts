@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { loadEnvConfig } from "../config/env.js";
 import { IContractClient } from "./contract-client.interface.js";
 import { ContractInteractionArgs, ContractCallResult, TransactionResult } from "./types.js";
 import { ContractService } from "../services/contract.service.js";
@@ -304,6 +305,13 @@ export class HorizonContractClient implements IContractClient {
   private readonly contractService: ContractService;
 
   constructor(horizonUrl: string, networkPassphrase: string, contractService: ContractService) {
+    const env = loadEnvConfig(process.env);
+    if (env.horizonMode === "fixture") {
+      throw new Error(
+        "HorizonContractClient cannot be instantiated in fixture mode. " +
+        "Use createHorizonClient() from horizon-factory to get the fixture client.",
+      );
+    }
     this.horizonUrl = horizonUrl.replace(/\/$/, "");
     this.networkPassphrase = networkPassphrase;
     this.contractService = contractService;
