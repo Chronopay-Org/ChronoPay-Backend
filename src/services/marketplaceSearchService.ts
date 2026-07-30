@@ -19,6 +19,8 @@ import {
   MarketplaceSearchQueryInput,
   validateSearchQuery,
 } from "../validation/marketplaceSearchSchema.js";
+import { BKTree, getEditDistanceCap } from "./fuzzy/bkTree.js";
+import { SynonymService } from "./synonymService.js";
 import {
 
 
@@ -79,6 +81,7 @@ export class MarketplaceSearchService {
   private diversificationConfig: Required<DiversificationConfig>;
   private reranker: LtrReranker | undefined;
   private eventEmitter: LtrEventEmitter | undefined;
+  private synonymService: SynonymService;
 
   constructor(
     private pool: Pool,
@@ -94,6 +97,64 @@ export class MarketplaceSearchService {
         ...(diversificationConfig.capBySortMode ?? {}),
       },
     };
+    this.synonymService = new SynonymService(pool);
+  }
+
+  /**
+   * For the given query tags, retrieve all unique tags from slots and synonym registry words,
+   * build a BK-tree, perform typo-tolerant fuzzy matching (with scaled edit distance),
+   * expand the matched tags via the synonym registry, and return the final expanded list of tags.
+   * If a tag has no fuzzy matches in the tree, we fall back to the exact tag (fallback exact-match path).
+   */
+  public async getExpandedAndFuzzyTags(queryTags: string[]): Promise<string[]> {
+    // 1. Fetch all unique tags from slots
+    const slotsTagsRes = await this.pool.query(
+      "SELECT DISTINCT unnest(tags) as tag FROM slots WHERE tags IS NOT NULL"
+    );
+    const knownWords = new Set<string>();
+    for (const row of slotsTagsRes.rows) {
+      if (row.tag) {
+        knownWords.add(row.tag.toLowerCase().trim());
+      }
+    }
+
+    // 2. Fetch all words and synonyms from synonym registry
+    const synonymsRes = await this.pool.query(
+      "SELECT word, synonyms FROM search_synonyms"
+    );
+    for (const row of synonymsRes.rows) {
+      if (row.word) {
+        knownWords.add(row.word.toLowerCase().trim());
+      }
+      if (row.synonyms) {
+        for (const syn of row.synonyms) {
+          knownWords.add(syn.toLowerCase().trim());
+        }
+      }
+    }
+
+    // 3. Build BK-tree from known words
+    const bkTree = new BKTree(Array.from(knownWords));
+
+    // 4. For each query tag, find fuzzy matches
+    const matchedWords = new Set<string>();
+    for (const queryTag of queryTags) {
+      const normalizedQuery = queryTag.toLowerCase().trim();
+      const maxDistance = getEditDistanceCap(normalizedQuery.length);
+
+      const matches = bkTree.search(normalizedQuery, maxDistance);
+      if (matches.length > 0) {
+        for (const match of matches) {
+          matchedWords.add(match);
+        }
+      } else {
+        // Fallback exact-match path: if no fuzzy match is found, keep the exact token
+        matchedWords.add(normalizedQuery);
+      }
+    }
+
+    // 5. Expand synonyms
+    return this.synonymService.expand(Array.from(matchedWords));
   }
 
   setReranker(reranker: LtrReranker): void {
@@ -274,11 +335,11 @@ export class MarketplaceSearchService {
    * Build SQL WHERE clause and parameters for search filters.
    * Uses parameterized queries to prevent SQL injection.
    */
-  private buildFilterClause(query: MarketplaceSearchQuery): {
+  private async buildFilterClause(query: MarketplaceSearchQuery): Promise<{
     whereClause: string;
     params: any[];
     paramCount: number;
-  } {
+  }> {
     const conditions: string[] = [];
     const params: any[] = [];
     let paramCount = 1;
@@ -343,6 +404,7 @@ export class MarketplaceSearchService {
       );
       conditions.push(`h3_cell_res7 = ANY($${paramCount++}::text[])`);
       params.push(candidateCells);
+    }
     // Suppress slots that are currently under an active refundable hold.
     // A hold is active when holds.released_at IS NULL and holds.expires_at > NOW().
     // We use NOT EXISTS to keep the main query efficient (avoids a JOIN that
@@ -356,6 +418,14 @@ export class MarketplaceSearchService {
              AND h.expires_at > NOW()
          )`,
       );
+    }
+
+    // Tag filter: search slots that have overlap with expanded tags.
+    // We use GIN-indexed array overlap operator (&&) in Postgres.
+    if ((query as any).tags && (query as any).tags.length > 0) {
+      const expandedTags = await this.getExpandedAndFuzzyTags((query as any).tags);
+      conditions.push(`tags && $${paramCount++}::varchar[]`);
+      params.push(expandedTags);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -448,7 +518,7 @@ export class MarketplaceSearchService {
     }
 
     try {
-      const { whereClause: baseWhereClause, params: filterParams, paramCount } = this.buildFilterClause(query);
+      const { whereClause: baseWhereClause, params: filterParams, paramCount } = await this.buildFilterClause(query);
       const orderByClause = this.buildOrderByClause(query);
 
       const countQuery = `SELECT COUNT(*) as total FROM slots ${baseWhereClause}`;
@@ -495,7 +565,8 @@ export class MarketplaceSearchService {
           price_cents,
           supplier_rating,
           status,
-          created_at${query.suppressHeld === false && query.showHeldReleaseEta ? `,
+          created_at,
+          tags${query.suppressHeld === false && query.showHeldReleaseEta ? `,
           (
             SELECT h.expires_at
             FROM slot_holds h
@@ -521,6 +592,7 @@ export class MarketplaceSearchService {
         category: row.category,
         price_cents: row.price_cents,
         supplier_rating: row.supplier_rating,
+        tags: row.tags,
         // Only present when suppressHeld=false AND showHeldReleaseEta=true
         ...(row.held_release_eta != null
           ? { heldReleaseEta: new Date(row.held_release_eta).getTime() }
@@ -726,7 +798,7 @@ export class MarketplaceSearchService {
     }
 
     try {
-      const { whereClause, params, paramCount } = this.buildFilterClause(query);
+      const { whereClause, params, paramCount } = await this.buildFilterClause(query);
       const candidateQuery = `
         SELECT
           id,
@@ -739,7 +811,8 @@ export class MarketplaceSearchService {
           status,
           created_at,
           latitude,
-          longitude
+          longitude,
+          tags
         FROM slots
         ${whereClause}
         LIMIT $${paramCount}
@@ -761,6 +834,7 @@ export class MarketplaceSearchService {
               supplier_rating: row.supplier_rating,
               latitude: Number(row.latitude),
               longitude: Number(row.longitude),
+              tags: row.tags,
             },
             distanceKm: dKm,
           });
@@ -871,6 +945,7 @@ export class MarketplaceSearchService {
       cursor: query.cursor ?? null,
       sortBy: query.sortBy,
       categories: query.categories ? [...query.categories].sort() : [],
+      tags: (query as any).tags ? [...(query as any).tags].sort() : [],
       priceRange: query.priceRange ? JSON.stringify(query.priceRange) : null,
       ratingRange: query.ratingRange ? JSON.stringify(query.ratingRange) : null,
       timeWindow: query.timeWindow ? JSON.stringify(query.timeWindow) : null,
