@@ -9,6 +9,8 @@
  */
 
 import { Redis } from 'ioredis';
+import { logger } from "../utils/logger.js";
+
 
 /** @internal - Exposed for testing only. */
 export let _isTestMock = false;
@@ -77,7 +79,7 @@ function createRedisStore() {
   // Handle errors to prevent process crashes and hanging tests
   client.on('error', (err) => {
     if (process.env.NODE_ENV !== 'test') {
-      console.error('Redis RateLimitStore Error:', err);
+      logger.error('Redis RateLimitStore Error:', err);
     }
   });
 

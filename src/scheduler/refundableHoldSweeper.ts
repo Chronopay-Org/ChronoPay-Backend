@@ -19,6 +19,8 @@
 import { EventEmitter } from "node:events";
 import type { SchedulingService } from "../services/schedulingService.js";
 import { invalidateSlotsCache } from "../cache/slotCache.js";
+import { logger } from "../utils/logger.js";
+
 import {
   refundableHoldReleaseLagSeconds,
   refundableHoldsReleasedTotal,
@@ -101,7 +103,7 @@ export async function onHoldReleasedDefaultHandler(_evt: HoldReleasedEvent): Pro
   try {
     await invalidateSlotsCache();
   } catch (err) {
-    console.warn("[refundableHoldSweeper] Search cache invalidation error:", (err as Error).message);
+    logger.warn("[refundableHoldSweeper] Search cache invalidation error:", (err as Error).message);
   }
 }
 
@@ -267,7 +269,7 @@ export async function sweepRefundableHoldExpiryOnce(
       deps.schedulingService.releaseSlot(currentHold.slotId);
     } catch (err) {
       // Slot may already be released or missing, log and continue
-      console.warn(`[refundableHoldSweeper] Error releasing slot ${currentHold.slotId}:`, (err as Error).message);
+      logger.warn(`[refundableHoldSweeper] Error releasing slot ${currentHold.slotId}:`, (err as Error).message);
     }
 
     // Mark hold status as expired

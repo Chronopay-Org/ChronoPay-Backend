@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Request } from "express";
 
 export interface RequestLogContext {
@@ -10,6 +11,23 @@ export interface RequestLogContext {
   apiKeyId?: string;
   ip?: string;
   userAgent?: string;
+}
+
+/**
+ * AsyncLocalStorage for propagating the current request ID through async call chains.
+ * Set by requestIdMiddleware so that every log line emitted during a request
+ * automatically carries `req_id` as a top-level field via the pino mixin.
+ */
+export const reqIdStorage = new AsyncLocalStorage<string>();
+
+/** Returns the request ID bound to the current async context, or undefined. */
+export function getReqId(): string | undefined {
+  return reqIdStorage.getStore();
+}
+
+/** Runs `fn` with `reqId` bound to the async context. */
+export function runWithReqId<T>(reqId: string, fn: () => T): T {
+  return reqIdStorage.run(reqId, fn);
 }
 
 export interface IdentityContext {

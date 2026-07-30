@@ -1,5 +1,6 @@
 import pino from "pino";
 import { getTraceContext } from "../tracing/context.js";
+import { getReqId } from "./logContext.js";
 
 /**
  * Log levels following pino conventions:
@@ -112,6 +113,28 @@ const createLoggerConfig = (): any => {
   const config: any = {
     level: getLogLevel(),
     timestamp: pino.stdTimeFunctions.isoTime,
+    /**
+     * mixin is called for every log record and merges the returned object as
+     * top-level fields.  We use it to inject req_id (from reqIdStorage ALS) and
+     * trace_id / span_id (from tracingStorage ALS) so they appear alongside
+     * level/time/msg without any manual threading of context.
+     */
+    mixin() {
+      const extra: Record<string, string> = {};
+
+      const reqId = getReqId();
+      if (reqId) {
+        extra["req_id"] = reqId;
+      }
+
+      const traceCtx = getTraceContext();
+      if (traceCtx) {
+        extra["trace_id"] = traceCtx.traceId;
+        extra["span_id"] = traceCtx.spanId;
+      }
+
+      return extra;
+    },
     formatters: {
       /**
        * Custom level formatter for better readability

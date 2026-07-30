@@ -15,7 +15,7 @@ export interface ProcessRemindersOptions {
 }
 
 async function defaultDeliverReminder(reminder: Reminder): Promise<void> {
-  console.log(`[reminder] delivering id=${reminder.id} slotId=${reminder.slotId}`);
+  logger.info(`[reminder] delivering id=${reminder.id} slotId=${reminder.slotId}`);
 }
 
 // Existing imports and code remain unchanged above
@@ -35,7 +35,7 @@ export async function processReminders(
     // @ts-expect-error - Auto-fixed by script
     const claimed = await claimDeliveryFn(reminder.id, reminder.triggerAt);
     if (!claimed) {
-      console.log(`[reminder] skipped duplicate id=${reminder.id} triggerAt=${reminder.triggerAt}`);
+      logger.info(`[reminder] skipped duplicate id=${reminder.id} triggerAt=${reminder.triggerAt}`);
       reminderMetrics.increment("skipped");
       continue;
     }
@@ -46,7 +46,7 @@ export async function processReminders(
       await deliverReminder(reminder);
       await repository.markSent(reminder.id, now);
       reminderMetrics.increment("delivered");
-      console.log(`[reminder] delivered id=${reminder.id}`);
+      logger.info(`[reminder] delivered id=${reminder.id}`);
     } catch (error) {
       const updated = await repository.recordAttempt(reminder.id, now);
       const attempts = updated?.attempts ?? reminder.attempts + 1;
@@ -54,13 +54,13 @@ export async function processReminders(
       if (attempts >= maxRetries) {
         await repository.markFailed(reminder.id, now);
         reminderMetrics.increment("failed");
-        console.error(`[reminder] failed id=${reminder.id} attempts=${attempts}`);
+        logger.error(`[reminder] failed id=${reminder.id} attempts=${attempts}`);
       } else {
-        console.warn(`[reminder] retry scheduled id=${reminder.id} attempts=${attempts}`);
+        logger.warn(`[reminder] retry scheduled id=${reminder.id} attempts=${attempts}`);
       }
 
       if (error instanceof Error) {
-        console.error(`[reminder] delivery error id=${reminder.id}: ${error.message}`);
+        logger.error(`[reminder] delivery error id=${reminder.id}: ${error.message}`);
       }
     }
   }
@@ -68,6 +68,8 @@ export async function processReminders(
 
 /* Autoscaling worker loop */
 import { ReminderAutoscaler } from "./reminderAutoscaler.js";
+import { logger } from "../utils/logger.js";
+
 
 export async function runReminderWorker(
   autoscalerConfig?: Partial<ReminderAutoscaleConfig>

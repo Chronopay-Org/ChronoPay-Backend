@@ -1,3 +1,4 @@
+import { logger } from "../utils/logger.js";
 /**
  *
  * High-level cache helpers for the slot resource.
@@ -73,7 +74,7 @@ export async function getCachedSlotsPage(page: number): Promise<PaginatedSlotsRe
     return JSON.parse(raw) as PaginatedSlotsResult;
   } catch (err) {
     recordDependencyFault("redis", "cache_read");
-    console.warn("[slotCache] getCachedSlotsPage error:", (err as Error).message);
+    logger.warn("[slotCache] getCachedSlotsPage error:", (err as Error).message);
     return null;
   }
 }
@@ -96,7 +97,7 @@ export async function setCachedSlotsPage(
     await redis.set(key, JSON.stringify(result), "EX", SLOT_CACHE_TTL_SECONDS);
   } catch (err) {
     recordDependencyFault("redis", "cache_write");
-    console.warn("[slotCache] setCachedSlotsPage error:", (err as Error).message);
+    logger.warn("[slotCache] setCachedSlotsPage error:", (err as Error).message);
   }
 }
 
@@ -124,7 +125,7 @@ export async function invalidateSlotsCache(): Promise<void> {
     await redis.del(SLOT_CACHE_KEYS.all);
   } catch (err) {
     recordDependencyFault("redis", "cache_invalidate");
-    console.warn("[slotCache] invalidateSlotsCache error:", (err as Error).message);
+    logger.warn("[slotCache] invalidateSlotsCache error:", (err as Error).message);
   }
 }
 
@@ -144,7 +145,7 @@ export async function getCachedSlots(): Promise<Slot[] | null> {
     return JSON.parse(raw) as Slot[];
   } catch (err) {
     recordDependencyFault("redis", "cache_read");
-    console.warn("[slotCache] getCachedSlots error:", (err as Error).message);
+    logger.warn("[slotCache] getCachedSlots error:", (err as Error).message);
     return null;
   }
 }
@@ -163,7 +164,7 @@ export async function setCachedSlots(slots: Slot[]): Promise<void> {
     await redis.set(SLOT_CACHE_KEYS.all, JSON.stringify(slots), "EX", SLOT_CACHE_TTL_SECONDS);
   } catch (err) {
     recordDependencyFault("redis", "cache_write");
-    console.warn("[slotCache] setCachedSlots error:", (err as Error).message);
+    logger.warn("[slotCache] setCachedSlots error:", (err as Error).message);
   }
 }
 

@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { webhookHmacVerified, fairQueueBypassAttempts } from "../metrics.js";
 import { configService } from "../config/config.service.js";
+import { logger } from "../utils/logger.js";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -229,9 +230,7 @@ export function fairQueueBypass(
     if (compareSignatures(providedSig, currentHex)) {
       fairQueueBypassAttempts.labels("valid").inc();
       req.internalBypassActor = actor;
-      console.info(
-        `[fairQueueBypass] bypass granted actor=${actor} route=${route} ts=${tsNum}`,
-      );
+      logger.info({ actor, route, ts: tsNum }, "fairQueueBypass: bypass granted");
       return next();
     }
 
@@ -241,9 +240,7 @@ export function fairQueueBypass(
       if (compareSignatures(providedSig, prevHex)) {
         fairQueueBypassAttempts.labels("valid").inc();
         req.internalBypassActor = actor;
-        console.info(
-          `[fairQueueBypass] bypass granted (prev secret) actor=${actor} route=${route} ts=${tsNum}`,
-        );
+        logger.info({ actor, route, ts: tsNum }, "fairQueueBypass: bypass granted (prev secret)");
         return next();
       }
     }

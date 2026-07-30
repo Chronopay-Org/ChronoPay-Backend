@@ -48,6 +48,8 @@ import {
 } from "../services/schedulingService.js";
 import type { EscrowEvent } from "./escrowEventTypes.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { logger } from "../utils/logger.js";
+
 
 export type ProjectionResultKind =
   | "applied"
@@ -301,7 +303,7 @@ export class EscrowStateProjector {
         },
       }, { status: "success", resource: `booking:${intent.id}` })
       .catch((err) => {
-        console.error("Failed to emit firm booking receipt:", err);
+        logger.error("Failed to emit firm booking receipt:", err);
       });
   }
 

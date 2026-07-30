@@ -2,6 +2,7 @@ import { loadEnvConfig } from "./config/env.js";
 import { createApp } from "./app.js";
 import { getFraudDriftDetector } from "./services/fraudDriftDetector.js";
 import { escrowMigrationState } from "./services/escrowMigrationState.js";
+import { logger } from "./utils/logger.js";
 
 const config = loadEnvConfig();
 
@@ -9,10 +10,10 @@ const config = loadEnvConfig();
 const pinnedHash = escrowMigrationState.getPinnedHash();
 if (pinnedHash) {
   if (!/^C[A-Z0-9]{55}$/.test(pinnedHash) && !/^[0-9a-fA-F]{64}$/.test(pinnedHash)) {
-    console.error(`[FATAL] Invalid escrow contract hash pin format: ${pinnedHash}`);
+    logger.fatal({ pinnedHash }, "invalid escrow contract hash pin format");
     process.exit(1);
   }
-  console.log(`[STARTUP] Escrow contract pinned to hash: ${pinnedHash}`);
+  logger.info({ pinnedHash }, "escrow contract pinned to hash");
 }
 
 const app = createApp({
@@ -38,7 +39,7 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
 // dynamic import to avoid circular deps at module load time.
 (async () => {
   if (process.env.DISPUTE_DEADLINE_DISABLED === "true") {
-    console.log("[dispute-deadline] Scheduler disabled via DISPUTE_DEADLINE_DISABLED");
+    logger.info("dispute-deadline scheduler disabled via DISPUTE_DEADLINE_DISABLED");
     return;
   }
 
@@ -70,9 +71,7 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
 // FLAG_ROLLOUT_SCHEDULER_DISABLED=true to skip (e.g. in single-shot scripts).
 (async () => {
   if (process.env.FLAG_ROLLOUT_SCHEDULER_DISABLED === "true") {
-    console.log(
-      "[flag-rollout-scheduler] Disabled via FLAG_ROLLOUT_SCHEDULER_DISABLED",
-    );
+    logger.info("flag-rollout-scheduler disabled via FLAG_ROLLOUT_SCHEDULER_DISABLED");
     return;
   }
 
@@ -91,7 +90,7 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
 const _shutdownHooks: Array<() => void> = [];
 (async () => {
   if (process.env.OUTBOX_RELAY_DISABLED === "true") {
-    console.log("[outbox-relay] Disabled via OUTBOX_RELAY_DISABLED");
+    logger.info("outbox-relay disabled via OUTBOX_RELAY_DISABLED");
     return;
   }
 
@@ -120,12 +119,12 @@ const _shutdownHooks: Array<() => void> = [];
     logger.error({ err }, "outbox relay worker exited unexpectedly");
   });
 
-  console.log("[outbox-relay] Worker started");
+  logger.info("outbox-relay worker started");
 })();
 
 const PORT = config.port || 3001;
 const server = app.listen(PORT, () => {
-  console.log(`ChronoPay API listening on http://localhost:${PORT}`);
+  logger.info({ port: PORT }, `ChronoPay API listening on http://localhost:${PORT}`);
 });
 
 let _serverInstance: any = server;

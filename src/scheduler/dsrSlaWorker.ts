@@ -24,6 +24,8 @@ import {
   type AlertThreshold,
 } from "../services/dsrSlaService.js";
 import { defaultAuditLogger, type AuditLogger } from "../services/auditLogger.js";
+import { logger } from "../utils/logger.js";
+
 
 // ─── Alerter abstraction ─────────────────────────────────────────────────────
 
@@ -128,7 +130,7 @@ export async function runCycle(
         // Never let one failing alert abort the rest of the cycle
         result.errors++;
         result.byThreshold[threshold].errors++;
-        console.error(
+        logger.error(
           `[dsrSlaWorker] alert dispatch failed dsrId=${dsr.id} threshold=${threshold}d`,
           err,
         );
@@ -177,7 +179,7 @@ export class DsrSlaWorker {
     if (this.running) return;
     this.running = true;
     this.schedule();
-    console.log(`[dsrSlaWorker] started — polling every ${this.intervalMs}ms`);
+    logger.info(`[dsrSlaWorker] started — polling every ${this.intervalMs}ms`);
   }
 
   /** Stop the poll loop gracefully. */
@@ -187,7 +189,7 @@ export class DsrSlaWorker {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    console.log("[dsrSlaWorker] stopped");
+    logger.info("[dsrSlaWorker] stopped");
   }
 
   get isRunning(): boolean {
@@ -221,7 +223,7 @@ export class DsrSlaWorker {
         );
       }
     } catch (err) {
-      console.error("[dsrSlaWorker] cycle error", err);
+      logger.error("[dsrSlaWorker] cycle error", err);
     } finally {
       this.schedule();
     }
