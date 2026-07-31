@@ -22,7 +22,7 @@ import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
 import { ContractService } from "./services/contract.service.js";
-
+import { SqlOutboxWriter } from "./services/outboxRelay.js";
 // Simple cookie parser middleware
 function parseCookies(req: Request, _res: Response, next: any): void {
   const cookieHeader = req.headers.cookie;
@@ -615,7 +615,8 @@ export function createApp(options: AppFactoryOptions = {}) {
   // 4. Booking Intents Routes
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
   const bookingIntentService =
-    options.bookingIntentService || new BookingIntentService(bookingIntentRepo, slotRepo);
+    options.bookingIntentService ||
+    new BookingIntentService(bookingIntentRepo, slotRepo, undefined, undefined, undefined, undefined, new SqlOutboxWriter(pool));
 
   app.post(
     "/api/v1/booking-intents",

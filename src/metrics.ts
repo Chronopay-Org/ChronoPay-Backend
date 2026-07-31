@@ -441,6 +441,32 @@ export const outboxCompactionDurationMs = createBudgetedHistogram({
   registers: [register],
 });
 
+// ─── Supplier webhook dispatch metrics ─────────────────────────────────────────
+
+export const supplierWebhookDispatched = createBudgetedCounter({
+  name: "supplier_webhook_dispatched_total",
+  help: "Total number of supplier-facing webhooks successfully delivered",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+export const supplierWebhookDeliveryErrors = createBudgetedCounter({
+  name: "supplier_webhook_delivery_errors_total",
+  help: "Total number of failed supplier webhook delivery attempts",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+export const supplierWebhookSkippedOptOut = createBudgetedCounter({
+  name: "supplier_webhook_skipped_optout_total",
+  help: "Total number of supplier webhooks skipped due to supplier opt-out",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
 // ─── Outbox relay metrics ──────────────────────────────────────────────────────
 
 /**

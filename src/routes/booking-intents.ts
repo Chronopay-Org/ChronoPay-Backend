@@ -29,7 +29,7 @@ import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 import { FraudScorer, FraudReasonCode, getFraudReasonCode, getFraudMessage } from "../services/fraudScorer.js";
 import { QuarantineStore } from "../services/quarantineStore.js";
-
+import { SqlOutboxWriter } from "./services/outboxRelay.js";
 export function createBookingIntentsRouter() {
   const router = Router();
 
