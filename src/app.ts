@@ -48,6 +48,7 @@ function isTruthyEnvValue(value: string | undefined): boolean {
 
 // Import routers
 import checkoutRouter from "./routes/checkout.js";
+import bookingsRouter from "./routes/bookings.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
@@ -639,6 +640,9 @@ export function createApp(options: AppFactoryOptions = {}) {
       }
     },
   );
+
+  // 4b. Bookings Search Routes (per-tenant leaky-bucket: 60 rps sustained / 120 burst)
+  app.use("/api/v1/bookings", bookingsRouter);
 
   // 5. Webhooks Routes
   registerWebhookRoutes(app);
