@@ -290,3 +290,37 @@ export async function runOutboxRelayWorker(
     await sleep(cfg.intervalMs, signal);
   }
 }
+
+// ─── Outbox writer (non-transactional convenience wrapper) ─────────────────────
+
+/**
+ * Minimal interface for recording an outbox event from a service that only
+ * has a connection pool, not an in-flight transaction client. Prefer
+ * insertIntoOutbox(client, ...) directly when you already hold the same
+ * client as the domain write, for true atomicity.
+ */
+export interface OutboxWriter {
+  recordEvent(eventType: string, aggregateId: string, payload: unknown): Promise<void>;
+}
+
+export class SqlOutboxWriter implements OutboxWriter {
+  constructor(private readonly pool: { query: Function }) {}
+
+  async recordEvent(eventType: string, aggregateId: string, payload: unknown): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO outbox_events (event_type, aggregate_id, payload) VALUES ($1, $2, $3::jsonb)`,
+      [eventType, aggregateId, JSON.stringify(payload)],
+    );
+  }
+}
+
+/**
+ * In-memory writer for tests — records events without touching a database.
+ */
+export class InMemoryOutboxWriter implements OutboxWriter {
+  readonly events: Array<{ eventType: string; aggregateId: string; payload: unknown }> = [];
+
+  async recordEvent(eventType: string, aggregateId: string, payload: unknown): Promise<void> {
+    this.events.push({ eventType, aggregateId, payload });
+  }
+}

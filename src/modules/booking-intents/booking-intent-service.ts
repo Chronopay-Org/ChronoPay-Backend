@@ -25,7 +25,7 @@ import {
   createEmptyHoldFeeRegistry,
   HoldFeePolicyRegistry,
 } from "../../services/holdFeePolicy.js";
-
+import type { OutboxWriter } from "../../services/outboxRelay.js";
 export interface CreateBookingIntentInput {
   slotId: string;
   note?: string;
@@ -90,6 +90,7 @@ export class BookingIntentService {
     private readonly nowMs: () => number = () => Date.now(),
     policyRegistry?: VersionedPolicyRegistry,
     holdFeeRegistry?: HoldFeePolicyRegistry,
+    private readonly outboxWriter?: OutboxWriter,
   ) {
     const reg = policyRegistry ?? createDefaultRegistry();
     this.getPolicyRegistrySync = () => reg;
@@ -421,8 +422,48 @@ export class BookingIntentService {
     const updated = this.bookingIntentRepository.updateStatus(intentId, "expired");
 
     this.schedulingService.releaseSlot(intent.slotId);
+    this.emitSlotReservationExpired(intent);
 
     return updated;
+  }
+
+  /**
+   * Records a slot.reservation.expired outbox event for a hold released by
+   * expiry. Best-effort: this is NOT in the same transaction as the status
+   * update / slot release above, since BookingIntentRepository doesn't
+   * currently expose a caller-supplied transaction client. A crash in the
+   * narrow window between the release above and this write could drop a
+   * webhook without affecting the actual slot release. Flagged as a
+   * follow-up: thread a PoolClient through BookingIntentRepository so this
+   * can use insertIntoOutbox() atomically, matching outboxRelay.ts's own
+   * documented design intent.
+   */
+  private emitSlotReservationExpired(intent: BookingIntentRecord): void {
+    if (!this.outboxWriter) {
+      return;
+    }
+    const slot = this.slotRepository.findById(intent.slotId);
+    if (!slot) {
+      return;
+    }
+    const payload = {
+      slotId: slot.id,
+      start: new Date(slot.startTime).toISOString(),
+      // Resolved to the supplier/store/tenant IANA timezone once that
+      // context is threaded into this service (TimezoneResolverService
+      // already exists in src/services/timezoneResolverService.ts); UTC
+      // is a correct, unambiguous ISO-8601 tz-aware value in the meantime.
+      timezone: "UTC",
+      reason: "booking_intent_expired",
+      supplierId: slot.supplierId ?? null,
+      occurredAt: this.now(),
+    };
+    this.outboxWriter
+      .recordEvent("slot.reservation.expired", intent.id, payload)
+      .catch(() => {
+        // Never let webhook emission failure surface as an expireIntent
+        // failure — the slot release above has already succeeded.
+      });
   }
 
   private resolveIntentPrice(intent: BookingIntentRecord): number {

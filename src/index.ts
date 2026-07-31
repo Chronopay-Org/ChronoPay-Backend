@@ -103,9 +103,13 @@ const _shutdownHooks: Array<() => void> = [];
   const pool = getPool();
   const store = new SqlOutboxStore(pool);
 
-  // Default publish callback: log the event (production deployments replace
-  // this with a real publisher, e.g. Kafka producer or webhook dispatcher).
+  const { dispatchSupplierWebhook } = await import("./services/supplierWebhookDispatcher.js");
+
   const publish = async (event: { id: string; event_type: string; aggregate_id: string; payload: unknown }) => {
+    if (event.event_type === "slot.reservation.expired") {
+      await dispatchSupplierWebhook(pool, event as any);
+      return;
+    }
     logger.info(
       { eventId: event.id, eventType: event.event_type, aggregateId: event.aggregate_id },
       "outbox relay: publishing event",

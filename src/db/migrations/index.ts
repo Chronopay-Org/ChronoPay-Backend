@@ -34,7 +34,7 @@ import { migration as migration015 } from "./015_create_reputation_snapshots.js"
 import { migration as migration016 } from "./016_add_grace_window_config.js";
 import { migration as migration017 } from "./018_add_partner_token_quotas.js";
 import { migration as migration019 } from "./019_add_active_booking_intent_unique_idx.js";
-
+import { migration as migration021 } from "./021_create_supplier_webhook_settings.js";
 export const migrations: Migration[] = [
   migration001,
   migration002,
@@ -60,6 +60,7 @@ export const migrations: Migration[] = [
   migration016,
   migration017,
   migration019,
+  migration021,
 ];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────
