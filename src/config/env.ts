@@ -45,6 +45,12 @@ export interface EnvConfig {
   internalOverrideSecretPrev?: string;
   /** Acceptable clock skew (ms) for the bypass timestamp. Default 30 000. */
   internalBypassToleranceMs: number;
+  /** Sustained requests per second per tenant on /api/v1/bookings/search. Default 60. */
+  bookingsSearchRatePerSecond: number;
+  /** Burst capacity per tenant on /api/v1/bookings/search. Default 120. */
+  bookingsSearchBurst: number;
+  /** Hard timeout (ms) for the leaky-bucket Redis call before failing open. Default 250. */
+  bookingsSearchRedisTimeoutMs: number;
 }
 
 export class EnvValidationError extends Error {
@@ -91,6 +97,25 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
 
+  const bookingsSearchRatePerSecond = parsePositiveInteger(
+    env.BOOKINGS_SEARCH_RATE_PER_SECOND,
+    "BOOKINGS_SEARCH_RATE_PER_SECOND",
+    60,
+    issues,
+  );
+  const bookingsSearchBurst = parsePositiveInteger(
+    env.BOOKINGS_SEARCH_BURST,
+    "BOOKINGS_SEARCH_BURST",
+    120,
+    issues,
+  );
+  const bookingsSearchRedisTimeoutMs = parsePositiveInteger(
+    env.BOOKINGS_SEARCH_REDIS_TIMEOUT_MS,
+    "BOOKINGS_SEARCH_REDIS_TIMEOUT_MS",
+    250,
+    issues,
+  );
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -113,6 +138,9 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     internalOverrideSecret,
     internalOverrideSecretPrev,
     internalBypassToleranceMs,
+    bookingsSearchRatePerSecond,
+    bookingsSearchBurst,
+    bookingsSearchRedisTimeoutMs,
   };
 }
 

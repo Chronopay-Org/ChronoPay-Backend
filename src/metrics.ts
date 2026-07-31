@@ -701,6 +701,38 @@ export const fairQueueBypassAttempts = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Per-tenant leaky-bucket rate limiter metrics ────────────────────────────
+
+/**
+ * Gauge of the current leaky-bucket fill level per tenant. Rising towards the
+ * configured burst capacity means the tenant is about to be throttled;
+ * a level pinned at capacity means the tenant is actively limited.
+ * Cardinality-budgeted so a flood of distinct tenants degrades to the
+ * shared overflow label rather than exhausting the metrics pipeline.
+ */
+export const rateLimitBucketBurn = createBudgetedGauge({
+  name: "rate_limit_bucket_burn",
+  help: "Current leaky-bucket fill level (tokens charged) per tenant on rate-limited search endpoints",
+  labels: ["tenant"],
+  budget: 256,
+  buckets: [],
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time the per-tenant leaky-bucket limiter fails
+ * open because Redis errored or exceeded the store timeout. Zero is the
+ * healthy steady state; a sustained non-zero rate means rate limiting is
+ * currently degraded (requests allowed without accounting).
+ */
+export const rateLimitRedisFailuresTotal = createBudgetedCounter({
+  name: "rate_limit_redis_failures_total",
+  help: "Total number of times the tenant leaky-bucket limiter failed open due to Redis errors or timeouts",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
 /**
  * Histogram tracking per-request SQL wall-clock time in milliseconds.
  * Labels: route, outcome (ok | breached).
