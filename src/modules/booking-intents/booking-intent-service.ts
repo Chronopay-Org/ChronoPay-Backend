@@ -25,6 +25,11 @@ import {
   createEmptyHoldFeeRegistry,
   HoldFeePolicyRegistry,
 } from "../../services/holdFeePolicy.js";
+import {
+  SupplierBookingCapService,
+  SupplierDailyCapExceededError,
+  defaultSupplierBookingCapService,
+} from "../../services/supplierCap.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -90,6 +95,7 @@ export class BookingIntentService {
     private readonly nowMs: () => number = () => Date.now(),
     policyRegistry?: VersionedPolicyRegistry,
     holdFeeRegistry?: HoldFeePolicyRegistry,
+    private readonly supplierBookingCapService: SupplierBookingCapService = defaultSupplierBookingCapService,
   ) {
     const reg = policyRegistry ?? createDefaultRegistry();
     this.getPolicyRegistrySync = () => reg;
@@ -217,6 +223,10 @@ export class BookingIntentService {
     const holdPlacedAt = bookingType === "refundable_hold" ? this.now() : undefined;
     const holdUntilMs = bookingType === "refundable_hold" ? input.holdDeadlineMs : undefined;
 
+    // Enforce the per-supplier daily booking cap (fail-open when the cap
+    // store/Redis is unavailable). Throws 429 when the supplier is over cap.
+    await this.supplierBookingCapService.increment(slot.supplierId ?? slot.professional);
+
     const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
       professional: slot.professional,
@@ -303,6 +313,21 @@ export class BookingIntentService {
           reason: "Slot already has active booking intent",
         });
         continue;
+      }
+
+      // Per-occurrence supplier daily cap enforcement. A capped-out occurrence
+      // is recorded as a failure for that date rather than aborting the batch.
+      try {
+        await this.supplierBookingCapService.increment(slot.supplierId ?? slot.professional);
+      } catch (error) {
+        if (error instanceof SupplierDailyCapExceededError) {
+          failures.push({
+            date: occ.toISOString(),
+            reason: "Daily booking cap reached for this supplier",
+          });
+          continue;
+        }
+        throw error;
       }
 
       const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();

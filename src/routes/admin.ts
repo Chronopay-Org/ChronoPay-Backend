@@ -28,6 +28,10 @@ import { query } from "../db/pool.js";
 import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
 import { getPayoutQuarantineService } from "../services/quarantineStore.js";
 import { strikeService } from "../services/strikeService.js";
+import {
+  DEFAULT_SUPPLIER_DAILY_BOOKING_CAP,
+  defaultSupplierBookingCapService,
+} from "../services/supplierCap.js";
 
 /**
  * Singleton cancellation-reversal service. The route handlers reuse
@@ -2164,6 +2168,101 @@ router.get(
       queue,
       total: queue.length,
     });
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Supplier Daily Booking-Cap Routes (issue #585)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @route PUT /api/v1/admin/suppliers/:id/booking-cap
+ * @desc Set the per-supplier daily booking-intent cap. A cap of `0` acts as a
+ *   soft block (all creates are rejected until raised or removed).
+ *   Body: { dailyCap: number, description?: string }
+ * @access Private (admin token only)
+ */
+router.put(
+  "/suppliers/:id/booking-cap",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const supplierId = String(req.params.id ?? "").trim();
+      const dailyCap = Number(req.body?.dailyCap);
+      const description =
+        typeof req.body?.description === "string" ? req.body.description : undefined;
+
+      const override = await defaultSupplierBookingCapService.setOverride(
+        supplierId,
+        dailyCap,
+        req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8) ?? "admin",
+        description,
+      );
+      return res.status(200).json({ success: true, override });
+    } catch (err: any) {
+      return res
+        .status(400)
+        .json({ success: false, error: err.message ?? "Failed to set booking cap" });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/suppliers/:id/booking-cap
+ * @desc Read the supplier's effective booking cap, any admin override, and
+ *   current day usage.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/suppliers/:id/booking-cap",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const supplierId = String(req.params.id ?? "").trim();
+      const override = defaultSupplierBookingCapService.getOverride(supplierId) ?? null;
+      const usage = await defaultSupplierBookingCapService.getUsage(supplierId);
+      return res.status(200).json({
+        success: true,
+        supplierId,
+        override,
+        effectiveCap: override?.dailyCap ?? DEFAULT_SUPPLIER_DAILY_BOOKING_CAP,
+        defaultCap: DEFAULT_SUPPLIER_DAILY_BOOKING_CAP,
+        usage,
+      });
+    } catch (err: any) {
+      return res
+        .status(400)
+        .json({ success: false, error: err.message ?? "Failed to read booking cap" });
+    }
+  },
+);
+
+/**
+ * @route DELETE /api/v1/admin/suppliers/:id/booking-cap
+ * @desc Remove the supplier's booking-cap override, reverting to the default.
+ * @access Private (admin token only)
+ */
+router.delete(
+  "/suppliers/:id/booking-cap",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const supplierId = String(req.params.id ?? "").trim();
+      const deleted = await defaultSupplierBookingCapService.deleteOverride(
+        supplierId,
+        req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8) ?? "admin",
+      );
+      if (!deleted) {
+        return res
+          .status(404)
+          .json({ success: false, error: "No booking-cap override exists for this supplier" });
+      }
+      return res.status(200).json({ success: true, deleted });
+    } catch (err: any) {
+      return res
+        .status(400)
+        .json({ success: false, error: err.message ?? "Failed to delete booking cap" });
+    }
   },
 );
 

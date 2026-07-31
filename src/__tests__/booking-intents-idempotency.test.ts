@@ -56,6 +56,20 @@ class InMemoryRedisMock implements RedisClient {
     return 1;
   }
 
+  async incr(key: string): Promise<number> {
+    const entry = this.store.get(key);
+    const next = (entry ? parseInt(entry.value, 10) || 0 : 0) + 1;
+    this.store.set(key, { value: String(next), expiresAt: entry?.expiresAt });
+    return next;
+  }
+
+  async expire(key: string, ttlSeconds: number): Promise<unknown> {
+    const entry = this.store.get(key);
+    if (!entry) return 0;
+    this.store.set(key, { ...entry, expiresAt: Date.now() + ttlSeconds * 1000 });
+    return 1;
+  }
+
   async keys(pattern: string): Promise<string[]> {
     if (pattern === "*") {
       return Array.from(this.store.keys());

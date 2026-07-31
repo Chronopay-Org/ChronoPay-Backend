@@ -22,6 +22,7 @@ import {
   parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
 import { isAppError } from "../errors/AppError.js";
+import { SupplierDailyCapExceededError } from "../services/supplierCap.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
@@ -39,6 +40,19 @@ export function createBookingIntentsRouter() {
   const bookingIntentService = new BookingIntentService(bookingIntentRepository, slotRepository);
 
   function handleServiceError(error: unknown, res: Response): void {
+    if (error instanceof SupplierDailyCapExceededError) {
+      // Per-supplier daily booking cap reached — expose the reset window so
+      // clients can retry after the next UTC-day boundary.
+      res.setHeader("X-DailyCap-Reset", error.usage.resetAt);
+      res.status(429).json({
+        success: false,
+        error: error.message,
+        code: error.code,
+        details: error.usage,
+      });
+      return;
+    }
+
     if (error instanceof BookingIntentError) {
       res.status(error.status).json({
         success: false,

@@ -52,6 +52,14 @@ function createMockRedisClient(): RedisClient & { _store: Map<string, string> } 
     async del(key: string): Promise<number> {
       return store.delete(key) ? 1 : 0;
     },
+    async incr(key: string): Promise<number> {
+      const next = (parseInt(store.get(key) ?? "0", 10) || 0) + 1;
+      store.set(key, String(next));
+      return next;
+    },
+    async expire(): Promise<number> {
+      return 1;
+    },
     async keys(pattern: string): Promise<string[]> {
       // Simple glob: "slots:page:*" matches anything starting with "slots:page:"
       const prefix = pattern.replace(/\*$/, "");
