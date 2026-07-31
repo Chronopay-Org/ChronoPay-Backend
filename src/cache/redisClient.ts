@@ -32,6 +32,10 @@ export interface RedisClient {
   get(key: string): Promise<string | null>;
   set(key: string, value: string, exMode: "EX", ttl: number, condition?: "NX"): Promise<unknown>;
   del(key: string): Promise<unknown>;
+  /** Atomically increment the integer stored at `key`, returning the new value. */
+  incr(key: string): Promise<number>;
+  /** Set a TTL (seconds) on `key`; used to bound counters like the daily cap. */
+  expire(key: string, ttlSeconds: number): Promise<unknown>;
   keys(pattern: string): Promise<string[]>;
   ping(): Promise<string>;
   quit(): Promise<unknown>;

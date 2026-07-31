@@ -630,9 +630,19 @@ export function createApp(options: AppFactoryOptions = {}) {
           return res.status(400).json({ success: false, error: "Note cannot be empty." });
 
         const actor = req.auth;
-        const bookingIntent = bookingIntentService.createIntent({ slotId, note }, actor);
+        const bookingIntent = await bookingIntentService.createIntent({ slotId, note }, actor);
         res.status(201).json({ success: true, bookingIntent });
       } catch (error: any) {
+        if (error?.details?.resetAt) {
+          // Per-supplier daily booking cap reached.
+          res.setHeader("X-DailyCap-Reset", error.details.resetAt);
+          return res.status(429).json({
+            success: false,
+            error: error.message,
+            code: error.code ?? "RATE_LIMITED",
+            details: error.details,
+          });
+        }
         const status = error.status || 400;
         const message = status === 500 ? "Unable to create booking intent." : error.message;
         res.status(status).json({ success: false, error: message });
