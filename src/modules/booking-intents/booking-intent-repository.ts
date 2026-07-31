@@ -92,6 +92,13 @@ export interface BookingIntentRepository {
   update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord | Promise<BookingIntentRecord>;
   updateTokenInfo?(id: string, tokenAsset: string, mintTxHash: string): Promise<void> | void;
   findExpiredHolds(nowMs: number): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
+  /**
+   * Returns up to `limit` intents stuck in `pending` whose `createdAt` is at or
+   * before `cutoffMs`, oldest first. Used by the expire-booking-intents worker.
+   * PostgreSQL implementations should claim rows with `FOR UPDATE SKIP LOCKED`
+   * so concurrent worker instances never process the same intent twice.
+   */
+  findStalePendingIntents(cutoffMs: number, limit: number): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
 }
 
 const ACTIVE_HOLD_STATUSES: BookingIntentStatus[] = ["pending", "hold_placed"];
@@ -186,6 +193,20 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
           entry.holdUntilMs !== undefined &&
           entry.holdUntilMs <= nowMs,
       )
+      .map((i) => ({ ...i }));
+  }
+
+  findStalePendingIntents(cutoffMs: number, limit: number): BookingIntentRecord[] {
+    return this.intents
+      .filter(
+        (entry) =>
+          entry.status === "pending" &&
+          new Date(entry.createdAt).getTime() <= cutoffMs,
+      )
+      .sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      )
+      .slice(0, limit)
       .map((i) => ({ ...i }));
   }
 }

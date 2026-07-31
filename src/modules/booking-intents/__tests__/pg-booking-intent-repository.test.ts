@@ -212,4 +212,37 @@ describe("PgBookingIntentRepository", () => {
       expect(result).toEqual(expectedRecord);
     });
   });
+
+  describe("findStalePendingIntents", () => {
+    it("claims stale pending intents with FOR UPDATE SKIP LOCKED", async () => {
+      const cutoffMs = new Date("2026-01-02T00:00:00.000Z").getTime();
+      mockQuery.mockResolvedValueOnce({ rows: [dbRow], rowCount: 1 } as any);
+
+      const result = await repository.findStalePendingIntents(cutoffMs, 50);
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining("SELECT * FROM booking_intents"),
+        expect.arrayContaining([new Date(cutoffMs), 50]),
+      );
+
+      const sql = mockQuery.mock.calls[0][0] as string;
+      expect(sql).toContain("WHERE status = 'pending' AND created_at <= $1");
+      expect(sql).toContain("ORDER BY created_at ASC");
+      expect(sql).toContain("FOR UPDATE SKIP LOCKED");
+
+      expect(result).toEqual([expectedRecord]);
+    });
+
+    it("returns an empty array when no stale intents exist", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 } as any);
+
+      const result = await repository.findStalePendingIntents(1000, 10);
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining("SELECT * FROM booking_intents"),
+        [new Date(1000), 10],
+      );
+      expect(result).toEqual([]);
+    });
+  });
 });

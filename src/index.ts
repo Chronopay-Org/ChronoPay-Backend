@@ -122,6 +122,65 @@ const _shutdownHooks: Array<() => void> = [];
   logger.info("outbox-relay worker started");
 })();
 
+// ─── Expire Pending Booking-Intents Worker (#588) ───────────────────────────
+// Scans for booking intents stuck in `pending` (awaiting payment/confirmation)
+// beyond the TTL (default 30 min), cancels them, releases the reserved slot
+// inventory, and emits a durable `booking_intent_expired` outbox event.
+// Enabled by default; set EXPIRE_BOOKING_INTENTS_DISABLED=true to skip.
+(async () => {
+  if (process.env.EXPIRE_BOOKING_INTENTS_DISABLED === "true") {
+    logger.info("expire-booking-intents worker disabled via EXPIRE_BOOKING_INTENTS_DISABLED");
+    return;
+  }
+
+  const { createExpireBookingIntentsWorker } = await import(
+    "./scheduler/expireBookingIntents.js"
+  );
+  const { BookingIntentService } = await import(
+    "./modules/booking-intents/booking-intent-service.js"
+  );
+  const { InMemoryBookingIntentRepository } = await import(
+    "./modules/booking-intents/booking-intent-repository.js"
+  );
+  const { InMemorySlotRepository } = await import("./modules/slots/slot-repository.js");
+  const { insertIntoOutbox } = await import("./services/outboxRelay.js");
+  const { withTransaction } = await import("./db/connection.js");
+
+  const slotRepo = new InMemorySlotRepository();
+  const bookingIntentRepo = new InMemoryBookingIntentRepository();
+  const bookingIntentService = new BookingIntentService(bookingIntentRepo, slotRepo);
+
+  const controller = new AbortController();
+  _shutdownHooks.push(() => controller.abort());
+
+  createExpireBookingIntentsWorker(
+    {
+      bookingIntentRepository: bookingIntentRepo,
+      bookingIntentService,
+      emitExpired: async (event) => {
+        // Durable event emission through the transactional outbox; the relay
+        // worker publishes it to downstream consumers (at-least-once).
+        await withTransaction(async (client) => {
+          await insertIntoOutbox(client, "booking_intent_expired", event.intentId, {
+            intentId: event.intentId,
+            slotId: event.slotId,
+            customerId: event.customerId,
+            expiredAtMs: event.expiredAtMs,
+          });
+        });
+      },
+    },
+    {
+      ttlMs: Number(process.env.EXPIRE_BOOKING_INTENTS_TTL_MS) || undefined,
+      batchSize: Number(process.env.EXPIRE_BOOKING_INTENTS_BATCH_SIZE) || undefined,
+      safetyThreshold: Number(process.env.EXPIRE_BOOKING_INTENTS_SAFETY_THRESHOLD) || undefined,
+      intervalMs: Number(process.env.EXPIRE_BOOKING_INTENTS_INTERVAL_MS) || undefined,
+    },
+  ).start();
+
+  logger.info("expire-booking-intents worker started");
+})();
+
 const PORT = config.port || 3001;
 const server = app.listen(PORT, () => {
   logger.info({ port: PORT }, `ChronoPay API listening on http://localhost:${PORT}`);
