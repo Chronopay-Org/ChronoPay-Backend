@@ -376,6 +376,33 @@ export const expiryCleanupSafetyBrakeTriggers = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Expire pending booking-intents worker metrics ───────────────────────────
+
+/**
+ * Counter incremented each time the expire-booking-intents worker cancels a
+ * booking intent stuck in `pending` beyond the configured TTL. Equivalent to
+ * the `booking_intents_expired_total` gauge requested in issue #588.
+ */
+export const bookingIntentsExpiredTotal = createBudgetedCounter({
+  name: "booking_intents_expired_total",
+  help: "Total number of stale pending booking intents expired by the expire-booking-intents worker",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time the expire-booking-intents worker skips a
+ * sweep because the candidate count exceeded the safety threshold.
+ */
+export const expireBookingIntentsSafetyBrakeTriggers = createBudgetedCounter({
+  name: "expire_booking_intents_safety_brake_triggers_total",
+  help: "Total number of expire-booking-intents sweeps skipped because the candidate count exceeded the safety threshold",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
 // ─── Refundable hold expiry sweeper metrics ────────────────────────────────────
 
 export const refundableHoldReleaseLagSeconds = createBudgetedHistogram({

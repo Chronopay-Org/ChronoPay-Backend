@@ -87,6 +87,27 @@ export class PgBookingIntentRepository implements BookingIntentRepository {
   }
 
   /**
+   * Claims up to `limit` stale `pending` intents older than `cutoffMs`.
+   *
+   * `FOR UPDATE SKIP LOCKED` lets multiple worker instances sweep safely: rows
+   * locked by a concurrent transaction (a competing claim) are skipped instead
+   * of blocking, so an intent can never be claimed by two workers at once.
+   * Rows are returned oldest-first so retries/backfills naturally drain the
+   * longest-stuck intents first.
+   */
+  async findStalePendingIntents(cutoffMs: number, limit: number): Promise<BookingIntentRecord[]> {
+    const sql = `
+      SELECT * FROM booking_intents
+      WHERE status = 'pending' AND created_at <= $1
+      ORDER BY created_at ASC
+      LIMIT $2
+      FOR UPDATE SKIP LOCKED
+    `;
+    const res = await this.dbQuery(sql, [new Date(cutoffMs), limit]);
+    return res.rows.map((row) => this.mapRowToRecord(row));
+  }
+
+  /**
    * Maps a database row to a BookingIntentRecord domain object.
    * Converts database TIMESTAMPTZ to milliseconds for the domain record.
    */
