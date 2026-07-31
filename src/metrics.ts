@@ -742,3 +742,27 @@ export const treasuryBalance = createBudgetedGauge({
   budget: 50,
 });
 
+/**
+ * Counter incremented each time an operator PAUSES the scheduler
+ * (freezes platform-wide booking-intent creation during an incident).
+ */
+export const schedulerPauseTotal = createBudgetedCounter({
+  name: "scheduler_pause_total",
+  help: "Total number of times the scheduler (booking-intent creation) was paused by an operator",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time an operator RESUMES the scheduler
+ * (lifts a platform-wide booking-intent creation freeze).
+ */
+export const schedulerResumeTotal = createBudgetedCounter({
+  name: "scheduler_resume_total",
+  help: "Total number of times the scheduler (booking-intent creation) was resumed by an operator",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+

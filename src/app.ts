@@ -51,6 +51,8 @@ import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
+import schedulerAdminRouter from "./routes/admin/scheduler.js";
+import { schedulerGate } from "./middleware/schedulerGate.js";
 import graceWindowRouter from "./routes/graceWindow.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
 import webhookRoutes, { registerWebhookRoutes } from "./routes/webhooks.js";
@@ -516,6 +518,9 @@ export function createApp(options: AppFactoryOptions = {}) {
   // 3b-i. Fraud model admin routes (#455 rollback hotkey)
   app.use("/api/v1/admin/fraud-models", fraudModelsRouter);
 
+  // 3b-i-scheduler. Incident scheduler kill-switch (pause/resume)
+  app.use("/api/v1/admin/scheduler", schedulerAdminRouter);
+
   // 3b-i-a. Scheduled feature-flag rollout admin routes (#570)
   app.use("/api/v1/admin/flag-rollouts", flagRolloutsRouter);
 
@@ -620,6 +625,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.post(
     "/api/v1/booking-intents",
     requireAuth(["customer"]),
+    schedulerGate,
     async (req: any, res: Response) => {
       try {
         const { slotId, note } = req.body;

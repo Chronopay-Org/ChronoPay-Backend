@@ -186,6 +186,7 @@ Detailed API contracts and endpoint documentation:
 
 - **[Booking Intent API](docs/booking-intent-api.md)** — POST /api/v1/booking-intents endpoint with request/response schemas, validation rules, and error codes
 - **[Slots API](docs/api/slots.md)** — Complete slots API documentation covering GET/POST/PATCH/DELETE endpoints, conflict detection, caching, and security considerations
+- **[Scheduler Pause / Resume](docs/scheduler-pause.md)** — Admin-only incident kill-switch (POST /api/v1/admin/scheduler/pause|resume) that freezes new booking-intent creation platform-wide via a Redis flag while leaving read paths intact
 
 ## API (slot listing)
 
