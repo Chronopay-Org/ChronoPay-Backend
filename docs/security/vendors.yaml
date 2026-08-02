@@ -1,0 +1,60 @@
+# SOC2 vendor inventory
+#
+# Every entry must be reviewed at least once every 12 months. CI fails when an
+# entry is older than that (see scripts/vendor-inventory-check.ts and
+# .github/workflows/vendor-inventory.yml). Schema:
+# docs/security/vendor-registry.schema.json. Guide: docs/security/vendor-inventory.md
+schema_version: 1
+last_updated: 2026-07-28
+
+allowed_currencies:
+  - USD
+  - EUR
+  - GBP
+
+vendors:
+  - id: amazon-web-services
+    name: Amazon Web Services
+    category: cloud_infrastructure
+    service: compute, storage, networking
+    owner: platform-engineering
+    risk_score: 3
+    criticality: high
+    currency: USD
+    review_date: 2026-06-12
+    review_cadence_months: 12
+    data_classification: confidential
+    notes: Primary cloud provider; SOC 2 Type II report reviewed at last audit.
+  - id: stripe
+    name: Stripe
+    category: payment_processing
+    service: card payments and payouts
+    owner: payments-team
+    risk_score: 4
+    criticality: critical
+    currency: USD
+    review_date: 2026-07-01
+    review_cadence_months: 12
+    data_classification: confidential
+    notes: PCI-DSS level 1 certified.
+  - id: google-cloud
+    name: Google Cloud Platform
+    category: cloud_infrastructure
+    service: KMS, object storage, container runtime
+    owner: platform-engineering
+    risk_score: 3
+    criticality: high
+    currency: USD
+    review_date: 2026-03-19
+    review_cadence_months: 12
+    data_classification: confidential
+  - id: twilio-sendgrid
+    name: Twilio SendGrid
+    category: email_services
+    service: transactional email delivery
+    owner: notifications-team
+    risk_score: 2
+    criticality: medium
+    currency: USD
+    review_date: 2026-05-22
+    data_classification: public
