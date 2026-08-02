@@ -1,0 +1,36 @@
+name: SOC2 Vendor Inventory
+
+on:
+  pull_request:
+    paths:
+      - "docs/security/vendors.yaml"
+      - "docs/security/vendor-registry.schema.json"
+      - "scripts/vendor-inventory-check.ts"
+      - ".github/workflows/vendor-inventory.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run vendor inventory check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: npx tsx scripts/vendor-inventory-check.ts
