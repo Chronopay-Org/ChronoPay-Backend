@@ -20,6 +20,10 @@ ChronoPay uses `X-Request-Id` for end-to-end request correlation.
 
 ## Service Level Objectives (SLOs)
 
+Route-level objectives and burn-rate metrics are defined in `src/metrics/sloMetrics.ts` (`booking_intent`, `slots_list`, `checkout`, `escrow_listener`).
+
+A **weekly error-budget report** is posted to Slack every Monday (see [slo-weekly-report.md](./slo-weekly-report.md) and `ops/dashboards/slo-burn-rate.json`).
+
 ### Booking Intents
 - **Availability & Latency:** 99.9% of booking-intent creates (`POST /api/v1/booking-intents`) complete in under 500ms over a rolling 30-day window.
 
