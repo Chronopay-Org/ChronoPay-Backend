@@ -18,6 +18,7 @@
 
 import { partnerQuotaApproachingLimit, partnerQuotaExceededTotal } from "../metrics.js";
 import { logger } from "../utils/logger.js";
+import { maybeEnqueueSoftLimitWarning } from "./partnerTokenSoftLimitService.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -396,6 +397,16 @@ export async function checkAndConsume(
       { tokenId: row.token_id, dailyUsed: nextDailyUsed, dailyLimit: row.daily_limit, monthlyUsed: nextMonthlyUsed, monthlyLimit: row.monthly_limit },
       "partner quota: approaching limit",
     );
+
+    // Soft-limit warning webhook (deduped, at-least-once) before hard cutoff.
+    // Prefer the limit that is closer to exhaustion as the hard cutoff context.
+    const dailyPct = nextDailyUsed / row.daily_limit;
+    const monthlyPct = nextMonthlyUsed / row.monthly_limit;
+    if (dailyPct >= monthlyPct) {
+      void maybeEnqueueSoftLimitWarning(row.token_id, nextDailyUsed, row.daily_limit);
+    } else {
+      void maybeEnqueueSoftLimitWarning(row.token_id, nextMonthlyUsed, row.monthly_limit);
+    }
   }
 
   // Consume
