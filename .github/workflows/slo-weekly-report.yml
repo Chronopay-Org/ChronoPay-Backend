@@ -1,0 +1,30 @@
+name: SLO Weekly Report
+
+on:
+  schedule:
+    # Every Monday at 09:00 UTC
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+jobs:
+  slo-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run SLO weekly report
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          PROMETHEUS_URL: ${{ secrets.PROMETHEUS_URL }}
+          BURN_RATE_DASHBOARD_URL: ${{ secrets.BURN_RATE_DASHBOARD_URL }}
+        run: npx tsx scripts/slo-weekly-report.ts
