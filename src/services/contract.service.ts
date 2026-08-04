@@ -154,10 +154,13 @@ export class ContractService {
       }
       this.maybeTransitionTier();
 
-      logger.error(`Blockchain call failed: ${description}`, {
-        upstreamError: error instanceof Error ? error.message : String(error),
-        mappedCode: appError.code,
-      });
+      logger.error(
+        {
+          upstreamError: error instanceof Error ? error.message : String(error),
+          mappedCode: appError.code,
+        },
+        `Blockchain call failed: ${description}`,
+      );
 
       throw appError;
     }

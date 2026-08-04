@@ -51,6 +51,7 @@ import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import adminRouter from "./routes/admin.js";
+import adminSlotsRouter from "./routes/admin/slots.js";
 import graceWindowRouter from "./routes/graceWindow.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
 import webhookRoutes, { registerWebhookRoutes } from "./routes/webhooks.js";
@@ -512,6 +513,9 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use("/api/v1/admin", adminRouter);
   app.use("/api/v1/admin", graceWindowRouter);
   app.use("/api/v1/admin", redactionPolicyRouter);
+
+  // 3b-ii. Admin slot inventory routes with audit logging (#599)
+  app.use("/api/v1/admin/slots", adminSlotsRouter);
 
   // 3b-i. Fraud model admin routes (#455 rollback hotkey)
   app.use("/api/v1/admin/fraud-models", fraudModelsRouter);

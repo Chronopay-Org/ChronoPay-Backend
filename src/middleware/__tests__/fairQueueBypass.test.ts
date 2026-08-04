@@ -398,6 +398,10 @@ describe("fairQueueBypass middleware", () => {
 // Integration test: bypass middleware + rate limiter
 // ---------------------------------------------------------------------------
 
+// Moved top-level import outside describe block
+const { createAuthAwareRateLimiter } = await import("../rateLimiter.js");
+const { _setTestMock, _resetStore } = await import("../rateLimitStore.js");
+
 describe("fairQueueBypass + createAuthAwareRateLimiter integration", () => {
   // Mock ioredis before importing the rate limiter
   const storage = new Map<string, string>();
@@ -433,8 +437,7 @@ describe("fairQueueBypass + createAuthAwareRateLimiter integration", () => {
     default: jest.fn<any>().mockImplementation(() => mockRedis),
   }));
 
-  const { createAuthAwareRateLimiter } = await import("../rateLimiter.js");
-  const { _setTestMock, _resetStore } = await import("../rateLimitStore.js");
+
 
   let app: express.Express;
   const WINDOW_MS = 60_000;

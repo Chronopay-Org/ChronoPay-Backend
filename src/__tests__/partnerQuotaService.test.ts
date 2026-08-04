@@ -1,4 +1,4 @@
-import { jest } from "@jest/globals";
+
 import {
   InMemoryQuotaStore,
   checkAndConsume,
@@ -10,7 +10,7 @@ import { register } from "../metrics.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async function metricValue(metricName: string, label?: string): Promise<number> {
+async function metricValue(metricName: string, _label?: string): Promise<number> {
   const text = await register.metrics();
   const lines = text.split("\n").filter((l) => l.startsWith(metricName) && !l.startsWith("#"));
   if (lines.length === 0) return 0;
@@ -63,7 +63,7 @@ describe("partner quota service", () => {
 
   it("blocks when daily limit is reached", async () => {
     // Manually set daily_used to the limit
-    const row = await store.getOrCreate("token_abc", fixedNow(2026, 7, 1));
+    const _row = await store.getOrCreate("token_abc", fixedNow(2026, 7, 1));
     // We can't modify the row directly through the interface, so let's just
     // simulate by consuming many times... but that's slow.
     // Instead, let's set up the store with a pre-loaded row at limit.
