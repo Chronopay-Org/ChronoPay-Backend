@@ -56,25 +56,53 @@ export class PgBookingIntentRepository implements BookingIntentRepository {
     }
   }
 
-  // @ts-expect-error - Auto-fixed by script
   async findBySlotId(slotId: string): Promise<BookingIntentRecord | undefined> {
     const sql = `SELECT * FROM booking_intents WHERE slot_id = $1 LIMIT 1`;
     const res = await this.dbQuery(sql, [slotId]);
     return res.rows[0] ? this.mapRowToRecord(res.rows[0]) : undefined;
   }
 
-  // @ts-expect-error - Auto-fixed by script
   async findById(id: string): Promise<BookingIntentRecord | undefined> {
     const sql = `SELECT * FROM booking_intents WHERE id = $1 LIMIT 1`;
     const res = await this.dbQuery(sql, [id]);
     return res.rows[0] ? this.mapRowToRecord(res.rows[0]) : undefined;
   }
 
-  // @ts-expect-error - Auto-fixed by script
   async findBySlotIdAndCustomer(slotId: string, customerId: string): Promise<BookingIntentRecord | undefined> {
     const sql = `SELECT * FROM booking_intents WHERE slot_id = $1 AND customer_id = $2 LIMIT 1`;
     const res = await this.dbQuery(sql, [slotId, customerId]);
     return res.rows[0] ? this.mapRowToRecord(res.rows[0]) : undefined;
+  }
+
+  async findExpiredHolds(nowMs: number): Promise<BookingIntentRecord[]> {
+    const sql = `SELECT * FROM booking_intents WHERE booking_type = 'refundable_hold' AND status = 'hold_placed' AND hold_until_ms <= $1`;
+    const res = await this.dbQuery(sql, [nowMs]);
+    return res.rows.map((row: any) => this.mapRowToRecord(row));
+  }
+
+  async listByCustomer(customerId: string): Promise<BookingIntentRecord[]> {
+    const sql = `SELECT * FROM booking_intents WHERE customer_id = $1`;
+    const res = await this.dbQuery(sql, [customerId]);
+    return res.rows.map((row: any) => this.mapRowToRecord(row));
+  }
+
+  async listAll(): Promise<BookingIntentRecord[]> {
+    const sql = `SELECT * FROM booking_intents`;
+    const res = await this.dbQuery(sql, []);
+    return res.rows.map((row: any) => this.mapRowToRecord(row));
+  }
+
+  async updateStatus(id: string, status: BookingIntentStatus): Promise<BookingIntentRecord> {
+    const sql = `UPDATE booking_intents SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING *`;
+    const res = await this.dbQuery(sql, [id, status]);
+    if (!res.rows[0]) throw new Error(`BookingIntent with id "${id}" not found`);
+    return this.mapRowToRecord(res.rows[0]);
+  }
+
+  async update(id: string, _updates: Partial<Omit<BookingIntentRecord, "id">>): Promise<BookingIntentRecord> {
+    const existing = await this.findById(id);
+    if (!existing) throw new Error(`BookingIntent with id "${id}" not found`);
+    return existing;
   }
 
   async updateTokenInfo(id: string, tokenAsset: string, mintTxHash: string): Promise<void> {

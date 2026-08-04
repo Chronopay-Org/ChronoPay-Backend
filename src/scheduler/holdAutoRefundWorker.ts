@@ -55,15 +55,15 @@ interface HoldAutoRefundDependencies {
   bookingIntentRepository: BookingIntentRepository;
 }
 
-export function processHoldAutoRefundOnce(
+export async function processHoldAutoRefundOnce(
   dependencies: HoldAutoRefundDependencies,
   configOverrides: HoldAutoRefundWorkerConfig = {},
   nowMs?: number,
-): HoldAutoRefundResult {
+): Promise<HoldAutoRefundResult> {
   const config = resolveConfig(configOverrides);
   const effectiveNow = nowMs ?? Date.now();
 
-  const expiredHolds = dependencies.bookingIntentRepository.findExpiredHolds(effectiveNow);
+  const expiredHolds = await dependencies.bookingIntentRepository.findExpiredHolds(effectiveNow);
 
   if (expiredHolds.length > config.safetyThreshold) {
     return {
@@ -131,7 +131,7 @@ export async function runHoldAutoRefundWorker(
   const config = resolveConfig(configOverrides);
 
   while (!signal.aborted) {
-    processHoldAutoRefundOnce(dependencies, configOverrides);
+    await processHoldAutoRefundOnce(dependencies, configOverrides);
     if (signal.aborted) break;
     await sleep(config.intervalMs, signal);
   }

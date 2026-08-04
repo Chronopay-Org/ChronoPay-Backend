@@ -85,7 +85,7 @@ function createRedisStore() {
   // Handle errors to prevent process crashes and hanging tests
   client.on('error', (err) => {
     if (process.env.NODE_ENV !== 'test') {
-      logger.error('Redis RateLimitStore Error:', err);
+      logger.error({ err }, 'Redis RateLimitStore Error:');
     }
   });
 

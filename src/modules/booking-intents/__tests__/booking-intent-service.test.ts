@@ -42,7 +42,7 @@ describe("BookingIntentService", () => {
       mockSlotRepo.findById.mockReturnValue(slot);
       mockRepo.findBySlotIdAndCustomer.mockReturnValue(undefined);
       mockRepo.findBySlotId.mockReturnValue(undefined);
-      mockRepo.create.mockResolvedValue({
+      (mockRepo.create as any).mockResolvedValue({
         id: "intent-1",
         slotId: slot.id,
         professional: slot.professional,
