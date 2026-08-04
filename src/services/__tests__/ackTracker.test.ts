@@ -13,7 +13,7 @@
  * - Custom prefix and TTL options
  */
 
-import { describe, it, expect, beforeEach } from "@jest/globals";
+import { describe, it, expect } from "@jest/globals";
 import { AckTracker, type AckRedisClient } from "../ackTracker.js";
 import type { RevocationAck } from "../revocationService.js";
 

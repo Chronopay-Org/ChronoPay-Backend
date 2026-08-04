@@ -21,9 +21,9 @@ import {
   translateHorizonError,
   TX_RESULT_CODES,
   OP_RESULT_CODES,
+  type HorizonResultCodes,
 } from "../stellarRpcFailure.js";
 import { isRetryableHorizonFailure } from "../../stellar/horizon.js";
-import type { HorizonResultCodes } from "../stellarRpcFailure.js";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 

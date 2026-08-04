@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@jest/globals";
 import { renderLegIcs, renderAllLegsIcs } from "../icsRenderer.js";
-import type { MultiLegBooking, MultiLegBookingLeg } from "../schedulingService.js";
+import type {} from "../schedulingService.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,7 +65,7 @@ interface MultiBookingLegLeg {
 // ICS parsing helpers for test assertions
 // ---------------------------------------------------------------------------
 
-function parseIcsProperties(ics: string): Map<string, string> {
+function _parseIcsProperties(ics: string): Map<string, string> {
   const props = new Map<string, string>();
   // Unfold lines first
   const unfolded = ics.replace(/\r\n /g, "");
@@ -95,7 +95,7 @@ function getIcsRawLine(ics: string, name: string): string | undefined {
   return `${name}${match[1]}:${match[2]}`;
 }
 
-function countLines(ics: string): number {
+function _countLines(ics: string): number {
   return ics.trim().split(/\r?\n/).length;
 }
 
