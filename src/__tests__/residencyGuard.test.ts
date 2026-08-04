@@ -263,10 +263,10 @@ describe("residency guard", () => {
     it("fails closed when waiver lookup throws", async () => {
       // Create a store that throws on findActiveWaivers
       const failingStore = {
-        findActiveWaivers: jest.fn().mockRejectedValue(new Error("db unavailable")),
+        findActiveWaivers: jest.fn().mockRejectedValue(new Error("db unavailable") as never),
       };
 
-      const guard = createResidencyGuard(failingStore, ["us-east-1"]);
+      const guard = createResidencyGuard(failingStore as any, ["us-east-1"]);
       const req = mockRequest({
         headers: { "x-region": "eu-west-1", "x-data-region": "us-east-1" },
       });

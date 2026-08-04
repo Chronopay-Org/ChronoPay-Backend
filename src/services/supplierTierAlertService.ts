@@ -254,8 +254,8 @@ export class SupplierTierAlertService {
         results.push(result);
       } catch (err) {
         logger.warn(
+          { err: err instanceof Error ? err.message : err },
           `[tier-alert] Failed to evaluate supplier ${supplierId}:`,
-          err instanceof Error ? err.message : err,
         );
       }
     }
@@ -325,8 +325,8 @@ export class SupplierTierAlertService {
       await handler(alert);
     } catch (err) {
       logger.warn(
+        { err: err instanceof Error ? err.message : err },
         `[tier-alert] Notification dispatch failed for alert ${alert.id}:`,
-        err instanceof Error ? err.message : err,
       );
     }
   }

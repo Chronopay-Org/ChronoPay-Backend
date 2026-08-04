@@ -46,7 +46,7 @@ describe("outbox relay worker", () => {
 
   beforeEach(() => {
     store = new InMemoryOutboxStore();
-    publishMock = jest.fn<Promise<void>, [OutboxEvent]>().mockResolvedValue(undefined);
+    publishMock = jest.fn<PublishFn>().mockResolvedValue(undefined) as unknown as jest.MockedFunction<PublishFn>;
     register.resetMetrics();
     jest.useFakeTimers().setSystemTime(BASE_TIME);
   });
