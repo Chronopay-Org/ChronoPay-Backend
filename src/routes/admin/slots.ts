@@ -35,7 +35,6 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import { requireAdminToken } from "../../middleware/authorization.js";
 import { requireAuthenticatedActor } from "../../middleware/auth.js";
 import {
   slotService,
