@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { logger as pinoLogger } from '../../utils/logger.js';
 import request from 'supertest';
 import express, { Request, Response } from 'express';
 import { auditMiddleware } from '../audit.js';
@@ -171,13 +172,13 @@ describe('auditLogger and validator integration', () => {
 
   it('should handle filesystem errors gracefully', async () => {
     appendFileSpy.mockRejectedValue(new Error('Disk full'));
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleSpy = jest.spyOn(pinoLogger, 'error').mockImplementation((() => {}) as any);
     
     const { AuditLogger } = await import('../../services/auditLogger.js');
     const logger = new AuditLogger();
     
     await expect(logger.log('ERROR_ACTION', {})).resolves.not.toThrow();
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to write to audit log:'), expect.any(Error));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(Error) }), expect.stringContaining('Failed to write to audit log:'));
     
     consoleSpy.mockRestore();
   });

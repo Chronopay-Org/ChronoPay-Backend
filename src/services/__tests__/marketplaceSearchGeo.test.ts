@@ -18,6 +18,7 @@ import { describe, it, expect, beforeEach, jest } from "@jest/globals";
 import { MarketplaceSearchService, MarketplaceSearchError } from "../marketplaceSearchService.js";
 import { MarketplaceSearchQuery, validateSearchQuery } from "../../validation/marketplaceSearchSchema.js";
 import { computeH3Cell, MAX_GEO_CANDIDATES } from "../geo/h3GeoIndex.js";
+import { logger } from "../../utils/logger.js";
 
 interface DbSlotRow {
   id: number;
@@ -436,7 +437,7 @@ describe("Marketplace Search — Geo Radius", () => {
           throw new Error("cache backend unavailable");
         },
       };
-      const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+      const warnSpy = jest.spyOn(logger, "warn").mockImplementation(() => {});
 
       const query = buildQuery({ geo: { lat: 1, lng: 1, radiusKm: 5 } });
       const result = await service.search(query, cache);
