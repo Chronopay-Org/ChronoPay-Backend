@@ -1,5 +1,6 @@
 import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
 import { FlagRolloutScheduler, createFlagRolloutScheduler } from "../flagRolloutScheduler.js";
+import { logger } from "../../utils/logger.js";
 import { RolloutScheduleRegistry } from "../../flags/rolloutScheduleRegistry.js";
 
 const T0 = "2026-01-01T00:00:00.000Z";
@@ -140,7 +141,7 @@ describe("FlagRolloutScheduler", () => {
 
     it("keeps ticking even if a single tick throws an Error", () => {
       const registry = makeRegistryWithOneStepDueAt(T0);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+      const errorSpy = jest.spyOn(logger, "warn").mockImplementation(() => undefined);
       jest.spyOn(registry, "advanceDue").mockImplementationOnce(() => {
         throw new Error("boom");
       });
@@ -149,7 +150,7 @@ describe("FlagRolloutScheduler", () => {
       scheduler.start();
       jest.advanceTimersByTime(0); // throws, caught internally
       expect(scheduler.getRunCount()).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith(expect.any(String), "boom");
+      expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({ err: "boom" }), expect.stringContaining("Advance tick failed"));
 
       jest.advanceTimersByTime(1000); // should still run normally
       expect(scheduler.getRunCount()).toBe(2);
@@ -160,7 +161,7 @@ describe("FlagRolloutScheduler", () => {
 
     it("logs a non-Error thrown value as-is", () => {
       const registry = makeRegistryWithOneStepDueAt(T0);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+      const errorSpy = jest.spyOn(logger, "warn").mockImplementation(() => undefined);
       jest.spyOn(registry, "advanceDue").mockImplementationOnce(() => {
         throw "not-an-error-instance";
       });
@@ -168,7 +169,7 @@ describe("FlagRolloutScheduler", () => {
 
       scheduler.start();
       jest.advanceTimersByTime(0);
-      expect(errorSpy).toHaveBeenCalledWith(expect.any(String), "not-an-error-instance");
+      expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({ err: "not-an-error-instance" }), expect.stringContaining("Advance tick failed"));
 
       scheduler.stop();
       errorSpy.mockRestore();
