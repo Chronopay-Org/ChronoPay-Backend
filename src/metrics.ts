@@ -743,6 +743,37 @@ export const treasuryBalance = createBudgetedGauge({
 });
 
 /**
+ * Gauge holding the current drain-severity rank (ok=0, warning=1, page=2,
+ * critical=3) for each tracked treasury asset/account.
+ */
+export const treasuryDrainSeverity = createBudgetedGauge({
+  name: "treasury_drain_severity",
+  help: "Current treasury drain severity rank per asset/account",
+  labels: ["asset_code", "asset_issuer"],
+  budget: 50,
+});
+
+/**
+ * Counter of consecutive treasury poll failures per tracked asset/account.
+ */
+export const treasuryPollFailures = createBudgetedCounter({
+  name: "treasury_poll_failures_total",
+  help: "Total consecutive treasury poll failures per asset/account",
+  labels: ["asset_code", "asset_issuer"],
+  budget: 50,
+});
+
+/**
+ * Counter of poll responses containing assets not in the known-assets config.
+ */
+export const treasuryUnknownAsset = createBudgetedCounter({
+  name: "treasury_unknown_asset_total",
+  help: "Total treasury poll responses with an unknown asset",
+  labels: ["asset_code"],
+  budget: 50,
+});
+
+/**
  * Counter incremented each time an operator PAUSES the scheduler
  * (freezes platform-wide booking-intent creation during an incident).
  */

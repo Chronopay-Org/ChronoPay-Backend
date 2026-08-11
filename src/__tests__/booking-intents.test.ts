@@ -31,7 +31,6 @@ describe("booking intents endpoints", () => {
     repo = new InMemoryBookingIntentRepository();
     app = express();
     app.use(express.json());
-    // @ts-expect-error - Auto-fixed by script
     app.use("/api/v1/booking-intents", createBookingIntentsRouter(repo));
   });
 

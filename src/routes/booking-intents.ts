@@ -23,20 +23,26 @@ import {
   parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
 import { isAppError } from "../errors/AppError.js";
-import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
-import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
+import {
+  InMemoryBookingIntentRepository,
+  type BookingIntentRepository,
+} from "../modules/booking-intents/booking-intent-repository.js";
+import { InMemorySlotRepository, type SlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
-import { FraudScorer, FraudReasonCode, getFraudReasonCode, getFraudMessage } from "../services/fraudScorer.js";
+import { FraudScorer } from "../services/fraudScorer.js";
+import { FraudReasonCode, getFraudReasonCode, getFraudMessage } from "../services/fraudReasonCodes.js";
 import { QuarantineStore } from "../services/quarantineStore.js";
 
-export function createBookingIntentsRouter() {
+export function createBookingIntentsRouter(
+  bookingIntentRepository: BookingIntentRepository = new InMemoryBookingIntentRepository(),
+  slotRepository: SlotRepository = new InMemorySlotRepository(),
+) {
   const router = Router();
 
   // ─── Repositories (replace with DB layer in production) ────────────────────
-  const bookingIntentRepository = new InMemoryBookingIntentRepository();
-  const slotRepository = new InMemorySlotRepository();
+  // Accept injected repositories for tests/DI; default to in-memory ones.
   const bookingIntentService = new BookingIntentService(bookingIntentRepository, slotRepository);
 
   function handleServiceError(error: unknown, res: Response): void {

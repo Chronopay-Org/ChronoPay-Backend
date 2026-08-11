@@ -1,10 +1,11 @@
 import rateLimit, {
   type Options,
   type RateLimitRequestHandler,
+  type Store,
 } from "express-rate-limit";
 import { type Request, type Response } from "express";
 import { configService } from "../config/config.service.js";
-import { rateLimitRedisStore } from "./rateLimitStore.js";
+import { createRateLimitStore } from "./rateLimitStore.js";
 import { createHash } from "node:crypto";
 import { fairQueueBurnRateTotal, fairQueueWaitTimeSeconds } from "../metrics.js";
 
@@ -113,8 +114,13 @@ export function createAuthAwareRateLimiter(
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     keyGenerator: generateRateLimitKey,
-    // @ts-expect-error - Auto-fixed by script
-    store: rateLimitRedisStore,
+    // Fresh store per limiter — express-rate-limit v8 rejects a store
+    // instance shared across multiple limiters (ERR_ERL_STORE_REUSE).
+    // The store shares one Redis connection under the hood. The cast is
+    // needed because the store implements the legacy runtime interface
+    // (incr/decrease/resetKey), which v8 still supports at runtime but no
+    // longer exposes in its public types.
+    store: createRateLimitStore() as unknown as Store,
     // Skip rate limiting in test environment to avoid flaky tests.
     // Also skip when a valid internal fair-queue bypass has been granted
     // (req.internalBypassActor is set by the fairQueueBypass middleware).

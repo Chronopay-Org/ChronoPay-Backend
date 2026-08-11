@@ -57,7 +57,7 @@
   "devDependencies": {
     "@cyclonedx/cyclonedx-npm": "^1.19.3",
     "@eslint/js": "^10.0.1",
-    "@jest/globals": "^30.3.0",
+    "@jest/globals": "^29.7.0",
     "@stryker-mutator/core": "^8.7.1",
     "@stryker-mutator/jest-runner": "^8.7.1",
     "@stryker-mutator/typescript-checker": "^8.7.1",

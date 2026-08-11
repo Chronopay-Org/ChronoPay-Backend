@@ -14,6 +14,8 @@
  * - Hot-reloadable policy via redactionPolicy.ts
  */
 
+import { isFieldRedacted, getPolicyFields } from "./redactionPolicy.js";
+
 /**
  * Sensitive field names that should be redacted
  * Includes common variations and case-insensitive matches
@@ -99,7 +101,7 @@ const DEFAULT_MASK_PATTERN = (value: string): string => {
  * Reads from the current hot-reloadable policy.
  */
 const isSensitiveField = (fieldName: string): boolean => {
-  return policyIsFieldRedacted(fieldName);
+  return isFieldRedacted(fieldName);
 };
 
 /**
@@ -192,7 +194,7 @@ export const wouldBeRedacted = (fieldName: string): boolean => {
  * from the current hot-reloadable policy.
  */
 export const getSensitiveFields = (): string[] => {
-  return policyGetPolicyFields();
+  return getPolicyFields();
 };
 
 /**

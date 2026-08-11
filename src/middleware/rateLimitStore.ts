@@ -79,8 +79,24 @@ export interface RateLimitStore extends ReturnType<typeof createRedisStore> {
   close?: () => Promise<void>;
 }
 
+/**
+ * Shared Redis client for all rate-limit store instances.
+ *
+ * express-rate-limit v8 forbids sharing a single *store instance* across
+ * multiple limiters (ERR_ERL_STORE_REUSE), so each limiter must get its own
+ * store object. The underlying Redis connection, however, can — and should —
+ * be shared to avoid one connection per route.
+ */
+let sharedRedisClient: Redis | undefined;
+function getSharedRedisClient(): Redis {
+  if (!sharedRedisClient) {
+    sharedRedisClient = createRedisClient();
+  }
+  return sharedRedisClient;
+}
+
 function createRedisStore() {
-  const client = createRedisClient();
+  const client = getSharedRedisClient();
 
   // Handle errors to prevent process crashes and hanging tests
   client.on('error', (err) => {
@@ -154,6 +170,22 @@ export function _createStore(env: string = process.env.NODE_ENV || 'development'
     return createNoopStore();
   }
   return createRedisStore();
+}
+
+/**
+ * Create a fresh rate-limit store instance.
+ *
+ * Each `rateLimit()` call must own its own store instance (express-rate-limit
+ * v8 throws ERR_ERL_STORE_REUSE if one store is shared across limiters).
+ * Production instances share a single Redis connection underneath; test
+ * instances are no-op in-memory stores.
+ *
+ * @internal - Exposed for rateLimiter.ts and tests.
+ */
+export function createRateLimitStore(
+  env: string = process.env.NODE_ENV || 'development',
+): RateLimitStore {
+  return _createStore(env);
 }
 
 let memoizedStore: RateLimitStore | undefined;

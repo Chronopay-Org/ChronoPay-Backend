@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import { Request, Response, NextFunction } from "express";
 import {
   validateIdempotencyKey,
@@ -140,8 +141,8 @@ describe("Header Validation Express Middleware", () => {
       }),
     };
     mockResponse = {
-      status: jest.fn().mockReturnThis(),
-      json: jest.fn().mockReturnThis(),
+      status: jest.fn().mockReturnThis() as any,
+      json: jest.fn().mockReturnThis() as any,
     };
     nextFunction = jest.fn();
   });

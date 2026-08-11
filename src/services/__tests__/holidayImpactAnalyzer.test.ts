@@ -1,3 +1,4 @@
+import { describe, it, expect, jest } from "@jest/globals";
 import {
   expandRRule,
   HolidayImpactAnalyzer,
@@ -10,7 +11,9 @@ import type { SupplierTimezoneContext } from "../../modules/slots/slot-repositor
 import { AuditLogger } from "../auditLogger.js";
 
 const JAN_1 = new Date(Date.UTC(2026, 0, 1, 10, 0, 0));
-const JAN_1_ISO = JAN_1.toISOString().replace(/[:.]/g, "").slice(0, 15);
+// rrule expects the compact YYYYMMDDTHHMMSS format in DTSTART — strip the
+// dashes too, otherwise rrule rejects the DTSTART value.
+const JAN_1_ISO = JAN_1.toISOString().replace(/[-:.]/g, "").slice(0, 15);
 
 const HOLIDAYS: RegionalHoliday[] = [
   {
@@ -57,7 +60,7 @@ const HOLIDAYS: RegionalHoliday[] = [
 
 function makeAuditLogger() {
   return {
-    log: jest.fn().mockResolvedValue(undefined),
+    log: (jest.fn() as any).mockResolvedValue(undefined),
   } as unknown as AuditLogger;
 }
 
@@ -92,7 +95,7 @@ describe("HolidayImpactAnalyzer.analyzeSync scoping to supplier region set", () 
   it("US supplier: weekly Thursdays in 2026 hits Thanksgiving once", () => {
     const analyzer = makeAnalyzer();
     const dtstart = new Date(Date.UTC(2026, 0, 1, 10, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=WEEKLY;COUNT=52;BYDAY=TH`;
 
     const supplier = makeSupplier({
@@ -121,7 +124,7 @@ describe("HolidayImpactAnalyzer.analyzeSync scoping to supplier region set", () 
   it("GB supplier: weekly Mondays in May 2026 hits Spring Bank Holiday", () => {
     const analyzer = makeAnalyzer();
     const dtstart = new Date(Date.UTC(2026, 4, 4, 9, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=WEEKLY;COUNT=5;BYDAY=MO`;
 
     const supplier = makeSupplier({
@@ -143,7 +146,7 @@ describe("HolidayImpactAnalyzer.analyzeSync scoping to supplier region set", () 
   it("scope narrows when explicit scopedRegionCodes restricts supplier regions", () => {
     const analyzer = makeAnalyzer();
     const dtstart = new Date(Date.UTC(2026, 0, 1, 10, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=WEEKLY;COUNT=12;BYDAY=SA`;
 
     const supplier = makeSupplier({
@@ -173,7 +176,7 @@ describe("HolidayImpactAnalyzer.analyzeSync scoping to supplier region set", () 
   it("Valentine's Day half_day triggers adjust_hours hint, not suppress", () => {
     const analyzer = makeAnalyzer();
     const dtstart = new Date(Date.UTC(2026, 1, 1, 14, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=WEEKLY;COUNT=10;BYDAY=SA`;
 
     const supplier = makeSupplier({
@@ -196,7 +199,7 @@ describe("HolidayImpactAnalyzer.analyzeSync scoping to supplier region set", () 
   it("bank_holiday observanceType triggers suppress hint", () => {
     const analyzer = makeAnalyzer();
     const dtstart = new Date(Date.UTC(2026, 0, 1, 10, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=MONTHLY;BYMONTHDAY=1;COUNT=12`;
 
     const supplier = makeSupplier({ s: ["US-NY"] });
@@ -218,7 +221,7 @@ describe("HolidayImpactAnalyzer.analyzeSync scoping to supplier region set", () 
   it("no supplier context and no explicit scope: scans all registered regions", () => {
     const analyzer = makeAnalyzer();
     const dtstart = new Date(Date.UTC(2026, 0, 1, 10, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=YEARLY;COUNT=10`;
 
     const result = analyzer.analyzeSync({
@@ -233,7 +236,7 @@ describe("HolidayImpactAnalyzer.analyzeSync scoping to supplier region set", () 
   it("summary string reflects counts when affected > 0", () => {
     const analyzer = makeAnalyzer();
     const dtstart = new Date(Date.UTC(2026, 0, 1, 10, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=MONTHLY;BYMONTHDAY=4;COUNT=12`;
 
     const supplier = makeSupplier({ s: ["US-CA"] });
@@ -253,7 +256,7 @@ describe("HolidayImpactAnalyzer.analyzeSync scoping to supplier region set", () 
   it("summary string reports clear when no holidays intersect", () => {
     const analyzer = makeAnalyzer();
     const dtstart = new Date(Date.UTC(2026, 0, 5, 10, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=WEEKLY;COUNT=4;BYDAY=MO`;
 
     const supplier = makeSupplier({ s: ["US-CA"] });
@@ -275,7 +278,7 @@ describe("HolidayImpactAnalyzer.analyze async path audits", () => {
     const analyzer = makeAnalyzer(logger);
 
     const dtstart = new Date(Date.UTC(2026, 0, 1, 10, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=WEEKLY;COUNT=4;BYDAY=TH`;
 
     const result = await analyzer.analyze({
@@ -302,7 +305,7 @@ describe("grouping helpers", () => {
   it("groupImpactsByHoliday groups impacts under holiday name keys", () => {
     const analyzer = makeAnalyzer();
     const dtstart = new Date(Date.UTC(2026, 0, 1, 10, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=MONTHLY;BYMONTHDAY=1;COUNT=24`;
 
     const supplier = makeSupplier({ s: ["US-NY"] });
@@ -324,7 +327,7 @@ describe("grouping helpers", () => {
   it("groupImpactsByDate groups impacts under date keys", () => {
     const analyzer = makeAnalyzer();
     const dtstart = new Date(Date.UTC(2026, 0, 1, 10, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=WEEKLY;COUNT=52;BYDAY=TH`;
 
     const supplier = makeSupplier({ s: ["US-NY"] });
@@ -352,7 +355,7 @@ describe("region codes extracted correctly for store vs supplier-wide", () => {
       west: ["US-CA", "US-OR"],
     });
     const dtstart = new Date(Date.UTC(2026, 0, 1, 10, 0, 0));
-    const dtstartStr = dtstart.toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const dtstartStr = dtstart.toISOString().replace(/[-:.]/g, "").slice(0, 15);
     const rrule = `DTSTART:${dtstartStr}Z\nRRULE:FREQ=WEEKLY;COUNT=2;BYDAY=MO`;
 
     const eastOnly = analyzer.analyzeSync({
