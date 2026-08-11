@@ -133,12 +133,13 @@ export function createAuthAwareRateLimiter(
 
   const limiter = rateLimit(options);
 
-  return (req: Request, res: Response, next: import("express").NextFunction) => {
+  const middleware = (req: Request, res: Response, next: import("express").NextFunction) => {
     const tenantId = generateRateLimitKey(req);
     fairQueueBurnRateTotal.labels(tenantId).inc();
     fairQueueWaitTimeSeconds.labels(tenantId).observe(0);
     return limiter(req, res, next);
   };
+  return middleware as unknown as RateLimitRequestHandler;
 }
 
 // Default export: traditional IP-only limiter (not currently used in app)

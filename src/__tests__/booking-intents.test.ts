@@ -162,6 +162,7 @@ describe("concurrent booking-intent creates — one active per slot", () => {
         const intent = await service.createIntent(req.body, {
           userId: req.headers["x-user-id"] as string ?? userId,
           role: "customer",
+          claims: {} as any,
         });
         res.status(201).json({ success: true, intent });
       } catch (err: any) {
@@ -211,7 +212,7 @@ describe("concurrent booking-intent creates — one active per slot", () => {
   it("allows a new intent for a slot once the prior intent is no longer active", async () => {
     const { intentRepo, service } = makeServiceApp();
 
-    const actor = { userId: "user1", role: "customer" as const };
+    const actor = { userId: "user1", role: "customer" as const, claims: {} as any };
 
     // Create the first intent and confirm it (terminal state).
     const first = await service.createIntent({ slotId: ALICE_SLOT_ID }, actor);

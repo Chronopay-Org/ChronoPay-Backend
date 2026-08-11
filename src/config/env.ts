@@ -260,7 +260,7 @@ function parseOptionalUrl(rawValue: string | undefined, key: string, issues: str
   }
 }
 
-function parseReplicaId(rawValue: string | undefined): string {
+function _parseReplicaId(rawValue: string | undefined): string {
   if (rawValue === undefined || rawValue.trim().length === 0) {
     // Fall back to the OS hostname so each pod/container gets a distinct ID
     // without requiring explicit config.
@@ -273,7 +273,7 @@ function parseReplicaId(rawValue: string | undefined): string {
   return rawValue.trim();
 }
 
-function parseFloat01(rawValue: string | undefined, key: string, defaultValue: number, issues: string[]): number {
+function _parseFloat01(rawValue: string | undefined, key: string, defaultValue: number, issues: string[]): number {
   if (rawValue === undefined) return defaultValue;
   const value = rawValue.trim();
   if (value.length === 0) {

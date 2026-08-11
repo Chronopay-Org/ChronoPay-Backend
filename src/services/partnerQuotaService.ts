@@ -217,7 +217,7 @@ export class SqlQuotaStore implements QuotaStore {
     dailyResetAt: Date,
     monthlyResetAt: Date,
     approachingNotified: boolean,
-    now?: Date,
+    _now?: Date,
   ): Promise<void> {
     await this.pool.query(
       `UPDATE partner_token_quotas SET

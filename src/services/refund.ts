@@ -15,7 +15,7 @@ import {
 } from "../types/checkout.js";
 import { defaultAuditLogger } from "./auditLogger.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
-import { logger } from "../utils/logger.js";
+
 
 
 let _refundRepo: PgRefundRepository = defaultRefundRepository;

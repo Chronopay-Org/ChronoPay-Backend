@@ -13,7 +13,7 @@
  * - Publisher error surfaced via 'error' event
  */
 
-import { describe, it, expect, beforeEach, jest } from "@jest/globals";
+import { describe, it, expect, jest } from "@jest/globals";
 import EventEmitter from "events";
 import {
   RevocationService,

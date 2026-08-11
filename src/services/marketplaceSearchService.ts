@@ -345,10 +345,9 @@ export class MarketplaceSearchService {
       );
       conditions.push(`h3_cell_res7 = ANY($${paramCount++}::text[])`);
       params.push(candidateCells);
+    }
+
     // Suppress slots that are currently under an active refundable hold.
-    // A hold is active when holds.released_at IS NULL and holds.expires_at > NOW().
-    // We use NOT EXISTS to keep the main query efficient (avoids a JOIN that
-    // would multiply rows when a slot has multiple historical hold records).
     if (query.suppressHeld !== false) {
       conditions.push(
         `NOT EXISTS (
