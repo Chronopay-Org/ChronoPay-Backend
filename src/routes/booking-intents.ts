@@ -27,8 +27,19 @@ import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
-import { FraudScorer, FraudReasonCode, getFraudReasonCode, getFraudMessage } from "../services/fraudScorer.js";
+import { FraudScorer } from "../services/fraudScorer.js";
+import {
+  FraudReasonCode,
+  getFraudMessage,
+  getFraudReasonCode,
+} from "../services/fraudReasonCodes.js";
 import { QuarantineStore } from "../services/quarantineStore.js";
+import {
+  AnomalyScorer,
+  anomalyReviewQueue,
+  assessBookingIntentAnomaly,
+  type AnomalyAssessment,
+} from "../services/anomalyScoring.js";
 
 export function createBookingIntentsRouter() {
   const router = Router();
@@ -65,6 +76,47 @@ export function createBookingIntentsRouter() {
   }
 
   const fraudScorer = new FraudScorer();
+  const anomalyScorer = new AnomalyScorer();
+
+  function getActorIp(req: Request): string {
+    return (
+      req.ip?.replace("::ffff:", "") ||
+      req.socket?.remoteAddress?.replace("::ffff:", "") ||
+      ""
+    );
+  }
+
+  /**
+   * Compute the anomaly assessment for an intent creation request. Delegates
+   * to the shared helper so this handler and the app-level legacy handler
+   * stay behaviorally identical.
+   */
+  async function assessAnomaly(req: Request): Promise<AnomalyAssessment> {
+    return assessBookingIntentAnomaly(
+      anomalyScorer,
+      bookingIntentRepository,
+      {
+        customerId: req.auth?.userId ?? "anonymous",
+        ipAddress: getActorIp(req),
+        deviceFingerprint:
+          typeof req.headers["x-device-fingerprint"] === "string"
+            ? (req.headers["x-device-fingerprint"] as string)
+            : undefined,
+      },
+      logger,
+    );
+  }
+
+  function recordFlaggedIntents(
+    anomaly: AnomalyAssessment,
+    customerId: string,
+    createdIntents: { id: string }[],
+  ): void {
+    if (!anomaly.flagged) return;
+    for (const intent of createdIntents) {
+      anomalyReviewQueue.enqueue(intent.id, customerId, anomaly);
+    }
+  }
 
   router.post(
     "/",
@@ -135,13 +187,21 @@ export function createBookingIntentsRouter() {
           }
         }
         if ("rrule" in input) {
-          const report = await bookingIntentService.createRecurringIntents(input, req.auth!);
+          const anomaly = await assessAnomaly(req);
+          const report = await bookingIntentService.createRecurringIntents(
+            input,
+            req.auth!,
+          );
+          recordFlaggedIntents(anomaly, req.auth!.userId, report.successes);
           res.status(201).json({
             success: true,
             report,
           });
         } else {
+          const anomaly = await assessAnomaly(req);
+          input.anomaly = anomaly;
           const intent = await bookingIntentService.createIntent(input, req.auth!);
+          recordFlaggedIntents(anomaly, intent.customerId, [intent]);
           res.status(201).json({
             success: true,
             intent,

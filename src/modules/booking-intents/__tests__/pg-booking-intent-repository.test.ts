@@ -68,10 +68,68 @@ describe("PgBookingIntentRepository", () => {
           intentData.status,
           intentData.note,
           new Date(intentData.createdAt),
+          null,
+          false,
+          null,
         ]
       );
 
       expect(result).toEqual(expectedRecord);
+    });
+
+    it("persists anomaly scoring fields when provided", async () => {
+      const signals = {
+        velocity: 1,
+        fingerprintRisk: 0.25,
+        geoHopDistance: 0,
+        buyerAge: 1,
+      };
+      const intentData = {
+        slotId: "slot-123",
+        professional: "prof-456",
+        customerId: "cust-789",
+        startTime: 1000,
+        endTime: 2000,
+        status: "pending" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        anomalyScore: 0.55,
+        anomalyFlagged: false,
+        anomalySignals: signals,
+      };
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ ...dbRow, anomaly_score: 0.55, anomaly_flagged: false, anomaly_signals: signals }],
+        rowCount: 1,
+      } as any);
+
+      const result = await repository.create(intentData);
+
+      const args = mockQuery.mock.calls[0][1] as any[];
+      expect(args.slice(8)).toEqual([0.55, false, JSON.stringify(signals)]);
+      expect(result.anomalyScore).toBe(0.55);
+      expect(result.anomalyFlagged).toBe(false);
+      expect(result.anomalySignals).toEqual(signals);
+    });
+
+    it("parses anomaly signals returned as JSON strings", async () => {
+      const signals = { velocity: 0, fingerprintRisk: 0, geoHopDistance: 1, buyerAge: 0 };
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            ...dbRow,
+            anomaly_score: 0.3,
+            anomaly_flagged: true,
+            anomaly_signals: JSON.stringify(signals),
+          },
+        ],
+        rowCount: 1,
+      } as any);
+
+      const result = await repository.findById("intent-uuid");
+
+      expect(result?.anomalyScore).toBe(0.3);
+      expect(result?.anomalyFlagged).toBe(true);
+      expect(result?.anomalySignals).toEqual(signals);
     });
 
     it("throws ConflictError when postgres reports a unique_violation (23505)", async () => {
@@ -210,6 +268,28 @@ describe("PgBookingIntentRepository", () => {
       );
 
       expect(result).toEqual(expectedRecord);
+    });
+  });
+
+  describe("listByCustomer", () => {
+    it("returns all intents for the customer ordered by creation time", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [dbRow], rowCount: 1 } as any);
+
+      const result = await repository.listByCustomer("cust-789");
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining("SELECT * FROM booking_intents WHERE customer_id = $1"),
+        ["cust-789"]
+      );
+      expect(result).toEqual([expectedRecord]);
+    });
+
+    it("returns an empty array when the customer has no intents", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 } as any);
+
+      const result = await repository.listByCustomer("cust-nobody");
+
+      expect(result).toEqual([]);
     });
   });
 });

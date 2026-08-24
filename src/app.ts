@@ -73,6 +73,11 @@ import {
 import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
 import { InMemoryBookingIntentRepository } from "./modules/booking-intents/booking-intent-repository.js";
 import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
+import {
+  AnomalyScorer,
+  anomalyReviewQueue,
+  assessBookingIntentAnomaly,
+} from "./services/anomalyScoring.js";
 import { ConflictPreviewService } from "./services/conflictPreviewService.js";
 import { RecurrenceError } from "./services/recurrenceService.js";
 import { ConflictPreviewBodySchema } from "./middleware/schemas.js";
@@ -616,6 +621,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   const bookingIntentRepo = new InMemoryBookingIntentRepository();
   const bookingIntentService =
     options.bookingIntentService || new BookingIntentService(bookingIntentRepo, slotRepo);
+  const anomalyScorer = new AnomalyScorer();
 
   app.post(
     "/api/v1/booking-intents",
@@ -629,8 +635,26 @@ export function createApp(options: AppFactoryOptions = {}) {
         if (note === " ")
           return res.status(400).json({ success: false, error: "Note cannot be empty." });
 
+        // Issue #596 — compute the anomaly score for every created intent and
+        // persist it alongside the record. Flagged intents are pushed to the
+        // admin review queue (GET /api/v1/admin/anomaly-queue).
+        const anomaly = await assessBookingIntentAnomaly(anomalyScorer, bookingIntentRepo, {
+          customerId: req.auth?.userId ?? "anonymous",
+          ipAddress: String(req.ip ?? req.socket?.remoteAddress ?? "").replace("::ffff:", ""),
+          deviceFingerprint:
+            typeof req.headers["x-device-fingerprint"] === "string"
+              ? req.headers["x-device-fingerprint"]
+              : undefined,
+        });
+
         const actor = req.auth;
-        const bookingIntent = bookingIntentService.createIntent({ slotId, note }, actor);
+        const bookingIntent = await bookingIntentService.createIntent(
+          { slotId, note, anomaly },
+          actor,
+        );
+        if (anomaly.flagged) {
+          anomalyReviewQueue.enqueue(bookingIntent.id, bookingIntent.customerId, anomaly);
+        }
         res.status(201).json({ success: true, bookingIntent });
       } catch (error: any) {
         const status = error.status || 400;

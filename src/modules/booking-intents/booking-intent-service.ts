@@ -25,6 +25,7 @@ import {
   createEmptyHoldFeeRegistry,
   HoldFeePolicyRegistry,
 } from "../../services/holdFeePolicy.js";
+import type { AnomalyAssessment } from "../../services/anomalyScoring.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -33,6 +34,8 @@ export interface CreateBookingIntentInput {
   basePrice?: number;
   bookingType?: BookingType;
   holdDeadlineMs?: number;
+  /** Pre-computed anomaly assessment attached by the route layer. */
+  anomaly?: AnomalyAssessment;
 }
 
 export interface CreateRecurringBookingInput {
@@ -232,6 +235,9 @@ export class BookingIntentService {
       pricingSnapshot,
       cancellationPolicySnapshot,
       holdFeePolicySnapshot,
+      anomalyScore: input.anomaly?.score,
+      anomalyFlagged: input.anomaly?.flagged,
+      anomalySignals: input.anomaly?.signals,
     });
 
     this.schedulingService.reserveSlot(input.slotId);
@@ -319,6 +325,9 @@ export class BookingIntentService {
         createdAt: this.now(),
         cancellationPolicySnapshot,
         holdFeePolicySnapshot,
+        anomalyScore: input.anomaly?.score,
+        anomalyFlagged: input.anomaly?.flagged,
+        anomalySignals: input.anomaly?.signals,
       });
 
       // Reserve slot
