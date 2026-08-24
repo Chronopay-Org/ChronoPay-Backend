@@ -9,12 +9,12 @@ inspect likely-fraudulent bursts.
 
 The score combines four normalized signals with fixed weights:
 
-| Signal            | Weight | Measures                                                                    |
-| ----------------- | ------ | --------------------------------------------------------------------------- |
-| `velocity`        | 0.35   | Intents the customer created inside a recent time window (burst behavior).   |
-| `fingerprintRisk` | 0.20   | Unseen device fingerprint (mild) or a fingerprint shared across customers (strong sockpuppet signal). |
+| Signal            | Weight | Measures                                                                                                                      |
+| ----------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `velocity`        | 0.35   | Intents the customer created inside a recent time window (burst behavior).                                                    |
+| `fingerprintRisk` | 0.20   | Unseen device fingerprint (mild) or a fingerprint shared across customers (strong sockpuppet signal).                         |
 | `geoHopDistance`  | 0.30   | Great-circle distance between the customer's last observed location and the current one ("impossible travel" scores highest). |
-| `buyerAge`        | 0.15   | Account age derived from account creation or earliest booking intent; accounts younger than a day score highest. |
+| `buyerAge`        | 0.15   | Account age derived from account creation or earliest booking intent; accounts younger than a day score highest.              |
 
 Every signal is normalized to [0, 1] and defaults to **0 when its input is
 missing** — absent evidence must never inflate risk.
@@ -35,10 +35,10 @@ Both the deployed handler in `app.ts` and the modular router
 
 ## Environment configuration
 
-| Variable                       | Default              | Meaning                                    |
-| ------------------------------ | -------------------- | ------------------------------------------ |
-| `ANOMALY_FLAG_THRESHOLD`       | `0.7`                | Score above which an intent is flagged.    |
-| `ANOMALY_VELOCITY_WINDOW_MS`   | `300000` (5 minutes) | Window for counting recent intents per customer. |
+| Variable                       | Default              | Meaning                                                            |
+| ------------------------------ | -------------------- | ------------------------------------------------------------------ |
+| `ANOMALY_FLAG_THRESHOLD`       | `0.7`                | Score above which an intent is flagged.                            |
+| `ANOMALY_VELOCITY_WINDOW_MS`   | `300000` (5 minutes) | Window for counting recent intents per customer.                   |
 | `ANOMALY_VELOCITY_BURST_COUNT` | `4`                  | Intent count inside the window that saturates the velocity signal. |
 
 ## Privacy

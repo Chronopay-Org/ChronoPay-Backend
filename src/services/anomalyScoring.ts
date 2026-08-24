@@ -119,9 +119,10 @@ export function computeVelocitySignal(
   recentIntentCount: number | undefined,
   burstCount: number,
 ): number {
-  const count = typeof recentIntentCount === "number" && Number.isFinite(recentIntentCount)
-    ? Math.max(0, Math.floor(recentIntentCount))
-    : 0;
+  const count =
+    typeof recentIntentCount === "number" && Number.isFinite(recentIntentCount)
+      ? Math.max(0, Math.floor(recentIntentCount))
+      : 0;
   if (count <= 1) return 0;
   return Math.min((count - 1) / burstCount, 1);
 }
@@ -132,10 +133,7 @@ export function computeBuyerAgeSignal(
   nowMs: number,
 ): { signal: number; reason?: string } {
   let sinceMs: number | undefined;
-  if (
-    typeof input.customerSinceMs === "number" &&
-    Number.isFinite(input.customerSinceMs)
-  ) {
+  if (typeof input.customerSinceMs === "number" && Number.isFinite(input.customerSinceMs)) {
     sinceMs = input.customerSinceMs;
   } else if (input.firstIntentAt !== undefined) {
     const parsed =
@@ -188,13 +186,13 @@ export class AnomalyScorer {
       options.flagThreshold ??
       (() => {
         const raw = Number(process.env.ANOMALY_FLAG_THRESHOLD);
-        return Number.isFinite(raw) && raw >= 0 && raw <= 1
-          ? raw
-          : DEFAULT_FLAG_THRESHOLD;
+        return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : DEFAULT_FLAG_THRESHOLD;
       })();
     this.weights = { ...DEFAULT_WEIGHTS, ...options.weights };
-    this.maxTrackedCustomers = options.maxTrackedCustomers ?? 10_000;
-    this.maxTrackedFingerprints = options.maxTrackedFingerprints ?? 20_000;
+    // Index capacities are clamped to >= 1: an unbounded or zero-capacity
+    // index would silently defeat the FIFO bound (memory-exhaustion guard).
+    this.maxTrackedCustomers = Math.max(1, options.maxTrackedCustomers ?? 10_000);
+    this.maxTrackedFingerprints = Math.max(1, options.maxTrackedFingerprints ?? 20_000);
     this.resolveLocation = options.resolveLocation ?? pseudoLocationResolver;
     this.nowMs = options.nowMs ?? Date.now;
   }
@@ -221,10 +219,7 @@ export class AnomalyScorer {
     const reasons: string[] = [];
     const now = this.nowMs();
 
-    const velocity = computeVelocitySignal(
-      input.recentIntentCount,
-      this.velocityBurstCount,
-    );
+    const velocity = computeVelocitySignal(input.recentIntentCount, this.velocityBurstCount);
     if (velocity > 0) {
       reasons.push(`velocity_burst:${input.recentIntentCount}`);
     }
@@ -356,11 +351,7 @@ class AnomalyReviewQueue {
   private readonly items = new Map<string, AnomalyReviewItem>();
   private sequence = 0;
 
-  enqueue(
-    intentId: string,
-    customerId: string,
-    assessment: AnomalyAssessment,
-  ): AnomalyReviewItem {
+  enqueue(intentId: string, customerId: string, assessment: AnomalyAssessment): AnomalyReviewItem {
     const item: AnomalyReviewItem = {
       id: `anomaly-${Date.now()}-${++this.sequence}`,
       intentId,
@@ -428,9 +419,7 @@ export async function assessBookingIntentAnomaly(
   let firstIntentAt: string | undefined;
 
   try {
-    const entries = historyProvider
-      ? await historyProvider.listByCustomer(context.customerId)
-      : [];
+    const entries = historyProvider ? await historyProvider.listByCustomer(context.customerId) : [];
     if (entries && entries.length > 0) {
       const windowMs = scorer.getVelocityWindowMs();
       const nowMs = scorer.getNowMs();

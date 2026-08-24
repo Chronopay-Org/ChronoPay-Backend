@@ -74,17 +74,13 @@ describe("Anomaly review queue integration", () => {
     });
 
     it("forbids non-admin actors", async () => {
-      const res = await request(app)
-        .get("/api/v1/admin/anomaly-queue")
-        .set(customerHeaders);
+      const res = await request(app).get("/api/v1/admin/anomaly-queue").set(customerHeaders);
       expect(res.status).toBe(403);
       expect(res.body.success).toBe(false);
     });
 
     it("returns an empty queue when nothing was flagged", async () => {
-      const res = await request(app)
-        .get("/api/v1/admin/anomaly-queue")
-        .set(adminHeaders);
+      const res = await request(app).get("/api/v1/admin/anomaly-queue").set(adminHeaders);
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ success: true, items: [] });
     });
@@ -102,9 +98,7 @@ describe("Anomaly review queue integration", () => {
       expect(intent.anomalyScore).toBeCloseTo(0.05, 10);
       expect(intent.anomalySignals).toMatchObject({ fingerprintRisk: 0.25 });
 
-      const listed = await request(app)
-        .get("/api/v1/admin/anomaly-queue")
-        .set(adminHeaders);
+      const listed = await request(app).get("/api/v1/admin/anomaly-queue").set(adminHeaders);
 
       expect(listed.status).toBe(200);
       const items = listed.body.items;
@@ -138,9 +132,7 @@ describe("Anomaly review queue integration", () => {
       expect(created.body.bookingIntent.anomalyFlagged).toBe(false);
       expect(created.body.bookingIntent.anomalyScore).toBe(0);
 
-      const listed = await request(app)
-        .get("/api/v1/admin/anomaly-queue")
-        .set(adminHeaders);
+      const listed = await request(app).get("/api/v1/admin/anomaly-queue").set(adminHeaders);
 
       expect(listed.body.items).toHaveLength(0);
     });
@@ -155,9 +147,7 @@ describe("Anomaly review queue integration", () => {
       expect(created.status).toBe(201);
       expect(created.body.intent.anomalyFlagged).toBe(true);
 
-      const listed = await request(app)
-        .get("/api/v1/admin/anomaly-queue")
-        .set(adminHeaders);
+      const listed = await request(app).get("/api/v1/admin/anomaly-queue").set(adminHeaders);
 
       expect(listed.body.items).toHaveLength(1);
       expect(listed.body.items[0].intentId).toBe(created.body.intent.id);

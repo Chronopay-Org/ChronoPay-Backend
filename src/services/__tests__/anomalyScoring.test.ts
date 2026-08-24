@@ -39,10 +39,7 @@ describe("computeBuyerAgeSignal", () => {
   });
 
   it("yields max risk under 1 day (issue edge case)", () => {
-    const result = computeBuyerAgeSignal(
-      { customerSinceMs: daysAgo(0.5) },
-      FIXED_NOW,
-    );
+    const result = computeBuyerAgeSignal({ customerSinceMs: daysAgo(0.5) }, FIXED_NOW);
     expect(result.signal).toBe(1);
     expect(result.reason).toBe("account_age_lt_1d");
   });
@@ -178,26 +175,38 @@ describe("AnomalyScorer.evaluate", () => {
 
   it("honours a shared fingerprint across customers as a strong signal", () => {
     const scorer = makeScorer();
-    expect(scorer.evaluate({ customerId: "a", deviceFingerprint: "fp" }).signals.fingerprintRisk).toBe(0.25);
-    expect(scorer.evaluate({ customerId: "b", deviceFingerprint: "fp" }).signals.fingerprintRisk).toBe(1);
-    expect(scorer.evaluate({ customerId: "a", deviceFingerprint: "fp" }).signals.fingerprintRisk).toBe(1);
+    expect(
+      scorer.evaluate({ customerId: "a", deviceFingerprint: "fp" }).signals.fingerprintRisk,
+    ).toBe(0.25);
+    expect(
+      scorer.evaluate({ customerId: "b", deviceFingerprint: "fp" }).signals.fingerprintRisk,
+    ).toBe(1);
+    expect(
+      scorer.evaluate({ customerId: "a", deviceFingerprint: "fp" }).signals.fingerprintRisk,
+    ).toBe(1);
   });
 
   it("treats a known single-customer fingerprint as benign on repeat use", () => {
     const scorer = makeScorer();
     scorer.evaluate({ customerId: "a", deviceFingerprint: "fp" });
-    expect(scorer.evaluate({ customerId: "a", deviceFingerprint: "fp" }).signals.fingerprintRisk).toBe(0);
+    expect(
+      scorer.evaluate({ customerId: "a", deviceFingerprint: "fp" }).signals.fingerprintRisk,
+    ).toBe(0);
   });
 
   it("ignores blank fingerprints and IPs", () => {
     const scorer = makeScorer();
-    expect(scorer.evaluate({ customerId: "c", deviceFingerprint: "   " }).signals.fingerprintRisk).toBe(0);
+    expect(
+      scorer.evaluate({ customerId: "c", deviceFingerprint: "   " }).signals.fingerprintRisk,
+    ).toBe(0);
     expect(scorer.evaluate({ customerId: "c", ipAddress: "   " }).signals.geoHopDistance).toBe(0);
   });
 
   it("degrades to 0 when the resolver cannot locate an IP", () => {
     const scorer = makeScorer({ resolveLocation: () => undefined });
-    expect(scorer.evaluate({ customerId: "c", ipAddress: "1.2.3.4" }).signals.geoHopDistance).toBe(0);
+    expect(scorer.evaluate({ customerId: "c", ipAddress: "1.2.3.4" }).signals.geoHopDistance).toBe(
+      0,
+    );
   });
 
   it("flags extreme geo hops between consecutive requests (issue edge case)", () => {
@@ -266,24 +275,42 @@ describe("AnomalyScorer.evaluate", () => {
     scorer.evaluate({ customerId: "a", deviceFingerprint: "fp-1" });
     // fp-2 evicts fp-1's entry.
     scorer.evaluate({ customerId: "b", deviceFingerprint: "fp-2" });
-    expect(scorer.evaluate({ customerId: "b", deviceFingerprint: "fp-1" }).signals.fingerprintRisk).toBe(
-      0.25,
-    );
+    expect(
+      scorer.evaluate({ customerId: "b", deviceFingerprint: "fp-1" }).signals.fingerprintRisk,
+    ).toBe(0.25);
+  });
+
+  it("clamps non-positive index capacities to the minimum of one entry", () => {
+    const scorer = makeScorer({ maxTrackedFingerprints: 0 });
+    expect(
+      scorer.evaluate({ customerId: "a", deviceFingerprint: "fp-1" }).signals.fingerprintRisk,
+    ).toBe(0.25);
+    // The retained slot keeps customer a's fingerprint, so reuse by another
+    // customer is still detected as sharing.
+    expect(
+      scorer.evaluate({ customerId: "b", deviceFingerprint: "fp-1" }).signals.fingerprintRisk,
+    ).toBe(1);
   });
 
   it("evicts oldest tracked customer locations beyond the cap", () => {
     const scorer = makeScorer({ maxTrackedCustomers: 1 });
     scorer.evaluate({ customerId: "a", ipAddress: "home" });
     scorer.evaluate({ customerId: "b", ipAddress: "home" }); // evicts a
-    expect(scorer.evaluate({ customerId: "a", ipAddress: "antipode" }).signals.geoHopDistance).toBe(0);
+    expect(scorer.evaluate({ customerId: "a", ipAddress: "antipode" }).signals.geoHopDistance).toBe(
+      0,
+    );
   });
 
   it("_reset clears in-process state", () => {
     const scorer = makeScorer();
     scorer.evaluate({ customerId: "a", deviceFingerprint: "fp", ipAddress: "home" });
     scorer._reset();
-    expect(scorer.evaluate({ customerId: "b", deviceFingerprint: "fp" }).signals.fingerprintRisk).toBe(0.25);
-    expect(scorer.evaluate({ customerId: "a", ipAddress: "antipode" }).signals.geoHopDistance).toBe(0);
+    expect(
+      scorer.evaluate({ customerId: "b", deviceFingerprint: "fp" }).signals.fingerprintRisk,
+    ).toBe(0.25);
+    expect(scorer.evaluate({ customerId: "a", ipAddress: "antipode" }).signals.geoHopDistance).toBe(
+      0,
+    );
   });
 });
 
@@ -327,6 +354,15 @@ describe("assessBookingIntentAnomaly", () => {
     expect(assessment.score).toBe(0);
   });
 
+  it("accepts an absent history provider (all history signals degrade to 0)", async () => {
+    const assessment = await assessBookingIntentAnomaly(baseScorer(), undefined, {
+      customerId: "cust-1",
+    });
+    expect(assessment.score).toBe(0);
+    expect(assessment.signals.velocity).toBe(0);
+    expect(assessment.signals.buyerAge).toBe(0);
+  });
+
   it("degrades to a history-free assessment and logs when lookups fail", async () => {
     const warnings: unknown[] = [];
     const failingProvider = {
@@ -344,7 +380,9 @@ describe("assessBookingIntentAnomaly", () => {
 
     expect(assessment.score).toBe(0);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatchObject({ msg: "Anomaly history lookup failed; scoring without history" });
+    expect(warnings[0]).toMatchObject({
+      msg: "Anomaly history lookup failed; scoring without history",
+    });
   });
 });
 
