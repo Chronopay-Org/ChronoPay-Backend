@@ -16,6 +16,7 @@ import {
 
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import { anomalyReviewQueue } from "../services/anomalyScoring.js";
 import {
   CancellationReversalService,
   CancellationReversalCurrencyMismatchError,
@@ -627,6 +628,16 @@ router.post(
  */
 router.get("/fraud/hitl/queue", requireAuthenticatedActor(["admin"]), (req: Request, res: Response) => {
   res.json({ success: true, items: fraudReviewQueue.getPendingItems() });
+});
+
+/**
+ * @route GET /api/v1/admin/anomaly-queue
+ * @desc List booking-intents flagged by anomaly scoring (score above the flag
+ *       threshold). Items include the per-signal breakdown and reasons.
+ * @access Private (admin role required)
+ */
+router.get("/anomaly-queue", requireAuthenticatedActor(["admin"]), (_req: Request, res: Response) => {
+  return res.json({ success: true, items: anomalyReviewQueue.listAll() });
 });
 
 /**

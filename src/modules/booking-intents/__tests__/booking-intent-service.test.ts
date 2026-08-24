@@ -59,6 +59,47 @@ describe("BookingIntentService", () => {
       expect(mockRepo.create).toHaveBeenCalled();
     });
 
+    it("persists anomaly assessment fields when provided", async () => {
+      mockSlotRepo.findById.mockReturnValue(slot);
+      mockRepo.findBySlotIdAndCustomer.mockReturnValue(undefined);
+      mockRepo.findBySlotId.mockReturnValue(undefined);
+      mockRepo.create.mockResolvedValue({ id: "intent-1" } as any);
+
+      const signals = { velocity: 1, fingerprintRisk: 0, geoHopDistance: 1, buyerAge: 0 };
+      await service.createIntent(
+        {
+          slotId: "slot-1",
+          anomaly: { score: 0.8, flagged: true, reasons: ["velocity_burst:5"], signals },
+        },
+        actor,
+      );
+
+      expect(mockRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          anomalyScore: 0.8,
+          anomalyFlagged: true,
+          anomalySignals: signals,
+        }),
+      );
+    });
+
+    it("leaves anomaly fields unset when no assessment is provided", async () => {
+      mockSlotRepo.findById.mockReturnValue(slot);
+      mockRepo.findBySlotIdAndCustomer.mockReturnValue(undefined);
+      mockRepo.findBySlotId.mockReturnValue(undefined);
+      mockRepo.create.mockResolvedValue({ id: "intent-1" } as any);
+
+      await service.createIntent(input, actor);
+
+      expect(mockRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          anomalyScore: undefined,
+          anomalyFlagged: undefined,
+          anomalySignals: undefined,
+        }),
+      );
+    });
+
     it("throws 404 if slot not found", async () => {
       mockSlotRepo.findById.mockReturnValue(undefined);
 

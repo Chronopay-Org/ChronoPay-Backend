@@ -1,5 +1,6 @@
 import type { StrategyId, StrategyConfig } from "../../services/pricingStrategy.js";
 import type { HoldFeePolicySnapshot } from "../../services/holdFeePolicy.js";
+import type { AnomalySignals } from "../../services/anomalyScoring.js";
 
 export type BookingIntentStatus =
   | "pending"
@@ -78,6 +79,10 @@ export interface BookingIntentRecord {
   pricingSnapshot?: PricingSnapshot;
   cancellationPolicySnapshot?: CancellationPolicySnapshot;
   holdFeePolicySnapshot?: HoldFeePolicySnapshot;
+  /** Anomaly-detection score in [0, 1]; absent when scoring did not run. */
+  anomalyScore?: number;
+  anomalyFlagged?: boolean;
+  anomalySignals?: AnomalySignals;
 }
 
 export interface BookingIntentRepository {

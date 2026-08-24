@@ -26,8 +26,11 @@ export class PgBookingIntentRepository implements BookingIntentRepository {
         status,
         note,
         created_at,
-        updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        updated_at,
+        anomaly_score,
+        anomaly_flagged,
+        anomaly_signals
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10, $11)
       RETURNING *
     `;
 
@@ -40,6 +43,9 @@ export class PgBookingIntentRepository implements BookingIntentRepository {
       intent.status,
       intent.note || null,
       new Date(intent.createdAt),
+      intent.anomalyScore ?? null,
+      intent.anomalyFlagged ?? false,
+      intent.anomalySignals ? JSON.stringify(intent.anomalySignals) : null,
     ];
 
     try {
@@ -77,6 +83,12 @@ export class PgBookingIntentRepository implements BookingIntentRepository {
     return res.rows[0] ? this.mapRowToRecord(res.rows[0]) : undefined;
   }
 
+  async listByCustomer(customerId: string): Promise<BookingIntentRecord[]> {
+    const sql = `SELECT * FROM booking_intents WHERE customer_id = $1 ORDER BY created_at ASC`;
+    const res = await this.dbQuery(sql, [customerId]);
+    return res.rows.map((row: any) => this.mapRowToRecord(row));
+  }
+
   async updateTokenInfo(id: string, tokenAsset: string, mintTxHash: string): Promise<void> {
     const sql = `
       UPDATE booking_intents
@@ -103,6 +115,13 @@ export class PgBookingIntentRepository implements BookingIntentRepository {
       tokenAsset: row.token_asset || undefined,
       mintTxHash: row.mint_tx_hash || undefined,
       createdAt: new Date(row.created_at).toISOString(),
+      anomalyScore: row.anomaly_score ?? undefined,
+      anomalyFlagged: row.anomaly_flagged ?? undefined,
+      anomalySignals: row.anomaly_signals
+        ? typeof row.anomaly_signals === "string"
+          ? JSON.parse(row.anomaly_signals)
+          : row.anomaly_signals
+        : undefined,
     };
   }
 }
