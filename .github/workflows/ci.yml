@@ -27,6 +27,29 @@ jobs:
       - name: Validate Grafana Dashboards
         run: npx tsx scripts/validate-dashboards.ts
 
+  deploy-pr-guard:
+    name: Production deploy PR guard
+    runs-on: ubuntu-latest
+    if: ${{ vars.DEPLOY_ID != '' && vars.PR_NUMBER != '' && vars.REPO != '' && vars.SHA != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify deploy references a merged PR
+        env:
+          DEPLOY_ID: ${{ vars.DEPLOY_ID }}
+          PR_NUMBER: ${{ vars.PR_NUMBER }}
+          REPO: ${{ vars.REPO }}
+          SHA: ${{ vars.SHA }}
+          MANUAL_OVERRIDE: ${{ vars.MANUAL_OVERRIDE || 'false' }}
+        run: npm run deploy:pr-check
+
   test-shards:
     needs: lint
     runs-on: ubuntu-latest
