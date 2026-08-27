@@ -10,11 +10,16 @@ describe("BookingIntentService", () => {
 
   beforeEach(() => {
     mockRepo = {
-      create: jest.fn(),
-      findById: jest.fn(),
-      findBySlotId: jest.fn(),
-      findBySlotIdAndCustomer: jest.fn(),
-      updateTokenInfo: jest.fn(),
+      create: jest.fn() as any,
+      findById: jest.fn() as any,
+      findBySlotId: jest.fn() as any,
+      findBySlotIdAndCustomer: jest.fn() as any,
+      updateTokenInfo: jest.fn() as any,
+      listByCustomer: jest.fn() as any,
+      listAll: jest.fn() as any,
+      updateStatus: jest.fn() as any,
+      update: jest.fn() as any,
+      findExpiredHolds: jest.fn() as any,
     } as any;
 
     mockSlotRepo = {
@@ -42,7 +47,7 @@ describe("BookingIntentService", () => {
       mockSlotRepo.findById.mockReturnValue(slot);
       mockRepo.findBySlotIdAndCustomer.mockReturnValue(undefined);
       mockRepo.findBySlotId.mockReturnValue(undefined);
-      mockRepo.create.mockResolvedValue({
+      (mockRepo.create as any).mockResolvedValue({
         id: "intent-1",
         slotId: slot.id,
         professional: slot.professional,

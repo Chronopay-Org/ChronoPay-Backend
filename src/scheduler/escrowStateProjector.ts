@@ -226,7 +226,7 @@ export class EscrowStateProjector {
     // "id points at a different slot" cases. The caller maps undefined
     // to noop_unknown_intent.
     if (event.bookingIntentId) {
-      const byId = this.bookingIntentRepository.findById(event.bookingIntentId);
+      const byId = this.bookingIntentRepository.findById(event.bookingIntentId) as any;
       if (!byId) return undefined;
       if (byId.slotId !== event.slotId) return undefined;
       return byId;
@@ -236,14 +236,14 @@ export class EscrowStateProjector {
 
   private lookupBySlot(slotId: string): BookingIntentRecord | undefined {
     if (this.bookingIntentRepository.findLatestBySlotId) {
-      return this.bookingIntentRepository.findLatestBySlotId(slotId);
+      return this.bookingIntentRepository.findLatestBySlotId(slotId) as any;
     }
     // Fallback for repository implementations that do not provide the
     // indexed lookup. O(n) but only used in tests / legacy repos.
-    const all = this.bookingIntentRepository.listAll();
-    const candidates = all.filter((i) => i.slotId === slotId);
+    const all = this.bookingIntentRepository.listAll() as any[];
+    const candidates = all.filter((i: any) => i.slotId === slotId);
     if (candidates.length === 0) return undefined;
-    return candidates.reduce((latest, current) =>
+    return candidates.reduce((latest: any, current: any) =>
       current.startTime > latest.startTime ? current : latest,
     );
   }
@@ -262,7 +262,7 @@ export class EscrowStateProjector {
     nextStatus: BookingIntentStatus,
     event: EscrowEvent,
   ): ProjectionOutcome {
-    const updated = this.bookingIntentRepository.updateStatus(intent.id, nextStatus);
+    const updated = this.bookingIntentRepository.updateStatus(intent.id, nextStatus) as any;
 
     // Emit firm booking receipt when payment is captured
     if (event.kind === "Captured" && nextStatus === "firm") {

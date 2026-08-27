@@ -103,7 +103,7 @@ export async function onHoldReleasedDefaultHandler(_evt: HoldReleasedEvent): Pro
   try {
     await invalidateSlotsCache();
   } catch (err) {
-    logger.warn("[refundableHoldSweeper] Search cache invalidation error:", (err as Error).message);
+    logger.warn({ err }, "[refundableHoldSweeper] Search cache invalidation error:");
   }
 }
 
@@ -269,7 +269,7 @@ export async function sweepRefundableHoldExpiryOnce(
       deps.schedulingService.releaseSlot(currentHold.slotId);
     } catch (err) {
       // Slot may already be released or missing, log and continue
-      logger.warn(`[refundableHoldSweeper] Error releasing slot ${currentHold.slotId}:`, (err as Error).message);
+      logger.warn({ err }, `[refundableHoldSweeper] Error releasing slot ${currentHold.slotId}:`);
     }
 
     // Mark hold status as expired

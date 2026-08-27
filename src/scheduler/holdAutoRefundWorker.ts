@@ -63,7 +63,7 @@ export function processHoldAutoRefundOnce(
   const config = resolveConfig(configOverrides);
   const effectiveNow = nowMs ?? Date.now();
 
-  const expiredHolds = dependencies.bookingIntentRepository.findExpiredHolds(effectiveNow);
+  const expiredHolds = dependencies.bookingIntentRepository.findExpiredHolds(effectiveNow) as any[];
 
   if (expiredHolds.length > config.safetyThreshold) {
     return {
@@ -75,7 +75,7 @@ export function processHoldAutoRefundOnce(
     };
   }
 
-  const batch = expiredHolds.slice(0, config.batchSize);
+  const batch = (expiredHolds as any[]).slice(0, config.batchSize);
   const results: AutoRefundResult[] = [];
 
   for (const hold of batch) {

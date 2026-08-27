@@ -20,7 +20,7 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockRepo = {
       findById: jest.fn(),
       listAll: jest.fn().mockReturnValue([]),
-      updateTokenInfo: jest.fn(),
+      updateTokenInfo: jest.fn() as any,
     } as any;
 
     service = new TokenService(mockContractService, mockRepo);
@@ -84,7 +84,7 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockContractService.sendTransaction.mockImplementation(async (desc, action) => {
       return await action();
     });
-    mockRepo.updateTokenInfo.mockResolvedValue(undefined);
+    (mockRepo.updateTokenInfo as any).mockResolvedValue(undefined);
 
     const result = await service.mintTimeToken(intentId, {
       buyerPublicKey: "G_BUYER_456",
@@ -110,7 +110,7 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockContractService.sendTransaction.mockImplementation(async (desc, action) => {
       return await action();
     });
-    mockRepo.updateTokenInfo.mockResolvedValue(undefined);
+    (mockRepo.updateTokenInfo as any).mockResolvedValue(undefined);
 
     const result = await service.mintTimeToken(intentId, {
       buyerPublicKey: "G_BUYER_456",

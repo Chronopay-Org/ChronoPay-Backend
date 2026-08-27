@@ -135,7 +135,7 @@ export class AuditLogger {
       await fs.appendFile(this.logFilePath, logLine, "utf8");
     } catch (error) {
       // Failure mode handling: We log to console rather than breaking the application flow
-      logger.error("Failed to write to audit log:", error);
+      logger.error({ error }, "Failed to write to audit log:");
     }
   }
 

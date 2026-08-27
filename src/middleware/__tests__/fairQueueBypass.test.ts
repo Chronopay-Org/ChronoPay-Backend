@@ -433,7 +433,9 @@ describe("fairQueueBypass + createAuthAwareRateLimiter integration", () => {
     default: jest.fn<any>().mockImplementation(() => mockRedis),
   }));
 
+  // @ts-ignore - dynamic imports required for jest.unstable_mockModule
   const { createAuthAwareRateLimiter } = await import("../rateLimiter.js");
+  // @ts-ignore - dynamic imports required for jest.unstable_mockModule
   const { _setTestMock, _resetStore } = await import("../rateLimitStore.js");
 
   let app: express.Express;

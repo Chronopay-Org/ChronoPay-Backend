@@ -68,8 +68,8 @@ export class TierAlertScheduler {
         await this.runOnce();
       } catch (err) {
         logger.error(
+          { err },
           "[tier-alert-scheduler] Batch evaluation failed:",
-          err instanceof Error ? err.message : err
         );
       }
 
