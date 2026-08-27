@@ -1,4 +1,6 @@
 import { RetryPolicy } from "../utils/retry-policy.js";
+import { logger } from "../utils/logger.js";
+
 import {
   ContractProviderUnavailableError,
   mapContractError,
@@ -152,7 +154,7 @@ export class ContractService {
       }
       this.maybeTransitionTier();
 
-      console.error(`Blockchain call failed: ${description}`, {
+      logger.error(`Blockchain call failed: ${description}`, {
         upstreamError: error instanceof Error ? error.message : String(error),
         mappedCode: appError.code,
       });

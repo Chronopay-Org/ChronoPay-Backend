@@ -53,6 +53,8 @@ export interface SearchResult {
 }
 
 import { SearchQueryTracker } from "../cache/searchCacheWarmup.js";
+import { logger } from "../utils/logger.js";
+
 export interface CursorData {
   sortBy: "rating" | "price" | "relevance";
   rating?: number;
@@ -612,7 +614,7 @@ export class MarketplaceSearchService {
         try {
           facets = await this.facetCache.getFacetCounts(query, this.pool);
         } catch (err) {
-          console.warn("Failed to compute facet counts:", err instanceof Error ? err.message : err);
+          logger.warn("Failed to compute facet counts:", err instanceof Error ? err.message : err);
         }
       }
 
@@ -634,7 +636,7 @@ export class MarketplaceSearchService {
       if (cache) {
         const ttlMs = 60 * 1000;
         await cache.set(cacheKey, searchResult, ttlMs).catch((err) => {
-          console.warn("Failed to cache marketplace search result:", err.message);
+          logger.warn("Failed to cache marketplace search result:", err.message);
         });
       }
 
@@ -792,7 +794,7 @@ export class MarketplaceSearchService {
       if (cache) {
         const ttlMs = 60 * 1000;
         await cache.set(cacheKey, searchResult, ttlMs).catch((err) => {
-          console.warn("Failed to cache marketplace geo search result:", err.message);
+          logger.warn("Failed to cache marketplace geo search result:", err.message);
         });
       }
 

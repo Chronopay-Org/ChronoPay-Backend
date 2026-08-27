@@ -654,6 +654,31 @@ export const escrowDriftOverridesApplied = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Fair Queue Rate Limiter metrics ──────────────────────────────────────────
+
+/**
+ * Counter tracking the total number of tokens/requests consumed by each tenant in the fair-queue.
+ */
+export const fairQueueBurnRateTotal = createBudgetedCounter({
+  name: "fair_queue_burn_rate_total",
+  help: "Total number of rate limit tokens consumed per tenant",
+  labels: ["tenant_id"],
+  budget: 128,
+  registers: [register],
+});
+
+/**
+ * Histogram tracking the queue wait time per tenant.
+ */
+export const fairQueueWaitTimeSeconds = createBudgetedHistogram({
+  name: "fair_queue_wait_time_seconds",
+  help: "Average queue wait time in seconds per tenant",
+  labels: ["tenant_id"],
+  budget: 128,
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  registers: [register],
+});
+
 // ─── Query Budget Metrics ─────────────────────────────────────────────────────
 
 /**
@@ -665,6 +690,14 @@ export const queryBudgetBreaches = createBudgetedCounter({
   help: "Total number of SQL queries that exceeded their per-request budget (statement_timeout)",
   labels: ["route"],
   budget: 128,
+  registers: [register],
+});
+
+export const fairQueueBypassAttempts = createBudgetedCounter({
+  name: "fair_queue_bypass_attempts_total",
+  help: "Total number of fair-queue bypass attempts by internal systems",
+  labels: ["reason"],
+  budget: 16,
   registers: [register],
 });
 

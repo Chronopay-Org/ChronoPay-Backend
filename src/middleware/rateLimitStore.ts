@@ -9,6 +9,8 @@
  */
 
 import { Redis } from 'ioredis';
+import { logger } from "../utils/logger.js";
+
 
 /** @internal - Exposed for testing only. */
 export let _isTestMock = false;
@@ -30,6 +32,12 @@ function createNoopStore() {
     async resetKey(_key: string, _callback?: (err: Error | null) => void) {
       // @ts-expect-error - Auto-fixed by script
       _callback?.();
+    },
+    async increment(_key: string) {
+      return { totalHits: 1, resetTime: undefined };
+    },
+    async decrement(_key: string) {
+      return;
     },
   };
 }
@@ -77,7 +85,7 @@ function createRedisStore() {
   // Handle errors to prevent process crashes and hanging tests
   client.on('error', (err) => {
     if (process.env.NODE_ENV !== 'test') {
-      console.error('Redis RateLimitStore Error:', err);
+      logger.error('Redis RateLimitStore Error:', err);
     }
   });
 

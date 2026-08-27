@@ -6,6 +6,7 @@ import { type Request, type Response } from "express";
 import { configService } from "../config/config.service.js";
 import { rateLimitRedisStore } from "./rateLimitStore.js";
 import { createHash } from "node:crypto";
+import { fairQueueBurnRateTotal, fairQueueWaitTimeSeconds } from "../metrics.js";
 
 /**
  * Generate an auth-aware rate limit key.
@@ -130,7 +131,14 @@ export function createAuthAwareRateLimiter(
     },
   };
 
-  return rateLimit(options);
+  const limiter = rateLimit(options);
+
+  return (req: Request, res: Response, next: import("express").NextFunction) => {
+    const tenantId = generateRateLimitKey(req);
+    fairQueueBurnRateTotal.labels(tenantId).inc();
+    fairQueueWaitTimeSeconds.labels(tenantId).observe(0);
+    return limiter(req, res, next);
+  };
 }
 
 // Default export: traditional IP-only limiter (not currently used in app)

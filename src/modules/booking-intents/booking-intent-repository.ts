@@ -81,16 +81,17 @@ export interface BookingIntentRecord {
 }
 
 export interface BookingIntentRepository {
-  create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord>;
-  findById(id: string): BookingIntentRecord | undefined;
-  findBySlotId(slotId: string): BookingIntentRecord | undefined;
-  findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
-  findLatestBySlotId?(slotId: string): BookingIntentRecord | undefined;
-  listByCustomer(customerId: string): BookingIntentRecord[];
-  listAll(): BookingIntentRecord[];
-  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord;
-  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord;
-  findExpiredHolds(nowMs: number): BookingIntentRecord[];
+  create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> | BookingIntentRecord;
+  findById(id: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findBySlotId(slotId: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findLatestBySlotId?(slotId: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  listByCustomer(customerId: string): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
+  listAll(): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
+  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord | Promise<BookingIntentRecord>;
+  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord | Promise<BookingIntentRecord>;
+  updateTokenInfo?(id: string, tokenAsset: string, mintTxHash: string): Promise<void> | void;
+  findExpiredHolds(nowMs: number): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
 }
 
 const ACTIVE_HOLD_STATUSES: BookingIntentStatus[] = ["pending", "hold_placed"];
@@ -163,6 +164,17 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
     }
     this.intents[index] = { ...this.intents[index], ...updates };
     return { ...this.intents[index] };
+  }
+
+  updateTokenInfo(id: string, tokenAsset: string, mintTxHash: string): void {
+    const index = this.intents.findIndex((entry) => entry.id === id);
+    if (index !== -1) {
+      this.intents[index] = {
+        ...this.intents[index],
+        tokenAsset,
+        mintTxHash,
+      };
+    }
   }
 
   findExpiredHolds(nowMs: number): BookingIntentRecord[] {

@@ -19,6 +19,8 @@
 
 import { scanAndAutoResolve, type DisputeDeadlineServiceOptions } from "../services/disputeDeadlineService.js";
 import type { Dispute } from "../types/dispute.js";
+import { logger } from "../utils/logger.js";
+
 
 // ---------------------------------------------------------------------------
 // Defaults
@@ -53,13 +55,13 @@ export function startDisputeDeadlineScheduler(
   options: DisputeDeadlineSchedulerOptions = {},
 ): void {
   if (_interval) {
-    console.warn("[dispute-deadline] Scheduler already running; skipping duplicate start.");
+    logger.warn("[dispute-deadline] Scheduler already running; skipping duplicate start.");
     return;
   }
 
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
-  console.log(
+  logger.info(
     `[dispute-deadline] Starting scheduler (interval=${pollIntervalMs}ms, ` +
     `inactivityTimeoutMs=${options.inactivityTimeoutMs ?? "default"}, ` +
     `seniorReviewTimeoutMs=${options.seniorReviewTimeoutMs ?? "default"})`,
@@ -71,13 +73,13 @@ export function startDisputeDeadlineScheduler(
       const result = scanAndAutoResolve(disputes, options);
 
       if (result.resolved.length > 0) {
-        console.log(
+        logger.info(
           `[dispute-deadline] Resolved ${result.resolved.length} dispute(s):`,
           result.resolved.map((r) => `${r.disputeId} (${r.fromStatus}→${r.toStatus})`).join(", "),
         );
       }
     } catch (err) {
-      console.error("[dispute-deadline] Scan error:", err);
+      logger.error("[dispute-deadline] Scan error:", err);
     }
   }, pollIntervalMs);
 
@@ -94,7 +96,7 @@ export function stopDisputeDeadlineScheduler(): void {
   if (_interval) {
     clearInterval(_interval);
     _interval = null;
-    console.log("[dispute-deadline] Scheduler stopped.");
+    logger.info("[dispute-deadline] Scheduler stopped.");
   }
 }
 

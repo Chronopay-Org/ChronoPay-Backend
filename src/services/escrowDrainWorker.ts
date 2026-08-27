@@ -1,3 +1,4 @@
+import { logger } from "../utils/logger.js";
 export interface HoldRecord {
   id: string;
   contractHash: string;
@@ -39,7 +40,7 @@ export class EscrowDrainWorker {
         drainedCount++;
       } catch (err) {
         // If crash occurs, we rely on idempotent nature of the drain to recover on next tick
-        console.error(`Failed to drain hold ${hold.id}`, err);
+        logger.error(`Failed to drain hold ${hold.id}`, err);
       }
     }
 

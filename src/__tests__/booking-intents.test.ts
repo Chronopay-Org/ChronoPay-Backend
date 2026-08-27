@@ -5,6 +5,8 @@ import {
   InMemoryBookingIntentRepository,
   type BookingIntentRecord,
 } from "../modules/booking-intents/booking-intent-repository.js";
+import { BookingIntentService } from "../modules/booking-intents/booking-intent-service.js";
+import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 
 // Minimal valid intent fields (minus id, which the repo assigns)
 const BASE_INTENT: Omit<BookingIntentRecord, "id"> = {
@@ -16,6 +18,10 @@ const BASE_INTENT: Omit<BookingIntentRecord, "id"> = {
   status: "pending",
   createdAt: new Date().toISOString(),
 };
+
+// Slot seeded in InMemorySlotRepository's DEFAULT_SLOTS that is bookable
+// and owned by "alice" (not "user1" or "user2"), so no self-booking conflict.
+const ALICE_SLOT_ID = "slot-11111111-1111-4111-8111-111111111111";
 
 describe("booking intents endpoints", () => {
   let app: express.Express;
@@ -125,5 +131,96 @@ describe("booking intents endpoints", () => {
       const res = await request(app).get("/api/v1/booking-intents");
       expect(res.status).toBe(401);
     });
+  });
+});
+
+// ─── Concurrent-create: at-most-one active intent per slot ───────────────────
+//
+// The partial unique index (migration 019) is the DB-level guarantee.
+// This suite verifies the same invariant at the service layer, which the
+// index mirrors: exactly one of N concurrent creates for the same slot wins;
+// the rest receive 409 CONFLICT.
+//
+// The "after terminal state" case verifies that the partial index (and the
+// in-memory analogue) allows a new intent once the prior one is no longer
+// active — i.e. the constraint is partial, not global.
+
+describe("concurrent booking-intent creates — one active per slot", () => {
+  // Build a lightweight app wired to explicit repos so we can control state.
+  function makeServiceApp(userId = "user1") {
+    const slotRepo = new InMemorySlotRepository();
+    const intentRepo = new InMemoryBookingIntentRepository();
+    const service = new BookingIntentService(intentRepo, slotRepo);
+
+    const app = express();
+    app.use(express.json());
+
+    // Thin router that bypasses auth/feature-flag middleware for these tests.
+    // Mirrors exactly what the real POST / handler does after auth passes.
+    app.post("/intents", async (req: any, res: any) => {
+      try {
+        const intent = await service.createIntent(req.body, {
+          userId: req.headers["x-user-id"] as string ?? userId,
+          role: "customer",
+        });
+        res.status(201).json({ success: true, intent });
+      } catch (err: any) {
+        res.status(err.statusCode ?? err.status ?? 500).json({
+          success: false,
+          error: err.message,
+          code: err.code,
+        });
+      }
+    });
+
+    return { app, intentRepo, slotRepo, service };
+  }
+
+  it("exactly one of 5 concurrent creates for the same slot succeeds", async () => {
+    const { app } = makeServiceApp();
+
+    const body = {
+      slotId: ALICE_SLOT_ID,
+    };
+
+    const requests = Array.from({ length: 5 }, (_, i) =>
+      request(app)
+        .post("/intents")
+        .set("x-user-id", `customer-${i}`)
+        .send(body),
+    );
+
+    const responses = await Promise.all(requests);
+    const statuses = responses.map((r) => r.status);
+
+    const created = statuses.filter((s) => s === 201);
+    const conflicted = statuses.filter((s) => s === 409);
+
+    expect(created).toHaveLength(1);
+    expect(conflicted).toHaveLength(4);
+
+    const conflictBodies = responses
+      .filter((r) => r.status === 409)
+      .map((r) => r.body);
+    conflictBodies.forEach((body) => {
+      expect(body.success).toBe(false);
+      expect(body.code).toBe("CONFLICT");
+    });
+  });
+
+  it("allows a new intent for a slot once the prior intent is no longer active", async () => {
+    const { intentRepo, service } = makeServiceApp();
+
+    const actor = { userId: "user1", role: "customer" as const };
+
+    // Create the first intent and confirm it (terminal state).
+    const first = await service.createIntent({ slotId: ALICE_SLOT_ID }, actor);
+    intentRepo.updateStatus(first.id, "confirmed");
+
+    // A second create for the same slot should now succeed because "confirmed"
+    // is not in the active statuses covered by the partial index.
+    const second = await service.createIntent({ slotId: ALICE_SLOT_ID }, actor);
+    expect(second.slotId).toBe(ALICE_SLOT_ID);
+    expect(second.status).toBe("pending");
   });
 });
