@@ -516,6 +516,24 @@ export const webhookHmacVerified = createBudgetedCounter({
   registers: [register],
 });
 
+export type WebhookDeliveryResult = "success" | "failure";
+
+/**
+ * Counter incremented for each webhook delivery attempt. The `result` label
+ * records whether the attempt succeeded or failed.
+ */
+export const webhookDeliverAttemptsTotal = createBudgetedCounter({
+  name: "webhook_deliver_attempts_total",
+  help: "Total number of webhook delivery attempts by result",
+  labels: ["result"],
+  budget: 8,
+  registers: [register],
+});
+
+export function recordWebhookDeliveryAttempt(result: WebhookDeliveryResult): void {
+  webhookDeliverAttemptsTotal.labels(result).inc();
+}
+
 // ─── Partner token quota metrics ───────────────────────────────────────────────
 
 /**
