@@ -88,20 +88,29 @@ export const migration: Migration = {
         ON slot_category_grace_window_history (changed_at DESC)
     `);
 
-    // 3. Add nullable category column to the slots table.
+    // 3. Add nullable category column to the slots table (idempotent —
+    //    column may already exist from an earlier migration).
     await client.query(`
       ALTER TABLE slots
-        ADD COLUMN category TEXT
+        ADD COLUMN IF NOT EXISTS category TEXT
     `);
 
-    await client.query(`
-      ALTER TABLE slots
-        ADD CONSTRAINT chk_slots_category_len
-        CHECK (category IS NULL OR char_length(category) <= 100)
+    // Only add the constraint if it doesn't already exist.
+    const constraintExists = await client.query(`
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'chk_slots_category_len'
     `);
+    if (constraintExists.rows.length === 0) {
+      await client.query(`
+        ALTER TABLE slots
+          ADD CONSTRAINT chk_slots_category_len
+          CHECK (category IS NULL OR char_length(category) <= 100)
+      `);
+    }
 
+    // Only create the index if it doesn't already exist.
     await client.query(`
-      CREATE INDEX idx_slots_category
+      CREATE INDEX IF NOT EXISTS idx_slots_category
         ON slots (category)
         WHERE category IS NOT NULL
     `);
