@@ -4,7 +4,7 @@ import { PaginatedSlots, Slot } from "../types.js";
 // @ts-expect-error - Auto-fixed by script
 export type { Slot };
 import { getSlotsCount, getSlotsPage } from "../repositories/slotRepository.js";
-import { dispatchSlotChanged, type CalendarMode, type SlotStatus } from "../webhooks/dispatch.js";
+import { type CalendarMode, type SlotStatus } from "../webhooks/dispatch.js";
 import { SupplierCalendarSettingStore } from "./supplierCalendarSettingStore.js";
 
 // @ts-expect-error - Auto-fixed by script

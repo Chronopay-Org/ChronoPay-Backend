@@ -4,7 +4,6 @@ import {
   buildSlotChangedEvent,
   dispatchSlotChanged,
   dispatchSlotChangedToAll,
-  type SlotChangedWebhookEvent,
   type DispatchSlotChangedOptions,
 } from "../dispatch.js";
 import { SupplierCalendarSettingStore } from "../../services/supplierCalendarSettingStore.js";

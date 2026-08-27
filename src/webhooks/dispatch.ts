@@ -141,7 +141,7 @@ export function buildSlotChangedEvent(
 /**
  * Determine if an HTTP status code is retryable (5xx).
  */
-function isRetryableStatusCode(status: number): boolean {
+function _isRetryableStatusCode(status: number): boolean {
   return status >= 500 && status < 600;
 }
 

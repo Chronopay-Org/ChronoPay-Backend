@@ -1,7 +1,6 @@
 // @ts-nocheck
 import { jest } from "@jest/globals";
 import { SlotService, SlotValidationError, SlotNotFoundError } from "../slotService.js";
-import { InMemoryCache } from "../../cache/inMemoryCache.js";
 import { SupplierCalendarSettingStore } from "../supplierCalendarSettingStore.js";
 import type { CalendarMode, SlotStatus } from "../../webhooks/dispatch.js";
 
