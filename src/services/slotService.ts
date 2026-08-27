@@ -4,6 +4,8 @@ import { PaginatedSlots, Slot } from "../types.js";
 // @ts-expect-error - Auto-fixed by script
 export type { Slot };
 import { getSlotsCount, getSlotsPage } from "../repositories/slotRepository.js";
+import { dispatchSlotChanged, type CalendarMode, type SlotStatus } from "../webhooks/dispatch.js";
+import { SupplierCalendarSettingStore } from "./supplierCalendarSettingStore.js";
 
 // @ts-expect-error - Auto-fixed by script
 export type { SlotRecord } from "../repositories/slotRepository.js";
@@ -23,6 +25,15 @@ export interface Slot {
   createdAt?: string;
   _internalNote?: string;
 }
+
+/**
+ * Callback type for dispatching slot.changed webhooks.
+ * Can be overridden for testing.
+ */
+export type SlotWebhookDispatcher = (
+  mode: CalendarMode,
+  slot: { id: number | string; professional: string; startTime: number; endTime: number; status: SlotStatus },
+) => Promise<void>;
 
 // eslint-disable-next-line unused-imports/no-unused-vars
 const MAX_LIMIT = 100;
@@ -69,8 +80,10 @@ export class SlotService {
   private nextId = 1;
   private timeSource: () => Date;
   private cache: any;
+  private webhookDispatcher: SlotWebhookDispatcher | null;
+  private suppliers: Array<{ supplierId: string; webhookUrl: string }> = [];
 
-  constructor(arg1?: any, arg2?: any) {
+  constructor(arg1?: any, arg2?: any, arg3?: { webhookDispatcher?: SlotWebhookDispatcher | null; suppliers?: Array<{ supplierId: string; webhookUrl: string }> }) {
     if (typeof arg1 === 'function') {
       this.timeSource = arg1;
       this.repository = { getSlotsCount, getSlotsPage };
@@ -81,6 +94,47 @@ export class SlotService {
     } else {
       this.repository = arg1 || { getSlotsCount, getSlotsPage };
       this.timeSource = arg2 || (() => new Date());
+    }
+    this.webhookDispatcher = arg3?.webhookDispatcher ?? null;
+    this.suppliers = arg3?.suppliers ?? [];
+  }
+
+  /**
+   * Configure suppliers for webhook dispatch.
+   */
+  setSuppliers(suppliers: Array<{ supplierId: string; webhookUrl: string }>): void {
+    this.suppliers = suppliers;
+  }
+
+  /**
+   * Set or clear the webhook dispatcher function.
+   */
+  setWebhookDispatcher(dispatcher: SlotWebhookDispatcher | null): void {
+    this.webhookDispatcher = dispatcher;
+  }
+
+  /**
+   * Fire slot.changed webhooks to all configured suppliers.
+   * Runs asynchronously; errors are logged but do not throw.
+   */
+  private async fireSlotChangedWebhook(
+    mode: CalendarMode,
+    slot: { id: number | string; professional: string; startTime: number; endTime: number; status: SlotStatus },
+  ): Promise<void> {
+    if (!this.webhookDispatcher || this.suppliers.length === 0) return;
+
+    for (const supplier of this.suppliers) {
+      // Check if supplier has calendar sync enabled
+      const enabled = SupplierCalendarSettingStore.isEnabled(supplier.supplierId);
+      if (!enabled) continue;
+
+      try {
+        await this.webhookDispatcher(mode, slot);
+      } catch (_err) {
+        // Webhook dispatch failures are logged inside dispatchSlotChanged
+        // and must not propagate to the caller (slot CRUD must not fail
+        // because a webhook receiver is down).
+      }
     }
   }
 
@@ -187,7 +241,17 @@ export class SlotService {
       this.cache.invalidate("slots:list:all");
     }
 
-    return { ...slot };
+    // Fire slot.changed webhook (mode: add) — fire-and-forget, non-blocking
+    const createdSlot = { ...slot };
+    this.fireSlotChangedWebhook("add", {
+      id: createdSlot.id,
+      professional: createdSlot.professional,
+      startTime: createdSlot.startTime,
+      endTime: createdSlot.endTime,
+      status: "available" as SlotStatus,
+    }).catch(() => {}); // swallow — dispatch errors are logged inside
+
+    return createdSlot;
   }
 
   updateSlot(id: number | string, data: any): Slot {
@@ -226,7 +290,17 @@ export class SlotService {
       this.cache.invalidate("slots:list:all");
     }
 
-    return { ...this._slots[index] };
+    // Fire slot.changed webhook (mode: update) — fire-and-forget, non-blocking
+    const updatedSlot = { ...this._slots[index] };
+    this.fireSlotChangedWebhook("update", {
+      id: updatedSlot.id,
+      professional: updatedSlot.professional,
+      startTime: updatedSlot.startTime,
+      endTime: updatedSlot.endTime,
+      status: "available" as SlotStatus,
+    }).catch(() => {}); // swallow — dispatch errors are logged inside
+
+    return updatedSlot;
   }
 
   reset(): void {
@@ -260,6 +334,15 @@ export class SlotService {
     if (this.cache) {
       this.cache.invalidate("slots:list:all");
     }
+
+    // Fire slot.changed webhook (mode: delete) — fire-and-forget, non-blocking
+    this.fireSlotChangedWebhook("delete", {
+      id: removed.id,
+      professional: removed.professional,
+      startTime: removed.startTime,
+      endTime: removed.endTime,
+      status: "cancelled" as SlotStatus,
+    }).catch(() => {}); // swallow — dispatch errors are logged inside
 
     return removed.id;
   }
