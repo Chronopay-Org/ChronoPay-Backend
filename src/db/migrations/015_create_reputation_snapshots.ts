@@ -16,7 +16,7 @@ import { Migration } from "../migrationRunner.js";
  *     idempotency checks and backfill tracing.
  */
 export const migration: Migration = {
-  id: "020",
+  id: "015",
   name: "create_reputation_snapshots",
 
   async up(client: PoolClient): Promise<void> {

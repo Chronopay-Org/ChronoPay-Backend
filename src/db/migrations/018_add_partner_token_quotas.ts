@@ -27,7 +27,7 @@ import { Migration } from "../migrationRunner.js";
  *    cleared on counter reset and set when usage crosses the threshold.
  */
 export const migration: Migration = {
-  id: "019",
+  id: "018",
   name: "add_partner_token_quotas",
 
   async up(client: PoolClient): Promise<void> {

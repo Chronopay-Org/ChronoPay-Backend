@@ -2,7 +2,7 @@ import { PoolClient } from "pg";
 import { Migration } from "../migrationRunner.js";
 
 export const migration: Migration = {
-  id: "018",
+  id: "014b",
   name: "add_reputation_bootstrap_columns",
 
   async up(client: PoolClient): Promise<void> {

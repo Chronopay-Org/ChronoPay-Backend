@@ -32,7 +32,7 @@ import { Migration } from "../migrationRunner.js";
  *     subject lookups (compliance review), and status filtering.
  */
 export const migration: Migration = {
-  id: "019",
+  id: "019b",
   name: "create_dsr_sla_table",
 
   async up(client: PoolClient): Promise<void> {

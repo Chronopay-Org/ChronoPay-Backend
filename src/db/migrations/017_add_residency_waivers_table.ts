@@ -18,7 +18,7 @@ import { Migration } from "../migrationRunner.js";
  *    the guard middleware on every cross-region request.
  */
 export const migration: Migration = {
-  id: "018",
+  id: "017",
   name: "add_residency_waivers_table",
 
   async up(client: PoolClient): Promise<void> {

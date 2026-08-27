@@ -22,7 +22,7 @@ import { Migration } from "../migrationRunner.js";
  *   - cause_id is nullable to allow system-generated causes without a source event.
  */
 export const migration: Migration = {
-  id: "019",
+  id: "014c",
   name: "create_reputation_events",
 
   async up(client: PoolClient): Promise<void> {

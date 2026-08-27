@@ -16,7 +16,7 @@ import { Migration } from "../migrationRunner.js";
  *  - Combined index (category, supplier_rating DESC, id) for deterministic pagination
  */
 export const migration: Migration = {
-  id: "009",
+  id: "008",
   name: "add_marketplace_search_fields",
 
   async up(client: PoolClient): Promise<void> {

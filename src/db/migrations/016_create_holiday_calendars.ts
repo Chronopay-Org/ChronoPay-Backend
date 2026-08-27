@@ -23,7 +23,7 @@ import { Migration } from "../migrationRunner.js";
  *    of each write so historical fetches are a simple row lookup.
  */
 export const migration: Migration = {
-  id: "016",
+  id: "016b",
   name: "create_holiday_calendars",
 
   async up(client: PoolClient): Promise<void> {

@@ -36,7 +36,7 @@ import { Migration } from "../migrationRunner.js";
  *  - down() reverses in exact dependency order.
  */
 export const migration: Migration = {
-  id: "017",
+  id: "016",
   name: "add_grace_window_config",
 
   async up(client: PoolClient): Promise<void> {

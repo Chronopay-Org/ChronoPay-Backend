@@ -30,7 +30,7 @@ import { Migration } from "../migrationRunner.js";
  *    the reversal (grandfathering).
  */
 export const migration: Migration = {
-  id: "019",
+  id: "013b",
   name: "create_cancellation_reversal_ledger",
 
   async up(client: PoolClient): Promise<void> {

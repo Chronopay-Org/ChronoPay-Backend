@@ -27,7 +27,7 @@ import { Migration } from "../migrationRunner.js";
  * the plaintext is unrecoverable even before the row is eventually dropped.
  */
 export const migration: Migration = {
-  id: "018",
+  id: "018b",
   name: "create_dispute_mediation_transcripts",
 
   async up(client: PoolClient): Promise<void> {

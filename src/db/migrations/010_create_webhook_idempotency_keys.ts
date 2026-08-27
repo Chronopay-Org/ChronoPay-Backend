@@ -2,7 +2,7 @@ import { PoolClient } from "pg";
 import { Migration } from "../migrationRunner.js";
 
 export const migration: Migration = {
-  id: "012",
+  id: "010",
   name: "create_webhook_idempotency_keys",
 
   async up(client: PoolClient): Promise<void> {
