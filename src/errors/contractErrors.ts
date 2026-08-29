@@ -43,6 +43,12 @@ export class ContractProviderUnavailableError extends AppError {
   }
 }
 
+export class HorizonUnavailableError extends AppError {
+  constructor(message = "All Horizon hosts are unreachable or quarantined") {
+    super(message, 503, "HORIZON_UNAVAILABLE", true);
+  }
+}
+
 export class ContractSequenceCollisionError extends AppError {
   constructor(message = "Horizon sequence-number collision detected") {
     super(message, 409, "CONTRACT_SEQUENCE_COLLISION", true);

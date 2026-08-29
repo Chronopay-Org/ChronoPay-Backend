@@ -33,8 +33,8 @@ export interface EnvConfig {
   jwtIssuer?: string;
   jwtAudience?: string;
   corsAllowedOrigins?: string[];
-  /** Stellar Horizon base URL (e.g. https://horizon-testnet.stellar.org) */
-  horizonUrl?: string;
+  /** Stellar Horizon base URLs (comma-separated, first is primary) */
+  horizonUrls?: string[];
   /** Stellar network passphrase used to identify the target network */
   networkPassphrase?: string;
   /** Pinned hash for the current active escrow contract */
@@ -78,7 +78,17 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   const jwtIssuer = parseOptionalString(env.JWT_ISSUER);
   const jwtAudience = parseOptionalString(env.JWT_AUDIENCE);
   const corsAllowedOrigins = parseStringList(env.CORS_ALLOWED_ORIGINS);
-  const horizonUrl = parseOptionalUrl(env.HORIZON_URL, "HORIZON_URL", issues);
+  
+  let horizonUrls: string[] | undefined;
+  if (env.HORIZON_URLS) {
+    horizonUrls = parseUrlList(env.HORIZON_URLS, "HORIZON_URLS", issues);
+  } else if (env.HORIZON_URL) {
+    const singleUrl = parseOptionalUrl(env.HORIZON_URL, "HORIZON_URL", issues);
+    if (singleUrl) {
+      horizonUrls = [singleUrl];
+    }
+  }
+
   const networkPassphrase = parseOptionalString(env.STELLAR_NETWORK_PASSPHRASE);
   const escrowContractHash = parseOptionalString(env.ESCROW_CONTRACT_HASH);
 
@@ -107,7 +117,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     jwtIssuer,
     jwtAudience,
     corsAllowedOrigins,
-    horizonUrl,
+    horizonUrls,
     networkPassphrase,
     escrowContractHash,
     internalOverrideSecret,
@@ -258,6 +268,25 @@ function parseOptionalUrl(rawValue: string | undefined, key: string, issues: str
     issues.push(`${key} must be a valid URL.`);
     return undefined;
   }
+}
+
+function parseUrlList(rawValue: string | undefined, key: string, issues: string[]): string[] {
+  if (rawValue === undefined) return [];
+  const urls = rawValue.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+  const validUrls: string[] = [];
+  for (const value of urls) {
+    try {
+      const url = new URL(value);
+      if (!["http:", "https:"].includes(url.protocol)) {
+        issues.push(`${key} URLs must use http or https scheme.`);
+      } else {
+        validUrls.push(value);
+      }
+    } catch {
+      issues.push(`${key} must contain valid URLs.`);
+    }
+  }
+  return validUrls;
 }
 
 function _parseReplicaId(rawValue: string | undefined): string {

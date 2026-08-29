@@ -5,6 +5,7 @@
  * Enforces schema compliance, data minimization, and security rules.
  */
 
+import { isIP } from "node:net";
 import {
   AuditEvent,
   AuditEventEnvelope,
@@ -499,14 +500,9 @@ function isValidUUID(uuid: string): boolean {
 }
 
 /**
- * Helper function to validate IP address (basic check)
+ * Helper function to validate IP address using Node's built-in parser.
+ * Accepts IPv4, IPv6 (including IPv4-mapped forms such as "::ffff:127.0.0.1").
  */
 function isValidIPAddress(ip: string): boolean {
-  // IPv4 basic validation
-  const ipv4Regex =
-    /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-  // IPv6 basic validation (simplified)
-  const ipv6Regex = /^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/;
-
-  return ipv4Regex.test(ip) || ipv6Regex.test(ip) || ip === "::1";
+  return isIP(ip) !== 0;
 }
