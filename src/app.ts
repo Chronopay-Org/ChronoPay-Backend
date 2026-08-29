@@ -72,7 +72,14 @@ import {
 // Import modules
 import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
 import { InMemoryBookingIntentRepository } from "./modules/booking-intents/booking-intent-repository.js";
-import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
+import {
+  BookingIntentService,
+  BookingIntentError,
+  parseCreateBookingIntentBody,
+} from "./modules/booking-intents/booking-intent-service.js";
+import { isAppError, ServiceUnavailableError } from "./errors/AppError.js";
+import { ERROR_CODES } from "./errors/errorCodes.js";
+import { sendErrorResponse } from "./errors/sendError.js";
 import { ConflictPreviewService } from "./services/conflictPreviewService.js";
 import { RecurrenceError } from "./services/recurrenceService.js";
 import { ConflictPreviewBodySchema } from "./middleware/schemas.js";
@@ -619,10 +626,43 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   app.post(
     "/api/v1/booking-intents",
-    requireAuth(["customer"]),
+    requireAuth(["customer", "admin"]),
     async (req: any, res: Response) => {
       try {
-        const { slotId, note } = req.body;
+        const { slotId, note, rrule } = req.body ?? {};
+
+        // Recurring branch (issue #801): buyer-side repeat bookings expressed
+        // as an iCalendar RRULE. Materializes one booking intent per occurrence
+        // and returns a partial-success report for conflicts. Gated behind the
+        // CREATE_BOOKING_INTENT feature flag and restricted to customer/admin.
+        if (rrule !== undefined) {
+          if (req.flags && !req.flags.isEnabled("CREATE_BOOKING_INTENT")) {
+            return sendErrorResponse(
+              res,
+              new ServiceUnavailableError(
+                "Feature CREATE_BOOKING_INTENT is currently disabled",
+                ERROR_CODES.FEATURE_DISABLED.code,
+              ),
+              req,
+            );
+          }
+
+          if (slotId !== undefined) {
+            return sendErrorResponse(
+              res,
+              new BookingIntentError(
+                400,
+                "slotId and rrule are mutually exclusive: provide either a single slotId or a recurring rrule.",
+              ),
+              req,
+            );
+          }
+
+          const input = parseCreateBookingIntentBody({ rrule, note });
+          const report = await bookingIntentService.createRecurringIntents(input as any, req.auth!);
+          return res.status(201).json({ success: true, report });
+        }
+
         if (!slotId || slotId === "slot!") {
           return res.status(400).json({ success: false, error: "slotId is required." });
         }
@@ -633,7 +673,10 @@ export function createApp(options: AppFactoryOptions = {}) {
         const bookingIntent = bookingIntentService.createIntent({ slotId, note }, actor);
         res.status(201).json({ success: true, bookingIntent });
       } catch (error: any) {
-        const status = error.status || 400;
+        if (error instanceof BookingIntentError || isAppError(error)) {
+          return sendErrorResponse(res, error, req);
+        }
+        const status = error.status || 500;
         const message = status === 500 ? "Unable to create booking intent." : error.message;
         res.status(status).json({ success: false, error: message });
       }

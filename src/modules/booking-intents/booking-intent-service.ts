@@ -7,7 +7,12 @@ import type {
   PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
-import { SchedulingService, BundleNotTransferableError } from "../../services/schedulingService.js";
+import {
+  SchedulingService,
+  BundleNotTransferableError,
+  RecurringBookingRulesEngine,
+  RecurringBookingRulesError,
+} from "../../services/schedulingService.js";
 import { BundleTransferabilityService } from "../../services/bundleTransferabilityService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
@@ -243,91 +248,29 @@ export class BookingIntentService {
     input: CreateRecurringBookingInput,
     actor: AuthContext,
   ): Promise<{ successes: BookingIntentRecord[]; failures: { date: string; reason: string }[] }> {
-    const { expandRRule, RecurrenceError } = await import("../../services/recurrenceService.js");
+    const engine = new RecurringBookingRulesEngine({
+      slotRepository: this.slotRepository,
+      bookingIntentRepository: this.bookingIntentRepository,
+      now: this.now,
+      assertBundleTransferable: (slot, act) =>
+        this.bundleTransferabilityService.assertBundleTransferable(slot, act as AuthContext),
+      capturePolicySnapshots: (professionalId) => ({
+        cancellationPolicySnapshot: this.captureCancellationPolicySnapshot(),
+        holdFeePolicySnapshot: this.captureHoldFeePolicySnapshot(professionalId),
+      }),
+    });
 
-    let occurrences: Date[];
     try {
-      occurrences = expandRRule(input.rrule);
+      const report = await engine.createRecurringBookings(input.rrule, actor as never, {
+        note: input.note,
+      });
+      return report;
     } catch (err) {
-      if (err instanceof RecurrenceError) {
+      if (err instanceof RecurringBookingRulesError) {
         throw new BookingIntentError(400, err.message);
       }
       throw err;
     }
-
-    const successes: BookingIntentRecord[] = [];
-    const failures: { date: string; reason: string }[] = [];
-
-    // For each occurrence, attempt to find a matching slot and create intent
-    for (const occ of occurrences) {
-      const startEpoch = occ.getTime();
-      const slot = this.slotRepository.list().find((s) => s.startTime === startEpoch && s.bookable);
-      if (!slot) {
-        failures.push({ date: occ.toISOString(), reason: "No available slot at this time" });
-        continue;
-      }
-
-      // Enforce bundle transferability
-      try {
-        this.bundleTransferabilityService.assertBundleTransferable(slot, actor);
-      } catch (err) {
-        if (err instanceof BundleNotTransferableError) {
-          failures.push({ date: occ.toISOString(), reason: err.message });
-          continue;
-        }
-        throw err;
-      }
-
-      // Basic conflicts and checks similar to single-create
-      if (slot.professional === actor.userId) {
-        failures.push({ date: occ.toISOString(), reason: "Cannot book your own slot" });
-        continue;
-      }
-
-      const existingForCustomer = await this.bookingIntentRepository.findBySlotIdAndCustomer(
-        slot.id,
-        actor.userId,
-      );
-      if (existingForCustomer) {
-        failures.push({
-          date: occ.toISOString(),
-          reason: "Customer already has an intent for this slot",
-        });
-        continue;
-      }
-
-      const existingForSlot = await this.bookingIntentRepository.findBySlotId(slot.id);
-      if (existingForSlot) {
-        failures.push({
-          date: occ.toISOString(),
-          reason: "Slot already has active booking intent",
-        });
-        continue;
-      }
-
-      const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
-      const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
-
-      const intent = await this.bookingIntentRepository.create({
-        slotId: slot.id,
-        professional: slot.professional,
-        customerId: actor.userId,
-        startTime: slot.startTime,
-        endTime: slot.endTime,
-        status: "pending",
-        note: input.note,
-        createdAt: this.now(),
-        cancellationPolicySnapshot,
-        holdFeePolicySnapshot,
-      });
-
-      // Reserve slot
-      this.schedulingService.reserveSlot(slot.id);
-
-      successes.push(intent);
-    }
-
-    return { successes, failures };
   }
 
   confirmIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
