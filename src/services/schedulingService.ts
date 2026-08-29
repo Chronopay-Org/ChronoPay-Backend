@@ -1014,15 +1014,18 @@ export class RecurringBookingRulesEngine {
     // Anchoring a recurring booking on a wall-clock with no zone makes the
     // occurrence local time ambiguous across DST transitions, so reject it.
     const normalized = rrule.trim();
-    if (normalized.includes("DTSTART")) {
-      const dtstartMatch = normalized.match(/DTSTART(?:;[^:]*)?:(.*)(?:\n|$)/);
-      if (dtstartMatch) {
-        const dtstartVal = dtstartMatch[1];
-        if (!dtstartVal.endsWith("Z") && !normalized.includes("TZID=")) {
-          throw new RecurringBookingRulesError(
-            "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)",
-          );
-        }
+    const dtstartLine = normalized
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("DTSTART"));
+    if (dtstartLine) {
+      // Extract the value after the first ':' (params like ;TZID= are before
+      // it). Line-based parsing is linear and avoids backtracking regexes.
+      const valueStart = dtstartLine.indexOf(":");
+      const dtstartVal = valueStart >= 0 ? dtstartLine.slice(valueStart + 1) : "";
+      if (!dtstartVal.endsWith("Z") && !normalized.includes("TZID=")) {
+        throw new RecurringBookingRulesError(
+          "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)",
+        );
       }
     }
     try {

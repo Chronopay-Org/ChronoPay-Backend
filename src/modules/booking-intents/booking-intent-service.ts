@@ -446,16 +446,19 @@ export function parseCreateBookingIntentBody(
     }
     const normalizedRRule = rrule.trim();
     
-    // Assert error for ambiguous inputs without explicit offset
-    if (normalizedRRule.includes("DTSTART")) {
-      const dtstartMatch = normalizedRRule.match(/DTSTART(?:;[^:]*)?:(.*)(?:\n|$)/);
-      if (dtstartMatch) {
-        const dtstartVal = dtstartMatch[1];
-        const hasZ = dtstartVal.endsWith("Z");
-        const hasTzid = normalizedRRule.includes("TZID=");
-        if (!hasZ && !hasTzid) {
-          throw new BookingIntentError(400, "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)");
-        }
+    // Assert error for ambiguous inputs without explicit offset. Line-based
+    // parsing is linear (avoids a backtracking regex on attacker-controlled
+    // rrule text).
+    const dtstartLine = normalizedRRule
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("DTSTART"));
+    if (dtstartLine) {
+      const valueStart = dtstartLine.indexOf(":");
+      const dtstartVal = valueStart >= 0 ? dtstartLine.slice(valueStart + 1) : "";
+      const hasZ = dtstartVal.endsWith("Z");
+      const hasTzid = normalizedRRule.includes("TZID=");
+      if (!hasZ && !hasTzid) {
+        throw new BookingIntentError(400, "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)");
       }
     }
 
