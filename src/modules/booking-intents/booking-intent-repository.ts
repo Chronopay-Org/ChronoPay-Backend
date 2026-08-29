@@ -8,7 +8,11 @@ export type BookingIntentStatus =
   | "cancelled"
   | "expired"
   | "hold_placed"
-  | "hold_refunded";
+  | "hold_refunded"
+  | "escrow_held"
+  | "escrow_released"
+  | "escrow_refunded"
+  | "escrow_disputed";
 
 export type BookingType = "standard" | "refundable_hold";
 
