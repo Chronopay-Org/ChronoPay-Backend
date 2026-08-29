@@ -742,3 +742,19 @@ export const treasuryBalance = createBudgetedGauge({
   budget: 50,
 });
 
+export const horizonHostHealth = createBudgetedGauge({
+  name: "horizon_host_health",
+  help: "Health status of Horizon hosts (1 = healthy, 0 = quarantined)",
+  labels: ["url"],
+  budget: 32,
+  registers: [register],
+});
+
+export const horizonFailoverTotal = createBudgetedCounter({
+  name: "horizon_failover_total",
+  help: "Total number of failovers from primary to fallback Horizon host",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
