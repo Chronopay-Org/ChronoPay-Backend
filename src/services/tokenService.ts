@@ -274,4 +274,48 @@ export class TokenService {
       return result;
     });
   }
+
+  /**
+   * Builds the Stellar transaction envelope for minting a time-token.
+   */
+  buildMintEnvelope(
+    intentId: string,
+    sourceAccount: string,
+    sequenceNumber: string,
+    fee: string,
+    signer: any, // Keypair from @stellar/stellar-sdk
+    networkPassphrase?: string
+  ): string {
+    const assetCode = `CHRONO:${intentId.substring(0, 6).toUpperCase()}`;
+    const asset = new Asset(assetCode, sourceAccount);
+    
+    const hash = crypto.createHash("sha256").update(intentId).digest();
+    
+    const account = new Account(sourceAccount, sequenceNumber);
+    const tx = new TransactionBuilder(account, {
+      fee,
+      networkPassphrase: networkPassphrase || Networks.TESTNET,
+      timebounds: { minTime: 0, maxTime: Math.floor(Date.now() / 1000) + 300 }
+    })
+      .addOperation(
+        Operation.changeTrust({
+          asset: asset,
+          limit: "1"
+        })
+      )
+      .addOperation(
+        Operation.payment({
+          destination: sourceAccount,
+          asset: asset,
+          amount: "1",
+          source: sourceAccount
+        })
+      )
+      .addMemo(Memo.hash(hash.toString("hex")))
+      .build();
+      
+    tx.sign(signer);
+    return tx.toXDR();
+  }
 }
+
