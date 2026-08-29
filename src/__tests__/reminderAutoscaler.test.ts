@@ -278,7 +278,6 @@ describe("runReminderWorker autoscaling loop", () => {
   });
 
   it("scales down to min concurrency under idle conditions", async () => {
-    const now = Date.now();
     // No due reminders → idle
     const deliverFn = jest.fn(async () => undefined);
     const claimFn = jest.fn(async () => true);
