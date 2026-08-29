@@ -12,7 +12,8 @@ export type BookingIntentStatus =
   | "escrow_held"
   | "escrow_released"
   | "escrow_refunded"
-  | "escrow_disputed";
+  | "escrow_disputed"
+  | "no_show";
 
 export type BookingType = "standard" | "refundable_hold";
 
@@ -85,15 +86,30 @@ export interface BookingIntentRecord {
 }
 
 export interface BookingIntentRepository {
-  create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> | BookingIntentRecord;
+  create(
+    intent: Omit<BookingIntentRecord, "id">,
+  ): Promise<BookingIntentRecord> | BookingIntentRecord;
   findById(id: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
-  findBySlotId(slotId: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
-  findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
-  findLatestBySlotId?(slotId: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findBySlotId(
+    slotId: string,
+  ): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findBySlotIdAndCustomer(
+    slotId: string,
+    customerId: string,
+  ): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findLatestBySlotId?(
+    slotId: string,
+  ): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
   listByCustomer(customerId: string): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
   listAll(): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
-  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord | Promise<BookingIntentRecord>;
-  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord | Promise<BookingIntentRecord>;
+  updateStatus(
+    id: string,
+    status: BookingIntentStatus,
+  ): BookingIntentRecord | Promise<BookingIntentRecord>;
+  update(
+    id: string,
+    updates: Partial<Omit<BookingIntentRecord, "id">>,
+  ): BookingIntentRecord | Promise<BookingIntentRecord>;
   updateTokenInfo?(id: string, tokenAsset: string, mintTxHash: string): Promise<void> | void;
   findExpiredHolds(nowMs: number): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
 }
