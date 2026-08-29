@@ -29,6 +29,7 @@ import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 import { FraudScorer, FraudReasonCode, getFraudReasonCode, getFraudMessage } from "../services/fraudScorer.js";
 import { QuarantineStore } from "../services/quarantineStore.js";
+import { InMemoryFxRateProvider } from "../services/fxRateProvider.js";
 
 export function createBookingIntentsRouter() {
   const router = Router();
@@ -36,7 +37,18 @@ export function createBookingIntentsRouter() {
   // ─── Repositories (replace with DB layer in production) ────────────────────
   const bookingIntentRepository = new InMemoryBookingIntentRepository();
   const slotRepository = new InMemorySlotRepository();
-  const bookingIntentService = new BookingIntentService(bookingIntentRepository, slotRepository);
+
+  const fxRateProvider = new InMemoryFxRateProvider();
+
+  const bookingIntentService = new BookingIntentService(
+    bookingIntentRepository,
+    slotRepository,
+    () => new Date().toISOString(),
+    () => Date.now(),
+    undefined,
+    undefined,
+    fxRateProvider
+  );
 
   function handleServiceError(error: unknown, res: Response): void {
     if (error instanceof BookingIntentError) {

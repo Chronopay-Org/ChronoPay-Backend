@@ -33,6 +33,7 @@ export interface CreateBookingIntentInput {
   basePrice?: number;
   bookingType?: BookingType;
   holdDeadlineMs?: number;
+  buyerCurrency?: import("../../utils/amount.js").SupportedCurrencies;
 }
 
 export interface CreateRecurringBookingInput {
@@ -40,6 +41,7 @@ export interface CreateRecurringBookingInput {
   note?: string;
   bookingType?: BookingType;
   holdDeadlineMs?: number;
+  buyerCurrency?: import("../../utils/amount.js").SupportedCurrencies;
 }
 
 export interface AutoRefundResult {
@@ -90,6 +92,7 @@ export class BookingIntentService {
     private readonly nowMs: () => number = () => Date.now(),
     policyRegistry?: VersionedPolicyRegistry,
     holdFeeRegistry?: HoldFeePolicyRegistry,
+    private readonly fxRateProvider?: import("../../services/fxRateProvider.js").FxRateProvider,
   ) {
     const reg = policyRegistry ?? createDefaultRegistry();
     this.getPolicyRegistrySync = () => reg;
@@ -212,12 +215,27 @@ export class BookingIntentService {
     const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
     const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
+    let fxRateSnapshot: { rate: number; baseCurrency: string; targetCurrency: string; capturedAtMs: number; } | undefined;
+    if (slot.currency && input.buyerCurrency && this.fxRateProvider) {
+      try {
+        const rate = await this.fxRateProvider.getRate(slot.currency, input.buyerCurrency);
+        fxRateSnapshot = {
+          rate,
+          baseCurrency: slot.currency,
+          targetCurrency: input.buyerCurrency,
+          capturedAtMs: this.nowMs(),
+        };
+      } catch (err: any) {
+        throw new BookingIntentError(500, err.message ?? "Failed to fetch FX rate");
+      }
+    }
+
     const bookingType = input.bookingType ?? "standard";
     const status = bookingType === "refundable_hold" ? "hold_placed" : "pending";
     const holdPlacedAt = bookingType === "refundable_hold" ? this.now() : undefined;
     const holdUntilMs = bookingType === "refundable_hold" ? input.holdDeadlineMs : undefined;
 
-    const intent = this.bookingIntentRepository.create({
+    const intent = await this.bookingIntentRepository.create({
       slotId: slot.id,
       professional: slot.professional,
       customerId: actor.userId,
@@ -232,6 +250,7 @@ export class BookingIntentService {
       pricingSnapshot,
       cancellationPolicySnapshot,
       holdFeePolicySnapshot,
+      fxRateSnapshot,
     });
 
     this.schedulingService.reserveSlot(input.slotId);
@@ -308,6 +327,25 @@ export class BookingIntentService {
       const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
       const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
+      let fxRateSnapshot: { rate: number; baseCurrency: string; targetCurrency: string; capturedAtMs: number; } | undefined;
+      if (slot.currency && input.buyerCurrency && this.fxRateProvider) {
+        try {
+          const rate = await this.fxRateProvider.getRate(slot.currency, input.buyerCurrency);
+          fxRateSnapshot = {
+            rate,
+            baseCurrency: slot.currency,
+            targetCurrency: input.buyerCurrency,
+            capturedAtMs: this.nowMs(),
+          };
+        } catch (err: any) {
+          failures.push({
+            date: occ.toISOString(),
+            reason: err.message ?? "Failed to fetch FX rate",
+          });
+          continue;
+        }
+      }
+
       const intent = await this.bookingIntentRepository.create({
         slotId: slot.id,
         professional: slot.professional,
@@ -319,6 +357,7 @@ export class BookingIntentService {
         createdAt: this.now(),
         cancellationPolicySnapshot,
         holdFeePolicySnapshot,
+        fxRateSnapshot,
       });
 
       // Reserve slot
@@ -471,13 +510,22 @@ export function parseCreateBookingIntentBody(
     throw new BookingIntentError(400, "Booking intent payload must be a JSON object.");
   }
 
-  const { slotId, note, rrule, bookingType, holdDeadlineMs } = body as {
+  const { slotId, note, rrule, bookingType, holdDeadlineMs, buyerCurrency } = body as {
     slotId?: unknown;
     note?: unknown;
     rrule?: unknown;
     bookingType?: unknown;
     holdDeadlineMs?: unknown;
+    buyerCurrency?: unknown;
   };
+
+  let parsedBuyerCurrency: import("../../utils/amount.js").SupportedCurrencies | undefined;
+  if (buyerCurrency !== undefined) {
+    if (typeof buyerCurrency !== "string" || !["USD", "EUR", "GBP", "XLM"].includes(buyerCurrency)) {
+      throw new BookingIntentError(400, "Invalid buyerCurrency. Must be one of USD, EUR, GBP, XLM.");
+    }
+    parsedBuyerCurrency = buyerCurrency as import("../../utils/amount.js").SupportedCurrencies;
+  }
 
   let parsedBookingType: BookingType | undefined;
   if (bookingType !== undefined) {
@@ -535,6 +583,7 @@ export function parseCreateBookingIntentBody(
       note: sanitizedNote,
       bookingType: parsedBookingType,
       holdDeadlineMs: parsedHoldDeadlineMs,
+      buyerCurrency: parsedBuyerCurrency,
     };
   }
 
@@ -566,5 +615,6 @@ export function parseCreateBookingIntentBody(
     note: sanitizedNote,
     bookingType: parsedBookingType,
     holdDeadlineMs: parsedHoldDeadlineMs,
+    buyerCurrency: parsedBuyerCurrency,
   };
 }
