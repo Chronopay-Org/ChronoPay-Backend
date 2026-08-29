@@ -1,6 +1,8 @@
 import { ContractService } from "./contract.service.js";
 import { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { AppError } from "../errors/AppError.js";
+import { TransactionBuilder, Account, Asset, Operation, Memo, Networks } from "@stellar/stellar-sdk";
+import crypto from "crypto";
 
 /**
  * Result of a token minting operation.
@@ -86,11 +88,9 @@ export class TokenService {
     signer: any, // Keypair from @stellar/stellar-sdk
     networkPassphrase?: string
   ): string {
-    const { TransactionBuilder, Account, Asset, Operation, Memo, Networks } = require("@stellar/stellar-sdk");
     const assetCode = `CHRONO:${intentId.substring(0, 6).toUpperCase()}`;
     const asset = new Asset(assetCode, sourceAccount);
     
-    const crypto = require("crypto");
     const hash = crypto.createHash("sha256").update(intentId).digest();
     
     const account = new Account(sourceAccount, sequenceNumber);

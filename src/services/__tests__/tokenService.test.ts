@@ -3,6 +3,8 @@ import { TokenService } from "../tokenService.js";
 import { ContractService } from "../contract.service.js";
 import { BookingIntentRepository } from "../../modules/booking-intents/booking-intent-repository.js";
 import { AppError } from "../../errors/AppError.js";
+import { Keypair, Networks, Transaction } from "@stellar/stellar-sdk";
+import crypto from "crypto";
 
 describe("TokenService", () => {
   let service: TokenService;
@@ -86,7 +88,6 @@ describe("TokenService", () => {
 
   describe("buildMintEnvelope", () => {
     it("builds a correct Stellar transaction envelope for minting", () => {
-      const { Keypair, TransactionBuilder, Networks, Transaction } = require("@stellar/stellar-sdk");
       const signer = Keypair.random();
       const sourceAccount = signer.publicKey();
       
@@ -107,7 +108,6 @@ describe("TokenService", () => {
       expect(tx.signatures.length).toBe(1);
 
       // Memo check (hash uniqueness)
-      const crypto = require("crypto");
       const expectedHash = crypto.createHash("sha256").update(intentId).digest();
       expect(tx.memo.type).toBe("hash");
       expect(tx.memo.value).toEqual(expectedHash);
