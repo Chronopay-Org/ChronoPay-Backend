@@ -26,8 +26,26 @@ import { PgCancellationReversalRepository } from "../modules/cancellation/pg-can
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
 import { query } from "../db/pool.js";
 import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
+import {
+  addSeniorArbiter,
+  appendFinalityLink,
+  canTransition,
+  decideByMajority,
+  getSeniorPool,
+  isWithinAppealWindow,
+  resetSeniorPool,
+  selectSeniorPanel,
+  validateSeniorDecision,
+  SENIOR_PANEL_MIN_SIZE,
+} from "../services/disputeAppeals.js";
+import {
+  reverseAutoResolve,
+  scanAndAutoResolve,
+} from "../services/disputeDeadlineService.js";
+import { isDisputeDeadlineSchedulerRunning } from "../scheduler/disputeDeadlineScheduler.js";
 import { getPayoutQuarantineService } from "../services/quarantineStore.js";
 import { strikeService } from "../services/strikeService.js";
+import type { Dispute as DisputeDomainType, SeniorPanelVote } from "../types/dispute.js";
 
 /**
  * Singleton cancellation-reversal service. The route handlers reuse
@@ -746,7 +764,8 @@ async function logAudit(
   options: { status: number | string; resource: string },
 ): Promise<void> {
   try {
-    await defaultAuditLogger.log(
+    const auditLogger = (globalThis as typeof globalThis & { defaultAuditLogger?: typeof defaultAuditLogger }).defaultAuditLogger ?? defaultAuditLogger;
+    await auditLogger.log(
       action,
       {
         method: "POST",
