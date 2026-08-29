@@ -27,6 +27,7 @@
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1097.0",
     "@google-cloud/kms": "^5.7.0",
+    "ajv-formats": "^3.0.1",
     "cors": "^2.8.5",
     "dataloader": "^2.2.3",
     "dotenv": "^17.4.2",

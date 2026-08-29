@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import Ajv from "ajv";
+import addFormats from "ajv-formats";
 
 export interface LogSchemaRegistry {
   [eventName: string]: {
@@ -18,6 +19,7 @@ const schemaFile = JSON.parse(readFileSync(schemaPath, "utf-8"));
 const registry = (schemaFile.registry ?? {}) as LogSchemaRegistry;
 
 const ajv = new Ajv({ allErrors: true, strict: false });
+addFormats(ajv);
 const validators = new Map<string, ReturnType<typeof ajv.compile>>();
 
 const ensureValidator = (eventName: string) => {
