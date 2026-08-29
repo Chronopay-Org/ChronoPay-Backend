@@ -1,7 +1,10 @@
 import { NextFunction, Request, Response } from "express";
 import {
+  type FeatureFlagAccessor,
   type FeatureFlagName,
+  type RolloutEnvironment,
   getFeatureFlagAccessor,
+  isFeatureEnabledForTenant,
   isGuardedRouteRegistered,
   setFeatureFlagsFromEnv,
 } from "../flags/index.js";
@@ -9,11 +12,25 @@ import { AppError, ServiceUnavailableError } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
 
+/**
+ * Accessor extended with scheduled-rollout awareness (#570). `isEnabled`
+ * keeps its existing all-or-nothing semantics; `isEnabledForTenant` layers a
+ * per-tenant/per-environment rollout percentage on top when one is scheduled.
+ */
+export interface TenantAwareFeatureFlagAccessor extends FeatureFlagAccessor {
+  isEnabledForTenant: (
+    flag: FeatureFlagName,
+    tenantId: string,
+    bucketKey: string,
+    environment?: RolloutEnvironment,
+  ) => boolean;
+}
+
 // Extend Express Request to include flags
 declare global {
   namespace Express {
     interface Request {
-      flags?: ReturnType<typeof getFeatureFlagAccessor>;
+      flags?: TenantAwareFeatureFlagAccessor;
     }
   }
 }
@@ -23,7 +40,16 @@ export function featureFlagContextMiddleware(
   _res: Response,
   next: NextFunction,
 ): void {
-  (req as any).flags = getFeatureFlagAccessor();
+  const base = getFeatureFlagAccessor();
+  (req as any).flags = {
+    ...base,
+    isEnabledForTenant: (
+      flag: FeatureFlagName,
+      tenantId: string,
+      bucketKey: string,
+      environment?: RolloutEnvironment,
+    ): boolean => isFeatureEnabledForTenant(flag, tenantId, bucketKey, environment),
+  } satisfies TenantAwareFeatureFlagAccessor;
   next();
 }
 

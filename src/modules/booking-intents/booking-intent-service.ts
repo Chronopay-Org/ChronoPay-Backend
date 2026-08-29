@@ -7,7 +7,7 @@ import type {
   PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
-import { SchedulingService, SlotExpiredError, BundleNotTransferableError } from "../../services/schedulingService.js";
+import { SchedulingService, BundleNotTransferableError } from "../../services/schedulingService.js";
 import { BundleTransferabilityService } from "../../services/bundleTransferabilityService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
@@ -20,6 +20,11 @@ import {
   createDefaultRegistry,
   VersionedPolicyRegistry,
 } from "../../services/cancellationPolicy.js";
+import {
+  HoldFeePolicyService,
+  createEmptyHoldFeeRegistry,
+  HoldFeePolicyRegistry,
+} from "../../services/holdFeePolicy.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -75,6 +80,8 @@ export class BookingIntentError extends AppError {
 export class BookingIntentService {
   private cancellationPolicyService: CancellationPolicyService;
   private getPolicyRegistrySync: () => VersionedPolicyRegistry;
+  private holdFeePolicyService: HoldFeePolicyService;
+  private holdFeeRegistry: HoldFeePolicyRegistry;
 
   constructor(
     private readonly bookingIntentRepository: BookingIntentRepository,
@@ -82,13 +89,19 @@ export class BookingIntentService {
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly nowMs: () => number = () => Date.now(),
     policyRegistry?: VersionedPolicyRegistry,
+    holdFeeRegistry?: HoldFeePolicyRegistry,
   ) {
-    const registry = policyRegistry ?? createDefaultRegistry();
-    this.getPolicyRegistrySync = () => registry;
+    const reg = policyRegistry ?? createDefaultRegistry();
+    this.getPolicyRegistrySync = () => reg;
     this.cancellationPolicyService = new CancellationPolicyService({
       getPolicyRegistrySync: this.getPolicyRegistrySync,
       nowMs: this.nowMs,
       nowIso: this.now,
+    });
+    this.holdFeeRegistry = holdFeeRegistry ?? createEmptyHoldFeeRegistry();
+    this.holdFeePolicyService = new HoldFeePolicyService({
+      getRegistry: () => this.holdFeeRegistry,
+      nowMs: this.nowMs,
     });
   }
 
@@ -102,6 +115,10 @@ export class BookingIntentService {
 
   private captureCancellationPolicySnapshot(): CancellationPolicySnapshot {
     return this.cancellationPolicyService.snapshotCurrentPolicy();
+  }
+
+  private captureHoldFeePolicySnapshot(professionalId: string) {
+    return this.holdFeePolicyService.snapshotForSupplier(professionalId);
   }
 
   async createIntent(
@@ -193,6 +210,12 @@ export class BookingIntentService {
     }
 
     const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
+    const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
+
+    const bookingType = input.bookingType ?? "standard";
+    const status = bookingType === "refundable_hold" ? "hold_placed" : "pending";
+    const holdPlacedAt = bookingType === "refundable_hold" ? this.now() : undefined;
+    const holdUntilMs = bookingType === "refundable_hold" ? input.holdDeadlineMs : undefined;
 
     const intent = this.bookingIntentRepository.create({
       slotId: slot.id,
@@ -208,6 +231,7 @@ export class BookingIntentService {
       holdPlacedAt,
       pricingSnapshot,
       cancellationPolicySnapshot,
+      holdFeePolicySnapshot,
     });
 
     this.schedulingService.reserveSlot(input.slotId);
@@ -282,6 +306,7 @@ export class BookingIntentService {
       }
 
       const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
+      const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
       const intent = await this.bookingIntentRepository.create({
         slotId: slot.id,
@@ -293,6 +318,7 @@ export class BookingIntentService {
         note: input.note,
         createdAt: this.now(),
         cancellationPolicySnapshot,
+        holdFeePolicySnapshot,
       });
 
       // Reserve slot
@@ -399,6 +425,32 @@ export class BookingIntentService {
     return updated;
   }
 
+  private resolveIntentPrice(intent: BookingIntentRecord): number {
+    if (intent.pricingSnapshot) {
+      return intent.pricingSnapshot.resolvedPrice;
+    }
+    return 0;
+  }
+
+  autoRefundHold(intentId: string): BookingIntentRecord {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+    const refundAmount = this.resolveIntentPrice(intent);
+    const updated = this.bookingIntentRepository.update(intentId, {
+      status: "hold_refunded",
+      refundedAt: this.now(),
+      refundMetadata: {
+        refundedAt: this.now(),
+        refundedAmountCents: refundAmount,
+        refundReason: "hold_auto_refund",
+      },
+    });
+    this.schedulingService.releaseSlot(intent.slotId);
+    return updated;
+  }
+
   createIntentTraced(
     input: CreateBookingIntentInput,
     actor: AuthContext,
@@ -427,12 +479,42 @@ export function parseCreateBookingIntentBody(
     holdDeadlineMs?: unknown;
   };
 
+  let parsedBookingType: BookingType | undefined;
+  if (bookingType !== undefined) {
+    if (bookingType === "standard" || bookingType === "refundable_hold") {
+      parsedBookingType = bookingType;
+    } else {
+      throw new BookingIntentError(400, "Invalid bookingType.");
+    }
+  }
+
+  let parsedHoldDeadlineMs: number | undefined;
+  if (holdDeadlineMs !== undefined) {
+    if (typeof holdDeadlineMs !== "number" || Number.isNaN(holdDeadlineMs)) {
+      throw new BookingIntentError(400, "holdDeadlineMs must be a valid number.");
+    }
+    parsedHoldDeadlineMs = holdDeadlineMs;
+  }
+
   // If an RRULE is provided, treat this as a recurring booking request
   if (rrule !== undefined) {
     if (typeof rrule !== "string" || rrule.trim().length === 0) {
       throw new BookingIntentError(400, "rrule must be a non-empty string.");
     }
     const normalizedRRule = rrule.trim();
+    
+    // Assert error for ambiguous inputs without explicit offset
+    if (normalizedRRule.includes("DTSTART")) {
+      const dtstartMatch = normalizedRRule.match(/DTSTART(?:;[^:]*)?:(.*)(?:\n|$)/);
+      if (dtstartMatch) {
+        const dtstartVal = dtstartMatch[1];
+        const hasZ = dtstartVal.endsWith("Z");
+        const hasTzid = normalizedRRule.includes("TZID=");
+        if (!hasZ && !hasTzid) {
+          throw new BookingIntentError(400, "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)");
+        }
+      }
+    }
 
     let sanitizedNote: string | undefined;
     if (note !== undefined) {

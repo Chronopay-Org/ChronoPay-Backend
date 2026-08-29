@@ -7,16 +7,10 @@ import { Request, Response, NextFunction } from "express";
  */
 export const register = new Registry();
 
-// Add default metrics (CPU, Memory, etc.) only outside tests.
-// Jest can execute through node and may not set NODE_ENV=test in this repository,
-// so also detect the Jest runner via process argv.
-const isTestEnvironment =
-  process.env.NODE_ENV === "test" ||
-  typeof process.env.JEST_WORKER_ID !== "undefined" ||
-  process.argv.some((arg) => typeof arg === "string" && arg.includes("jest"));
-
-if (!isTestEnvironment) {
+try {
   collectDefaultMetrics({ register });
+} catch {
+  // Ignore if already collected
 }
 
 const OVERFLOW_LABEL_VALUE = "__overflow__";
@@ -382,6 +376,34 @@ export const expiryCleanupSafetyBrakeTriggers = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Refundable hold expiry sweeper metrics ────────────────────────────────────
+
+export const refundableHoldReleaseLagSeconds = createBudgetedHistogram({
+  name: "refundable_hold_release_lag_seconds",
+  help: "Release lag in seconds between hold expiry deadline and actual release",
+  labels: ["tenant_id"],
+  budget: 64,
+  buckets: [0.1, 0.5, 1, 5, 10, 30, 60, 300, 600, 1800, 3600],
+  registers: [register],
+});
+
+export const refundableHoldsReleasedTotal = createBudgetedCounter({
+  name: "refundable_holds_released_total",
+  help: "Total number of expired refundable holds released by the sweeper",
+  labels: ["tenant_id"],
+  budget: 64,
+  registers: [register],
+});
+
+export const refundableHoldSweeperSafetyBrakeTriggers = createBudgetedCounter({
+  name: "refundable_hold_sweeper_safety_brake_triggers_total",
+  help: "Total number of refundable hold sweeper runs skipped because candidate count exceeded safety threshold",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+
 // ─── Outbox compaction metrics ────────────────────────────────────────────────
 
 /**
@@ -419,6 +441,53 @@ export const outboxCompactionDurationMs = createBudgetedHistogram({
   registers: [register],
 });
 
+// ─── Outbox relay metrics ──────────────────────────────────────────────────────
+
+/**
+ * Counter incremented for each event successfully published and acked by the relay.
+ */
+export const outboxRelayPublished = createBudgetedCounter({
+  name: "outbox_relay_published_total",
+  help: "Total number of outbox events successfully published and acknowledged",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time the relay fails to publish an event.
+ */
+export const outboxRelayPublishErrors = createBudgetedCounter({
+  name: "outbox_relay_publish_errors_total",
+  help: "Total number of outbox events that failed to publish",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
+/**
+ * Histogram tracking the duration (in milliseconds) of a single relay sweep.
+ */
+export const outboxRelayDurationMs = createBudgetedHistogram({
+  name: "outbox_relay_duration_ms",
+  help: "Duration in milliseconds of an outbox relay sweep",
+  labels: [],
+  budget: 0,
+  buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000],
+  registers: [register],
+});
+
+/**
+ * Counter incremented for each relay sweep performed.
+ */
+export const outboxRelaySweepsTotal = createBudgetedCounter({
+  name: "outbox_relay_sweeps_total",
+  help: "Total number of outbox relay sweeps performed",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
+
 export const reputationQueriesTotal = createBudgetedCounter({
   name: "reputation_queries_total",
   help: "Total number of reputation transparency queries grouped by tenant and result",
@@ -447,6 +516,31 @@ export const webhookHmacVerified = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Partner token quota metrics ───────────────────────────────────────────────
+
+/**
+ * Counter incremented each time a partner token's quota usage crosses the
+ * approaching-limit threshold (>= 80 % of daily or monthly limit).
+ */
+export const partnerQuotaApproachingLimit = createBudgetedCounter({
+  name: "partner_quota_approaching_limit_total",
+  help: "Total number of approaching-quota notifications emitted per token",
+  labels: ["token_id"],
+  budget: 512,
+  registers: [register],
+});
+
+/**
+ * Counter incremented each time a request is blocked because a quota was exceeded.
+ */
+export const partnerQuotaExceededTotal = createBudgetedCounter({
+  name: "partner_quota_exceeded_total",
+  help: "Total number of blocked requests due to quota exhaustion per token",
+  labels: ["token_id"],
+  budget: 512,
+  registers: [register],
+});
+
 export type DependencyFaultName =
   | "disconnect"
   | "timeout"
@@ -461,6 +555,20 @@ export function recordDependencyFault(
 ): void {
   dependencyFaults.labels(dependency, fault).inc();
 }
+
+// ─── Residency egress guard metrics ───────────────────────────────────────────
+
+/**
+ * Counter incremented each time a cross-region egress attempt is blocked
+ * because no active waiver was found.
+ */
+export const residencyEgressBreachAttempts = createBudgetedCounter({
+  name: "residency_egress_breach_attempts_total",
+  help: "Total number of cross-region egress attempts blocked by the residency guard",
+  labels: [],
+  budget: 0,
+  registers: [register],
+});
 
 export function recordReputationQuery(
   tenantId: string,
@@ -546,6 +654,31 @@ export const escrowDriftOverridesApplied = createBudgetedCounter({
   registers: [register],
 });
 
+// ─── Fair Queue Rate Limiter metrics ──────────────────────────────────────────
+
+/**
+ * Counter tracking the total number of tokens/requests consumed by each tenant in the fair-queue.
+ */
+export const fairQueueBurnRateTotal = createBudgetedCounter({
+  name: "fair_queue_burn_rate_total",
+  help: "Total number of rate limit tokens consumed per tenant",
+  labels: ["tenant_id"],
+  budget: 128,
+  registers: [register],
+});
+
+/**
+ * Histogram tracking the queue wait time per tenant.
+ */
+export const fairQueueWaitTimeSeconds = createBudgetedHistogram({
+  name: "fair_queue_wait_time_seconds",
+  help: "Average queue wait time in seconds per tenant",
+  labels: ["tenant_id"],
+  budget: 128,
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  registers: [register],
+});
+
 // ─── Query Budget Metrics ─────────────────────────────────────────────────────
 
 /**
@@ -557,6 +690,14 @@ export const queryBudgetBreaches = createBudgetedCounter({
   help: "Total number of SQL queries that exceeded their per-request budget (statement_timeout)",
   labels: ["route"],
   budget: 128,
+  registers: [register],
+});
+
+export const fairQueueBypassAttempts = createBudgetedCounter({
+  name: "fair_queue_bypass_attempts_total",
+  help: "Total number of fair-queue bypass attempts by internal systems",
+  labels: ["reason"],
+  budget: 16,
   registers: [register],
 });
 
@@ -594,20 +735,10 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
   next();
 };
 
-export const queryBudgetBreaches = createBudgetedCounter({
-  name: "query_budget_breaches_total",
-  help: "Total number of query budget breaches observed",
-  labels: ["route"],
-  budget: 32,
-  registers: [register],
-});
-
-export const queryBudgetSqlTimeMs = createBudgetedHistogram({
-  name: "query_budget_sql_time_ms",
-  help: "Total SQL duration per query budget context in ms",
-  labels: ["route"],
-  budget: 32,
-  buckets: [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
-  registers: [register],
+export const treasuryBalance = createBudgetedGauge({
+  name: "treasury_balance_stroops",
+  help: "Current treasury balance in stroops",
+  labels: ["asset_code", "asset_issuer"],
+  budget: 50,
 });
 

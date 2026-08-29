@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['*']
+    tags: ["*"]
   pull_request:
     branches: [main]
 
@@ -79,6 +79,12 @@ jobs:
       - name: Build
         if: github.event_name != 'pull_request'
         run: npm run build
+
+      - name: PII conformance scan
+        if: github.event_name != 'pull_request'
+        run: npm run pii-scan
+        # Fails the build (exit 1) if any unredacted PII pattern is found in
+        # build artefacts under dist/ or logs/.  See docs/pii-conformance.md.
 
       - name: Validate migrations
         run: npm run migrate validate

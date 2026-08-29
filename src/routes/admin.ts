@@ -5,17 +5,87 @@ import { auditExportService } from "../services/auditExportService.js";
 import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
-import { InMemoryImpersonationSessionStore } from "../services/impersonationSessionStore.js";
+import {
+  HolidayCalendarService,
+  InMemoryHolidayCalendarRepository,
+  HolidayCalendarNotFoundError,
+  HolidayCalendarConflictError,
+  HolidayCalendarValidationError,
+  type IHolidayCalendarRepository,
+} from "../services/holidayCalendarService.js";
 
 import { _settlements } from "../services/settlementReconciler.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 import {
-  defaultSupplierCancellationOverrideStore,
-} from "../services/supplierCancellationOverrideStore.js";
-import {
-  accessReviewService,
-} from "../services/accessReviewService.js";
-import type { ReportFormat } from "../types/accessReview.js";
+  CancellationReversalService,
+  CancellationReversalCurrencyMismatchError,
+  isSupportedCurrency,
+  setTenantPausedResolver as setReversalTenantPausedResolver,
+} from "../modules/cancellation/cancellation-reversal-service.js";
+import { PgCancellationReversalRepository } from "../modules/cancellation/pg-cancellation-reversal-repository.js";
+import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
+import { query } from "../db/pool.js";
+import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
+import { getPayoutQuarantineService } from "../services/quarantineStore.js";
+import { strikeService } from "../services/strikeService.js";
+
+/**
+ * Singleton cancellation-reversal service. The route handlers reuse
+ * the same instance across requests so the in-memory ledger state stays
+ * consistent within a process.
+ *
+ * Production bootstrap is responsible for calling
+ * `setReversalTenantPausedResolver(fn)` to wire a real tenant-paused
+ * source (e.g. one that consults the live `SchedulingService`). Until
+ * that hook is wired, all requests pass through the tenant gate
+ * without restriction — the failure mode is "tenant-pause never fires"
+ * (fail-open) rather than "every accepted-paused silently means denied".
+ */
+const _checkoutSessionRepoForReversal = new PgCheckoutSessionRepository(query);
+
+function buildReversalService(): CancellationReversalService {
+  return new CancellationReversalService({
+    repo: new PgCancellationReversalRepository(query),
+    checkoutSessionLookup: {
+      async getCurrency(paymentId: string) {
+        const session = await _checkoutSessionRepoForReversal.findById(paymentId);
+        if (!session) return null;
+        return isSupportedCurrency(session.payment.currency)
+          ? session.payment.currency
+          : null;
+      },
+    },
+    // No tenant-paused resolver is wired at module-load. The admin
+    // route's tenant-paused check falls-through to "no tenant is
+    // paused" until `setReversalTenantPausedResolver(fn)` is wired
+    // by production bootstrap.
+    netRefundLookup: {
+      async getNetRefund() {
+        // The netRefund is provided by the prorated cancellation policy.
+        // Returning `null` here triggers the strict-mode
+        // CancellationReversalNetRefundNotRegisteredError on
+        // append, surfacing the missing wiring at runtime. Production
+        // must wire a real lookup at bootstrap.
+        return null;
+      },
+    },
+  });
+}
+
+let _cancellationReversalService: CancellationReversalService =
+  buildReversalService();
+
+/** Test/production hook to swap the entire service. */
+export function setCancellationReversalService(
+  service: CancellationReversalService,
+): void {
+  _cancellationReversalService = service;
+}
+
+export function setDsrSlaService(_service: any): void {}
+
+// Re-export for route-level test convenience.
+export { setReversalTenantPausedResolver };
 
 const router = Router();
 const disputeQueueService = new DisputeArbitrationQueueService();
@@ -155,192 +225,223 @@ router.post("/refunds", requireAdminToken, async (req: Request, res: Response) =
 });
 
 /**
- * @route POST /api/v1/admin/refunds/approvals
- * @desc Initiate an approval request for a large partial refund (above threshold).
- *       If the amount is below the per-currency threshold the refund is auto-approved
- *       and the caller can execute it immediately.
- * @access Private (admin role required)
- */
-router.post(
-  "/refunds/approvals",
-  requireAuthenticatedActor(["admin"]),
-  async (req: Request, res: Response) => {
-    const initiatorId = req.auth?.userId;
-    if (!initiatorId) {
-      return res.status(401).json({ success: false, error: "Missing admin identity" });
-    }
-
-    const { paymentId, amountCents, currency, reason, refundedBy } = req.body;
-
-    if (!paymentId) {
-      return res.status(400).json({ success: false, error: "paymentId is required" });
-    }
-    if (!amountCents || typeof amountCents !== "number" || !Number.isInteger(amountCents) || amountCents <= 0) {
-      return res.status(400).json({ success: false, error: "amountCents must be a positive integer" });
-    }
-
-    try {
-      const result = await refundApprovalService.initiate(
-        { paymentId, amountCents, currency, reason, refundedBy },
-        initiatorId,
-      );
-
-      if (!result.requiresApproval) {
-        // Below threshold – execute immediately
-        const refund = await RefundService.createRefundTraced(result.autoApproved!);
-        return res.status(201).json({ success: true, requiresApproval: false, refund });
-      }
-
-      return res.status(202).json({
-        success: true,
-        requiresApproval: true,
-        pendingRequest: result.pendingRequest,
-      });
-    } catch (error: any) {
-      if (error instanceof RefundApprovalError) {
-        return res.status(400).json({ success: false, error: error.message, code: error.code });
-      }
-      const status = error.status ?? 500;
-      return res.status(status).json({
-        success: false,
-        error: error.message ?? "Approval initiation failed",
-        code: error.code,
-        details: error.details,
-      });
-    }
-  },
-);
-
-/**
- * @route POST /api/v1/admin/refunds/approvals/:id/approve
- * @desc Approve a pending large-refund request.  Must be a different admin from the initiator.
- *       On success the caller receives the refund record that should now be executed.
- * @access Private (admin role required)
- */
-router.post(
-  "/refunds/approvals/:id/approve",
-  requireAuthenticatedActor(["admin"]),
-  async (req: Request, res: Response) => {
-    const approverId = req.auth?.userId;
-    if (!approverId) {
-      return res.status(401).json({ success: false, error: "Missing admin identity" });
-    }
-
-    try {
-      const { approvedRequest, refundRequest } = await refundApprovalService.approve(
-        req.params.id,
-        approverId,
-      );
-
-      // Execute the refund now that it has been signed off
-      const refund = await RefundService.createRefundTraced(refundRequest);
-
-      return res.status(200).json({ success: true, approvedRequest, refund });
-    } catch (error: any) {
-      if (error instanceof RefundApprovalError) {
-        const statusMap: Record<string, number> = {
-          NOT_FOUND: 404,
-          EXPIRED: 410,
-          ALREADY_RESOLVED: 409,
-          SELF_APPROVAL: 403,
-        };
-        const status = statusMap[error.code] ?? 400;
-        return res.status(status).json({ success: false, error: error.message, code: error.code });
-      }
-      const status = error.status ?? 500;
-      return res.status(status).json({
-        success: false,
-        error: error.message ?? "Approval failed",
-        code: error.code,
-        details: error.details,
-      });
-    }
-  },
-);
-
-/**
- * @route POST /api/v1/admin/refunds/approvals/:id/deny
- * @desc Deny a pending large-refund approval request.
- * @access Private (admin role required)
- */
-router.post(
-  "/refunds/approvals/:id/deny",
-  requireAuthenticatedActor(["admin"]),
-  async (req: Request, res: Response) => {
-    const deniedById = req.auth?.userId;
-    if (!deniedById) {
-      return res.status(401).json({ success: false, error: "Missing admin identity" });
-    }
-
-    const { reason } = req.body;
-
-    try {
-      const denied = await refundApprovalService.deny(req.params.id, deniedById, reason);
-      return res.status(200).json({ success: true, deniedRequest: denied });
-    } catch (error: any) {
-      if (error instanceof RefundApprovalError) {
-        const statusMap: Record<string, number> = {
-          NOT_FOUND: 404,
-          EXPIRED: 410,
-          ALREADY_RESOLVED: 409,
-        };
-        const status = statusMap[error.code] ?? 400;
-        return res.status(status).json({ success: false, error: error.message, code: error.code });
-      }
-      return res.status(500).json({ success: false, error: error.message ?? "Denial failed" });
-    }
-  },
-);
-
-/**
- * @route GET /api/v1/admin/refunds/approvals
- * @desc List refund approval requests, optionally filtered by status.
- * @access Private (admin role required)
- * @query status  pending | approved | denied | expired
- */
-router.get(
-  "/refunds/approvals",
-  requireAuthenticatedActor(["admin"]),
-  (req: Request, res: Response) => {
-    const status = req.query.status as string | undefined;
-    const validStatuses = ["pending", "approved", "denied", "expired"];
-    if (status && !validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        error: `status must be one of: ${validStatuses.join(", ")}`,
-      });
-    }
-    const requests = refundApprovalService.list(status ? { status: status as any } : undefined);
-    return res.json({ success: true, requests });
-  },
-);
-
-/**
- * @route GET /api/v1/admin/refunds/approvals/:id
- * @desc Get a single refund approval request by ID.
- * @access Private (admin role required)
- */
-router.get(
-  "/refunds/approvals/:id",
-  requireAuthenticatedActor(["admin"]),
-  (req: Request, res: Response) => {
-    const request = refundApprovalService.getById(req.params.id);
-    if (!request) {
-      return res.status(404).json({ success: false, error: "Approval request not found" });
-    }
-    return res.json({ success: true, request });
-  },
-);
-
-/**
- * @route GET /api/v1/admin/payments/:id/trace
- * @desc Retrieve a payment trace including the original payment and all linked refund entries.
+ * @route POST /api/v1/admin/payments/:paymentId/reversals
+ * @desc Record a prorated-cancellation reversal entry against a payment.
+ *       Body: { bookingIntentId, amountCents (sign-aware), currency,
+ *               originalRefundId?, escrowReleased?, escrowReleasedAmountCents?,
+ *               escrowReleaseTxId?, reason, policyVersionId, idempotencyKey, metadata? }.
+ *       Errors:
+ *         422 INVALID_CURRENCY    — entry currency != payment currency
+ *         409 invariant violation — sum across booking + amount != -netRefund
+ *         422 TenantPausedError  — metadata.tenantId resolves to a paused tenant
  * @access Private (admin token only)
  */
+router.post(
+  "/payments/:paymentId/reversals",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { paymentId } = req.params;
+      const body = req.body ?? {};
+
+      const required = [
+        "bookingIntentId",
+        "amountCents",
+        "currency",
+        "reason",
+        "policyVersionId",
+        "idempotencyKey",
+      ];
+      for (const k of required) {
+        if (body[k] === undefined || body[k] === null || body[k] === "") {
+          return res
+            .status(400)
+            .json({ success: false, error: `${k} is required` });
+        }
+      }
+      if (typeof body.amountCents !== "number" || !Number.isInteger(body.amountCents) || body.amountCents === 0) {
+        return res
+          .status(400)
+          .json({ success: false, error: "amountCents must be a non-zero integer" });
+      }
+      if (
+        typeof body.escrowReleasedAmountCents === "number" &&
+        body.escrowReleasedAmountCents < 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "escrowReleasedAmountCents must be >= 0",
+        });
+      }
+      if (typeof body.escrowReleased !== "boolean") {
+        return res.status(400).json({
+          success: false,
+          error: "escrowReleased must be a boolean",
+        });
+      }
+
+      const entry = await _cancellationReversalService.appendEntry({
+        bookingIntentId: String(body.bookingIntentId),
+        paymentId: String(paymentId),
+        originalRefundId:
+          body.originalRefundId === undefined || body.originalRefundId === null
+            ? undefined
+            : String(body.originalRefundId),
+        amountCents: body.amountCents,
+        currency: body.currency,
+        escrowReleased: body.escrowReleased,
+        escrowReleasedAmountCents: body.escrowReleasedAmountCents ?? 0,
+        escrowReleaseTxId:
+          body.escrowReleaseTxId === undefined || body.escrowReleaseTxId === null
+            ? undefined
+            : String(body.escrowReleaseTxId),
+        reason: String(body.reason),
+        idempotencyKey: String(body.idempotencyKey),
+        policyVersionId: String(body.policyVersionId),
+        actor: req.auth?.userId ?? "admin",
+        metadata:
+          body.metadata && typeof body.metadata === "object"
+            ? (body.metadata as Record<string, unknown>)
+            : undefined,
+      });
+
+      return res.status(201).json({ success: true, entry });
+    } catch (error: any) {
+      if (
+        error instanceof CancellationReversalCurrencyMismatchError
+      ) {
+        return res.status(422).json({
+          success: false,
+          code: "CURRENCY_MISMATCH",
+          error: error.message,
+          details: error.details,
+        });
+      }
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Reversal recording failed",
+        code: error.code,
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/booking-intents/:bookingIntentId/invariant
+ * @desc Compute the per-(bookingIntentId, currency) reversal invariant. The
+ *       `currency` query parameter is required. Returns 200 with
+ *       `{ valid, sumReversalCents, expectedNegationOfNetRefund, reason? }`.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/booking-intents/:bookingIntentId/invariant",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const currency = String(req.query.currency ?? "");
+      const validCurrencies = ["USD", "EUR", "GBP", "XLM"];
+      if (!validCurrencies.includes(currency)) {
+        return res.status(400).json({
+          success: false,
+          error: `currency query parameter is required (one of ${validCurrencies.join(", ")})`,
+        });
+      }
+      const result = await _cancellationReversalService.checkInvariantForBooking(
+        req.params.bookingIntentId,
+        currency,
+      );
+      const chain = await _cancellationReversalService.verifyChainForPayment(
+        // The invariant endpoint is per-booking; the chain walk is keyed
+        // off paymentId which the caller may pass as `?paymentId=`.
+        String(req.query.paymentId ?? ""),
+      );
+      return res.json({
+        success: true,
+        invariant: result,
+        chain: chain.valid
+          ? { valid: true, entriesChecked: chain.entriesChecked }
+          : { valid: false, ...chain },
+      });
+    } catch (error: any) {
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Invariant check failed",
+      });
+    }
+  },
+);
+
+/**
+ * @route GET /api/v1/admin/booking-intents/:bookingIntentId/reversal-chain
+ * @desc Walk the hash chain for a paymentId and report integrity. The
+ *       `paymentId` query parameter is required.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/booking-intents/:bookingIntentId/reversal-chain",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const paymentId = String(req.query.paymentId ?? "");
+      if (!paymentId) {
+        return res.status(400).json({
+          success: false,
+          error: "paymentId query parameter is required",
+        });
+      }
+      const chain = await _cancellationReversalService.verifyChainForPayment(
+        paymentId,
+      );
+      return res.json({ success: true, chain });
+    } catch (error: any) {
+      const status = error.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        error: error.message ?? "Chain verification failed",
+      });
+    }
+  },
+);
 router.get("/payments/:id/trace", requireAdminToken, async (req: Request, res: Response) => {
   try {
     const trace = await RefundService.getPaymentTraceTraced(req.params.id);
-    return res.json({ success: true, trace });
+
+    const includeReversals = String(req.query.include ?? "")
+      .toLowerCase()
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+      .includes("reversals");
+
+    if (!includeReversals) {
+      return res.json({ success: true, trace });
+    }
+
+    const reversalTrace = await _cancellationReversalService.buildPaymentReversalTrace({
+      paymentId: trace.payment.id,
+      paymentsCurrency: trace.payment.currency,
+      refunds: trace.refunds.map((r) => ({
+        id: r.id,
+        amountCents: r.amountCents,
+        reason: r.reason,
+        status: r.status,
+        createdAt: r.createdAt,
+      })),
+    });
+
+    return res.json({
+      success: true,
+      trace: {
+        ...trace,
+        reversals: reversalTrace.reversals,
+        invariantStatus: reversalTrace.invariantStatus,
+        invariantValid: reversalTrace.invariantValid,
+        netAcrossOriginalAndReversalCents:
+          reversalTrace.netAcrossOriginalAndReversalCents,
+      },
+    });
   } catch (error: any) {
     const status = error.status ?? 500;
     return res.status(status).json({
@@ -349,6 +450,40 @@ router.get("/payments/:id/trace", requireAdminToken, async (req: Request, res: R
     });
   }
 });
+
+router.get(
+  "/payouts/quarantine",
+  requireAuthenticatedActor(["admin"]),
+  (_req: Request, res: Response) => {
+    const service = getPayoutQuarantineService();
+    const entries = service.list();
+    return res.json({
+      success: true,
+      entries,
+    });
+  }
+);
+
+router.post(
+  "/payouts/:payoutId/quarantine/release",
+  requireAuthenticatedActor(["admin"]),
+  (req: Request, res: Response) => {
+    const { payoutId } = req.params;
+    const { reason } = req.body ?? {};
+    const releasedBy = req.auth?.userId;
+
+    const service = getPayoutQuarantineService();
+    const released = service.release(payoutId, { releasedBy, reason });
+    if (!released) {
+      return res.status(404).json({ success: false, error: "Quarantined payout not found" });
+    }
+
+    return res.json({
+      success: true,
+      released: true,
+    });
+  }
+);
 
 // ----------------------------------------
 /**
@@ -559,7 +694,6 @@ type Dispute = {
  *     offset        – pagination offset (default 0)
  * @access Private (admin token only)
  */
-const impersonationSessionStore = new InMemoryImpersonationSessionStore();
 
 router.get(
   "/impersonation/sessions",
@@ -1153,9 +1287,6 @@ router.get(
 
 // ─── Payout DLQ Inspection API ──────────────────────────────────────────────
 
-export function resetDisputesState(): void {
-  // Placeholder for backward compatibility — state was removed in cleanup
-}
 
 /**
  * Validated PayoutDlqStatus values.
@@ -1466,568 +1597,573 @@ router.post(
   },
 );
 
-// ─── Supplier Cancellation Override CRUD API ─────────────────────────────────
+// ─── Holiday Calendar Admin API ───────────────────────────────────────────────
+//
+// All routes require the x-chronopay-admin-token header.
+// The service instance can be replaced via setHolidayCalendarRepository()
+// to inject an in-memory repo in tests without a live database.
+//
+// Routes:
+//   GET    /api/v1/admin/holiday-calendars
+//   POST   /api/v1/admin/holiday-calendars
+//   GET    /api/v1/admin/holiday-calendars/:id
+//   PATCH  /api/v1/admin/holiday-calendars/:id
+//   DELETE /api/v1/admin/holiday-calendars/:id
+//   POST   /api/v1/admin/holiday-calendars/:id/entries
+//   DELETE /api/v1/admin/holiday-calendars/:id/entries/:entryId
+//   POST   /api/v1/admin/holiday-calendars/import/yaml
+//   GET    /api/v1/admin/holiday-calendars/:id/revisions
+//   GET    /api/v1/admin/holiday-calendars/:id/revisions/:version
+//   POST   /api/v1/admin/holiday-calendars/:id/rollback/:version
+
+let _holidayCalendarRepo: IHolidayCalendarRepository = new InMemoryHolidayCalendarRepository();
+
+export function setHolidayCalendarRepository(repo: IHolidayCalendarRepository): void {
+  _holidayCalendarRepo = repo;
+}
+
+function getHolidayCalendarService(): HolidayCalendarService {
+  return new HolidayCalendarService(_holidayCalendarRepo);
+}
+
+function handleHolidayCalendarError(err: unknown, res: Response): Response {
+  if (err instanceof HolidayCalendarNotFoundError) {
+    return res.status(404).json({ success: false, error: err.message });
+  }
+  if (err instanceof HolidayCalendarConflictError) {
+    return res.status(409).json({ success: false, error: err.message });
+  }
+  if (err instanceof HolidayCalendarValidationError) {
+    return res.status(422).json({ success: false, error: err.message, details: err.details });
+  }
+  const message = err instanceof Error ? err.message : "Internal server error";
+  return res.status(500).json({ success: false, error: message });
+}
 
 /**
- * @route GET /api/v1/admin/cancellation-overrides
- * @desc List all supplier cancellation overrides.
+ * @route GET /api/v1/admin/holiday-calendars
+ * @desc List all holiday calendars.
  * @access Private (admin token only)
  */
-router.get(
-  "/cancellation-overrides",
-  requireAdminToken,
-  (_req: Request, res: Response) => {
-    try {
-      const overrides = defaultSupplierCancellationOverrideStore.listOverrides();
-      return res.status(200).json({ success: true, overrides });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to list cancellation overrides",
-      });
-    }
-  },
-);
+router.get("/holiday-calendars", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const calendars = await getHolidayCalendarService().listCalendars();
+    return res.status(200).json({ success: true, calendars });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
 
 /**
- * @route GET /api/v1/admin/cancellation-overrides/:supplierId
- * @desc Get a single supplier cancellation override.
+ * @route POST /api/v1/admin/holiday-calendars
+ * @desc Create a new holiday calendar for a region.
+ * @access Private (admin token only)
+ *
+ * Body:
+ *   region       {string} — unique region identifier (e.g. "us-east", "eu-west")
+ *   name         {string} — display name for the calendar
+ *   description  {string} — optional description
+ */
+router.post("/holiday-calendars", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { region, name, description } = req.body ?? {};
+
+    if (!region || typeof region !== "string" || region.trim() === "") {
+      return res.status(400).json({ success: false, error: "region is required" });
+    }
+    if (!name || typeof name !== "string" || name.trim() === "") {
+      return res.status(400).json({ success: false, error: "name is required" });
+    }
+
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const calendar = await getHolidayCalendarService().createCalendar({
+      region,
+      name,
+      description,
+      changedBy,
+    });
+    return res.status(201).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars/:id
+ * @desc Retrieve a single holiday calendar by ID.
  * @access Private (admin token only)
  */
-router.get(
-  "/cancellation-overrides/:supplierId",
-  requireAdminToken,
-  (req: Request, res: Response) => {
-    try {
-      const override = defaultSupplierCancellationOverrideStore.getOverride(
-        req.params.supplierId,
-      );
-      if (!override) {
-        return res.status(404).json({
-          success: false,
-          error: `No cancellation override found for supplier "${req.params.supplierId}"`,
-        });
-      }
-      return res.status(200).json({ success: true, override });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to get cancellation override",
-      });
-    }
-  },
-);
+router.get("/holiday-calendars/:id", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const calendar = await getHolidayCalendarService().getCalendar(req.params.id);
+    return res.status(200).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
 
 /**
- * @route PUT /api/v1/admin/cancellation-overrides/:supplierId
- * @desc Create or update a supplier cancellation override.
+ * @route PATCH /api/v1/admin/holiday-calendars/:id
+ * @desc Update calendar metadata (name / description). Saves a new revision.
+ * @access Private (admin token only)
  *
- *   Body:
- *     tiers       – array of cancellation tiers (required, min 1)
- *     minRefundAmount – optional lower-bound on refund
- *     maxRefundAmount – optional upper-bound on refund
- *     description – optional reason for the override
- *     changedBy   – actor identifier (defaults to req.auth?.userId or "admin")
- *
- *   Tier shape (inclusive-lower, exclusive-upper):
- *     {
- *       minHoursUntilStart: number,
- *       maxHoursUntilStart?: number,
- *       refundRatio: number (0-1),
- *       flatFee?: number,
- *       percentageFee?: number (0-1),
- *       taxReversalRatio?: number (0-1)
- *     }
- *
+ * Body:
+ *   name         {string} — new display name (optional)
+ *   description  {string} — new description (optional)
+ */
+router.patch("/holiday-calendars/:id", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { name, description } = req.body ?? {};
+    if (name !== undefined && (typeof name !== "string" || name.trim() === "")) {
+      return res.status(400).json({ success: false, error: "name must be a non-empty string" });
+    }
+
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const calendar = await getHolidayCalendarService().updateCalendar(req.params.id, {
+      name,
+      description,
+      changedBy,
+    });
+    return res.status(200).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route DELETE /api/v1/admin/holiday-calendars/:id
+ * @desc Delete a holiday calendar and all its entries and revisions.
  * @access Private (admin token only)
  */
-router.put(
-  "/cancellation-overrides/:supplierId",
-  requireAdminToken,
-  async (req: Request, res: Response) => {
-    try {
-      const { supplierId } = req.params;
-      const { tiers, minRefundAmount, maxRefundAmount, description } = req.body;
-      const changedBy = req.auth?.userId || "admin";
-
-      if (!supplierId || typeof supplierId !== "string" || supplierId.trim() === "") {
-        return res.status(400).json({
-          success: false,
-          error: "supplierId path parameter is required",
-        });
-      }
-
-      if (!Array.isArray(tiers) || tiers.length === 0) {
-        return res.status(400).json({
-          success: false,
-          error: "tiers must be a non-empty array",
-        });
-      }
-
-      const terms = {
-        tiers,
-        ...(minRefundAmount !== undefined ? { minRefundAmount } : {}),
-        ...(maxRefundAmount !== undefined ? { maxRefundAmount } : {}),
-      };
-
-      const override = await defaultSupplierCancellationOverrideStore.setOverride(
-        supplierId.trim(),
-        terms,
-        changedBy,
-        description,
-      );
-
-      return res.status(200).json({ success: true, override });
-    } catch (err: any) {
-      const isValidationError =
-        err.message?.includes("ProratedCancellationTerms must") ||
-        err.message?.includes("Tier ") ||
-        err.message?.includes("supplierId must");
-      const status = isValidationError ? 400 : 500;
-      return res.status(status).json({
-        success: false,
-        error: err.message ?? "Failed to set cancellation override",
-      });
-    }
-  },
-);
+router.delete("/holiday-calendars/:id", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    await getHolidayCalendarService().deleteCalendar(req.params.id);
+    return res.status(200).json({ success: true, message: "Calendar deleted" });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
 
 /**
- * @route DELETE /api/v1/admin/cancellation-overrides/:supplierId
- * @desc Delete a supplier cancellation override.
+ * @route POST /api/v1/admin/holiday-calendars/:id/entries
+ * @desc Add a single holiday entry to an existing calendar.
+ * @access Private (admin token only)
+ *
+ * Body:
+ *   name       {string}  — holiday name
+ *   start_date {string}  — YYYY-MM-DD inclusive start
+ *   end_date   {string}  — YYYY-MM-DD inclusive end (equals start for single-day)
+ *   recurring  {boolean} — whether this recurs annually (default false)
+ *   note       {string}  — optional note
+ */
+router.post("/holiday-calendars/:id/entries", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { name, start_date, end_date, recurring, note } = req.body ?? {};
+
+    if (!name || typeof name !== "string" || name.trim() === "") {
+      return res.status(400).json({ success: false, error: "name is required" });
+    }
+    if (!start_date || typeof start_date !== "string") {
+      return res.status(400).json({ success: false, error: "start_date is required (YYYY-MM-DD)" });
+    }
+    if (!end_date || typeof end_date !== "string") {
+      return res.status(400).json({ success: false, error: "end_date is required (YYYY-MM-DD)" });
+    }
+
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const entry = await getHolidayCalendarService().addEntry(req.params.id, {
+      name,
+      startDate: start_date,
+      endDate: end_date,
+      recurring: recurring ?? false,
+      note,
+      changedBy,
+    });
+    return res.status(201).json({ success: true, entry });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route DELETE /api/v1/admin/holiday-calendars/:id/entries/:entryId
+ * @desc Remove a single holiday entry from a calendar.
  * @access Private (admin token only)
  */
 router.delete(
-  "/cancellation-overrides/:supplierId",
+  "/holiday-calendars/:id/entries/:entryId",
   requireAdminToken,
   async (req: Request, res: Response) => {
     try {
-      const { supplierId } = req.params;
-      const changedBy = req.auth?.userId || "admin";
+      const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+      await getHolidayCalendarService().deleteEntry(req.params.id, req.params.entryId, changedBy);
+      return res.status(200).json({ success: true, message: "Entry deleted" });
+    } catch (err) {
+      return handleHolidayCalendarError(err, res);
+    }
+  },
+);
 
-      if (!supplierId || typeof supplierId !== "string" || supplierId.trim() === "") {
-        return res.status(400).json({
-          success: false,
-          error: "supplierId path parameter is required",
-        });
+/**
+ * @route POST /api/v1/admin/holiday-calendars/import/yaml
+ * @desc Import holidays from a YAML-shaped JSON payload.
+ *       The import performs full schema validation and overlap detection.
+ *       If a calendar for the region already exists, its entries are replaced.
+ *       A new revision is saved on every successful import.
+ * @access Private (admin token only)
+ *
+ * Body (parsed YAML as JSON):
+ *   region      {string}   — target region (required)
+ *   name        {string}   — calendar display name (optional, used only on creation)
+ *   description {string}   — description (optional)
+ *   holidays    {object[]} — array of { name, start_date, end_date, recurring?, note? }
+ *
+ * Validation errors return 422 with a `details` array.
+ * Duplicate / overlapping ranges are rejected with 422.
+ */
+router.post("/holiday-calendars/import/yaml", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+    const calendar = await getHolidayCalendarService().importFromYaml(req.body, {
+      changedBy,
+      changeNote: req.body?.changeNote,
+    });
+    return res.status(200).json({ success: true, calendar });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars/:id/revisions
+ * @desc List all revisions for a calendar (newest first).
+ * @access Private (admin token only)
+ */
+router.get("/holiday-calendars/:id/revisions", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const revisions = await getHolidayCalendarService().listRevisions(req.params.id);
+    return res.status(200).json({ success: true, revisions });
+  } catch (err) {
+    return handleHolidayCalendarError(err, res);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/holiday-calendars/:id/revisions/:version
+ * @desc Fetch a specific historical revision snapshot.
+ * @access Private (admin token only)
+ */
+router.get(
+  "/holiday-calendars/:id/revisions/:version",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const version = parseInt(req.params.version, 10);
+      if (isNaN(version) || version < 1) {
+        return res.status(400).json({ success: false, error: "version must be a positive integer" });
       }
+      const revision = await getHolidayCalendarService().getRevision(req.params.id, version);
+      return res.status(200).json({ success: true, revision });
+    } catch (err) {
+      return handleHolidayCalendarError(err, res);
+    }
+  },
+);
 
-      const deleted = await defaultSupplierCancellationOverrideStore.deleteOverride(
-        supplierId.trim(),
+/**
+ * @route POST /api/v1/admin/holiday-calendars/:id/rollback/:version
+ * @desc Roll the calendar back to a specific historical revision.
+ *       The rollback itself is recorded as a new revision for auditability.
+ * @access Private (admin token only)
+ */
+router.post(
+  "/holiday-calendars/:id/rollback/:version",
+  requireAdminToken,
+  async (req: Request, res: Response) => {
+    try {
+      const version = parseInt(req.params.version, 10);
+      if (isNaN(version) || version < 1) {
+        return res.status(400).json({ success: false, error: "version must be a positive integer" });
+      }
+      const changedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token")?.slice(0, 8);
+      const calendar = await getHolidayCalendarService().rollbackToRevision(
+        req.params.id,
+        version,
         changedBy,
       );
-
-      if (!deleted) {
-        return res.status(404).json({
-          success: false,
-          error: `No cancellation override found for supplier "${supplierId}"`,
-        });
-      }
-
-      return res.status(200).json({ success: true, deleted: true });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to delete cancellation override",
-      });
+      return res.status(200).json({ success: true, calendar });
+    } catch (err) {
+      return handleHolidayCalendarError(err, res);
     }
   },
 );
 
-// ─── SOC2 Access Review API ────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// No-Show Penalty Strike Routes
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * @route POST /api/v1/admin/access-review/snapshots
- * @desc Create a new access grant snapshot for the current quarter.
- *   Query params:
- *     force – if "true", forces creation even if a snapshot already exists for this quarter
+ * @route POST /api/v1/admin/buyers/:buyerId/strikes
+ * @desc Issue a no-show penalty strike against a buyer.
+ *   Body: { reason, intentId?, slotId? }
+ *   Automatically suspends buyer when threshold is reached.
+ * @access Private (admin token only)
+ */
+router.post("/buyers/:buyerId/strikes", requireAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { buyerId } = req.params;
+    const { reason, intentId, slotId } = req.body ?? {};
+
+    if (!buyerId || typeof buyerId !== "string") {
+      return res.status(400).json({ success: false, error: "buyerId is required" });
+    }
+
+    const result = await strikeService.issueStrike({
+      buyerId,
+      intentId,
+      slotId,
+      reason: reason || "No-show penalty strike",
+    });
+
+    return res.status(201).json({
+      success: true,
+      strike: result.strike,
+      autoSuspended: result.autoSuspended,
+      suspension: result.buyerSuspension,
+    });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, error: err.message ?? "Failed to issue strike" });
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/buyers/:buyerId/strikes
+ * @desc Get all strikes and suspension status for a buyer.
+ * @access Private (admin token only)
+ */
+router.get("/buyers/:buyerId/strikes", requireAdminToken, (req: Request, res: Response) => {
+  try {
+    const { buyerId } = req.params;
+    if (!buyerId) {
+      return res.status(400).json({ success: false, error: "buyerId is required" });
+    }
+
+    const strikes = strikeService.getBuyerStrikes(buyerId);
+    const suspension = strikeService.getBuyerSuspensionStatus(buyerId);
+
+    return res.status(200).json({
+      success: true,
+      buyerId,
+      strikes,
+      activeStrikesCount: suspension.activeStrikesCount,
+      suspension: {
+        isSuspended: suspension.isSuspended,
+        suspendedAt: suspension.suspendedAt,
+        suspensionReason: suspension.suspensionReason,
+      },
+    });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, error: err.message ?? "Failed to retrieve strikes" });
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/buyers/:buyerId/strikes/:strikeId/appeal
+ * @desc Appeal a no-show penalty strike within 72 hours (or as configured).
+ *   Body: { reason, evidence? }
+ *   Evidence is an array of references (URLs or file paths).
+ *   The appeal pauses penalty enforcement by changing strike status.
  * @access Private (admin token only)
  */
 router.post(
-  "/access-review/snapshots",
+  "/buyers/:buyerId/strikes/:strikeId/appeal",
   requireAdminToken,
   async (req: Request, res: Response) => {
     try {
-      const force = req.query.force === "true";
-      const snapshot = await accessReviewService.createSnapshot(force);
+      const { strikeId } = req.params;
+      const { reason, evidence } = req.body ?? {};
 
-      await defaultAuditLogger.log(
-        "access-review.api.snapshot_created",
-        {
-          context: {
-            snapshotId: snapshot.snapshotId,
-            quarterLabel: snapshot.quarterLabel,
-            grantCount: snapshot.grants.length,
-            forced: force,
-          },
-        },
-        {
-          actorIp: getActorIp(req),
-          resource: req.originalUrl,
-          status: 201,
-        },
-      );
+      if (!reason || typeof reason !== "string" || reason.trim() === "") {
+        return res.status(400).json({ success: false, error: "Appeal reason is required" });
+      }
 
-      return res.status(201).json({ success: true, snapshot });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to create access review snapshot",
+      const evidenceArr = Array.isArray(evidence) ? evidence.filter((e: unknown) => typeof e === "string") : undefined;
+
+      const result = await strikeService.appealStrike(strikeId, reason, evidenceArr);
+
+      return res.status(200).json({
+        success: true,
+        strike: result.strike,
+        suspensionLifted: result.suspensionLifted,
+        suspension: result.buyerSuspension,
+        message: "No-show penalty appeal filed. Penalty enforcement is paused pending review.",
       });
+    } catch (err: any) {
+      const status = err.message?.includes("not found") ? 404 : 400;
+      return res.status(status).json({ success: false, error: err.message ?? "Appeal failed" });
     }
   },
 );
 
 /**
- * @route GET /api/v1/admin/access-review/snapshots
- * @desc List access grant snapshots with optional filtering and pagination.
- *   Query params:
- *     quarterLabel – filter by quarter (e.g. "2026-Q2")
- *     limit        – max results (default 50, max 200)
- *     offset       – pagination offset (default 0)
- *     summaries    – if "true", return lightweight summaries without full grants
- * @access Private (admin token only)
- */
-router.get(
-  "/access-review/snapshots",
-  requireAdminToken,
-  (req: Request, res: Response) => {
-    try {
-      const quarterLabel =
-        typeof req.query.quarterLabel === "string"
-          ? req.query.quarterLabel
-          : undefined;
-      let limit = 50;
-      let offset = 0;
-
-      if (typeof req.query.limit === "string") {
-        const parsed = Number.parseInt(req.query.limit, 10);
-        if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 200) {
-          limit = parsed;
-        }
-      }
-      if (typeof req.query.offset === "string") {
-        const parsed = Number.parseInt(req.query.offset, 10);
-        if (Number.isFinite(parsed) && parsed >= 0) {
-          offset = parsed;
-        }
-      }
-
-      if (req.query.summaries === "true") {
-        const result = accessReviewService.listSnapshotSummaries({
-          quarterLabel,
-          limit,
-          offset,
-        });
-        return res.status(200).json({ success: true, ...result });
-      }
-
-      const result = accessReviewService.listSnapshots({
-        quarterLabel,
-        limit,
-        offset,
-      });
-      return res.status(200).json({ success: true, ...result });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to list snapshots",
-      });
-    }
-  },
-);
-
-/**
- * @route GET /api/v1/admin/access-review/snapshots/:snapshotId
- * @desc Get a single access grant snapshot by ID.
- * @access Private (admin token only)
- */
-router.get(
-  "/access-review/snapshots/:snapshotId",
-  requireAdminToken,
-  (req: Request, res: Response) => {
-    try {
-      const snapshot = accessReviewService.getSnapshot(req.params.snapshotId);
-      if (!snapshot) {
-        return res.status(404).json({
-          success: false,
-          error: `Snapshot not found: ${req.params.snapshotId}`,
-        });
-      }
-      return res.status(200).json({ success: true, snapshot });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to get snapshot",
-      });
-    }
-  },
-);
-
-/**
- * @route GET /api/v1/admin/access-review/snapshots/:snapshotId/report
- * @desc Generate an access review report for a snapshot.
- *   Query params:
- *     format – report format: "json" (default) or "csv"
- * @access Private (admin token only)
- */
-router.get(
-  "/access-review/snapshots/:snapshotId/report",
-  requireAdminToken,
-  (req: Request, res: Response) => {
-    try {
-      const format: ReportFormat =
-        req.query.format === "csv" ? "csv" : "json";
-
-      const snapshot = accessReviewService.getSnapshot(req.params.snapshotId);
-      if (!snapshot) {
-        return res.status(404).json({
-          success: false,
-          error: `Snapshot not found: ${req.params.snapshotId}`,
-        });
-      }
-
-      const content = accessReviewService.generateFormattedReport(
-        req.params.snapshotId,
-        format,
-      );
-
-      void defaultAuditLogger.log(
-        "access-review.api.report_generated",
-        {
-          context: {
-            snapshotId: req.params.snapshotId,
-            quarterLabel: snapshot.quarterLabel,
-            format,
-          },
-        },
-        {
-          actorIp: getActorIp(req),
-          resource: req.originalUrl,
-          status: 200,
-        },
-      );
-
-      if (format === "csv") {
-        res.setHeader("Content-Type", "text/csv");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="access-review-${snapshot.quarterLabel}.csv"`,
-        );
-      } else {
-        res.setHeader("Content-Type", "application/json");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="access-review-${snapshot.quarterLabel}.json"`,
-        );
-      }
-
-      return res.send(content);
-    } catch (err: any) {
-      const status = err.message?.includes("not found") ? 404 : 500;
-      return res.status(status).json({
-        success: false,
-        error: err.message ?? "Failed to generate report",
-      });
-    }
-  },
-);
-
-/**
- * @route POST /api/v1/admin/access-review/snapshots/:snapshotId/attestations
- * @desc Record a reviewer sign-off for a snapshot.
- *   Body:
- *     reviewer – identifier of the reviewer (required)
- *     outcome  – "approved", "rejected", or "needs_revision" (required)
- *     notes    – optional notes or justification
+ * @route POST /api/v1/admin/buyers/:buyerId/reinstate
+ * @desc Reinstate a suspended buyer and optionally clear active strikes.
+ *   Body: { reason, clearActiveStrikes? }
  * @access Private (admin token only)
  */
 router.post(
-  "/access-review/snapshots/:snapshotId/attestations",
+  "/buyers/:buyerId/reinstate",
   requireAdminToken,
   async (req: Request, res: Response) => {
     try {
-      const { reviewer, outcome, notes } = req.body as {
-        reviewer?: string;
-        outcome?: string;
-        notes?: string;
-      };
+      const { buyerId } = req.params;
+      const { reason, clearActiveStrikes } = req.body ?? {};
+      const adminId = req.auth?.userId ?? req.header("x-chronopay-admin-token") ?? "admin";
 
-      if (!reviewer || typeof reviewer !== "string" || reviewer.trim() === "") {
-        return res.status(400).json({
-          success: false,
-          error: "reviewer is required and must be a non-empty string",
-        });
-      }
-
-      if (!outcome || !["approved", "rejected", "needs_revision"].includes(outcome)) {
-        return res.status(400).json({
-          success: false,
-          error:
-            'outcome is required and must be one of: approved, rejected, needs_revision',
-        });
-      }
-
-      const attestation = await accessReviewService.createAttestation(
-        req.params.snapshotId,
-        reviewer,
-        outcome as "approved" | "rejected" | "needs_revision",
-        notes,
+      const result = await strikeService.reinstateBuyer(
+        buyerId,
+        {
+          adminId,
+          reason: reason || "Admin reinstatement",
+          clearActiveStrikes: clearActiveStrikes !== false,
+        },
       );
 
-      return res.status(201).json({ success: true, attestation });
-    } catch (err: any) {
-      const isValidation =
-        err.message?.includes("not found") ||
-        err.message?.includes("already exists") ||
-        err.message?.includes("Invalid attestation") ||
-        err.message?.includes("Reviewer identifier");
-      const status = isValidation ? 400 : 500;
-      return res.status(status).json({
-        success: false,
-        error: err.message ?? "Failed to create attestation",
+      return res.status(200).json({
+        success: true,
+        suspension: result.buyerSuspension,
+        rescindedStrikesCount: result.rescindedStrikesCount,
       });
+    } catch (err: any) {
+      return res.status(400).json({ success: false, error: err.message ?? "Reinstatement failed" });
     }
   },
 );
 
 /**
- * @route GET /api/v1/admin/access-review/attestations
- * @desc List attestations with optional filtering and pagination.
- *   Query params:
- *     snapshotId   – filter by snapshot ID
- *     quarterLabel – filter by quarter label
- *     outcome      – filter by outcome (approved, rejected, needs_revision)
- *     limit        – max results (default 50, max 200)
- *     offset       – pagination offset (default 0)
+ * @route GET /api/v1/admin/strikes/config
+ * @desc Get the current strike system configuration.
  * @access Private (admin token only)
  */
-router.get(
-  "/access-review/attestations",
+router.get("/strikes/config", requireAdminToken, (_req: Request, res: Response) => {
+  return res.status(200).json({
+    success: true,
+    config: strikeService.getConfig(),
+  });
+});
+
+/**
+ * @route PUT /api/v1/admin/strikes/config
+ * @desc Update strike system configuration.
+ *   Body: { maxStrikesThreshold?, decayWindowMs?, autoSuspendEnabled? }
+ * @access Private (admin token only)
+ */
+router.put("/strikes/config", requireAdminToken, (req: Request, res: Response) => {
+  try {
+    const { maxStrikesThreshold, decayWindowMs, autoSuspendEnabled } = req.body ?? {};
+    const updates: Record<string, unknown> = {};
+
+    if (maxStrikesThreshold !== undefined) updates.maxStrikesThreshold = maxStrikesThreshold;
+    if (decayWindowMs !== undefined) updates.decayWindowMs = decayWindowMs;
+    if (autoSuspendEnabled !== undefined) updates.autoSuspendEnabled = autoSuspendEnabled;
+
+    const config = strikeService.updateConfig(updates as Parameters<typeof strikeService.updateConfig>[0]);
+    return res.status(200).json({ success: true, config });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, error: err.message ?? "Failed to update config" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// No-Show Appeal Arbitration Queue Routes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @route POST /api/v1/admin/strikes/:strikeId/escalate
+ * @desc Escalate an appealed no-show penalty strike to the arbitration queue
+ *   for operator review. Only strikes with "appealed" status can be escalated.
+ * @access Private (admin token only)
+ */
+router.post(
+  "/strikes/:strikeId/escalate",
   requireAdminToken,
   (req: Request, res: Response) => {
     try {
-      const snapshotId =
-        typeof req.query.snapshotId === "string"
-          ? req.query.snapshotId
-          : undefined;
-      const quarterLabel =
-        typeof req.query.quarterLabel === "string"
-          ? req.query.quarterLabel
-          : undefined;
-      const outcome =
-        typeof req.query.outcome === "string" &&
-          ["approved", "rejected", "needs_revision"].includes(req.query.outcome)
-          ? (req.query.outcome as "approved" | "rejected" | "needs_revision")
-          : undefined;
-      let limit = 50;
-      let offset = 0;
+      const { strikeId } = req.params;
 
-      if (typeof req.query.limit === "string") {
-        const parsed = Number.parseInt(req.query.limit, 10);
-        if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 200) {
-          limit = parsed;
-        }
-      }
-      if (typeof req.query.offset === "string") {
-        const parsed = Number.parseInt(req.query.offset, 10);
-        if (Number.isFinite(parsed) && parsed >= 0) {
-          offset = parsed;
-        }
-      }
+      const queueItem = strikeService.escalateToArbitration(strikeId);
 
-      const result = accessReviewService.listAttestations({
-        snapshotId,
-        quarterLabel,
-        outcome,
-        limit,
-        offset,
+      return res.status(200).json({
+        success: true,
+        message: "Strike escalated to arbitration queue for operator review.",
+        queueItem,
       });
-
-      return res.status(200).json({ success: true, ...result });
     } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to list attestations",
-      });
+      const status = err.message?.includes("not found") ? 404 : 409;
+      return res.status(status).json({ success: false, error: err.message ?? "Escalation failed" });
     }
   },
 );
 
 /**
- * @route GET /api/v1/admin/access-review/gaps
- * @desc Detect gaps in quarterly access review snapshots.
- *   Query params:
- *     lookback – number of quarters to check back (default 8)
+ * @route POST /api/v1/admin/strikes/:strikeId/arbitration/decide
+ * @desc Decide an arbitration case. Uphold or overturn the strike.
+ *   Body: { decision: "UPHELD" | "OVERTURNED" }
  * @access Private (admin token only)
  */
-router.get(
-  "/access-review/gaps",
+router.post(
+  "/strikes/:strikeId/arbitration/decide",
   requireAdminToken,
   (req: Request, res: Response) => {
     try {
-      let lookback = 8;
-      if (typeof req.query.lookback === "string") {
-        const parsed = Number.parseInt(req.query.lookback, 10);
-        if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 40) {
-          lookback = parsed;
-        }
+      const { strikeId } = req.params;
+      const { decision } = req.body ?? {};
+      const decidedBy = req.auth?.userId ?? req.header("x-chronopay-admin-token") ?? "admin";
+
+      if (!decision || !["UPHELD", "OVERTURNED"].includes(decision)) {
+        return res.status(400).json({
+          success: false,
+          error: "decision must be either 'UPHELD' or 'OVERTURNED'",
+        });
       }
 
-      const gaps = accessReviewService.detectGaps(lookback);
-      return res.status(200).json({ success: true, gaps });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to detect gaps",
+      const result = strikeService.decideArbitration(strikeId, decision, decidedBy);
+
+      return res.status(200).json({
+        success: true,
+        strike: result.strike,
+        queueItem: result.queueItem,
+        message: decision === "OVERTURNED"
+          ? "Strike overturned by arbitration. Buyer reinstated."
+          : "Strike upheld by arbitration. Penalty stands.",
       });
+    } catch (err: any) {
+      const status = err.message?.includes("not found") ? 404 : 409;
+      return res.status(status).json({ success: false, error: err.message ?? "Arbitration decision failed" });
     }
   },
 );
 
 /**
- * @route GET /api/v1/admin/access-review/bundled-report
- * @desc Generate a bundled report of all attested snapshots.
- *   Query params:
- *     format – report format: "json" (default) or "csv"
+ * @route GET /api/v1/admin/strikes/arbitration/queue
+ * @desc Get the arbitration queue for operator review.
+ *   Query params: ?status=pending|decided
  * @access Private (admin token only)
  */
 router.get(
-  "/access-review/bundled-report",
+  "/strikes/arbitration/queue",
   requireAdminToken,
   (req: Request, res: Response) => {
-    try {
-      const format: ReportFormat =
-        req.query.format === "csv" ? "csv" : "json";
+    const status = req.query.status as string | undefined;
+    const validStatus = status === "pending" || status === "decided" ? status : undefined;
 
-      let content: string;
-      if (format === "csv") {
-        content = accessReviewService.generateAttestedReportsCsvBundle();
-      } else {
-        content = accessReviewService.generateAttestedReportsBundle();
-      }
+    const queue = strikeService.getArbitrationQueue(validStatus);
 
-      if (format === "csv") {
-        res.setHeader("Content-Type", "text/csv");
-        res.setHeader(
-          "Content-Disposition",
-          'attachment; filename="access-review-bundled-attestations.csv"',
-        );
-      } else {
-        res.setHeader("Content-Type", "application/json");
-        res.setHeader(
-          "Content-Disposition",
-          'attachment; filename="access-review-bundled-attestations.json"',
-        );
-      }
-
-      return res.send(content);
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message ?? "Failed to generate bundled report",
-      });
-    }
+    return res.status(200).json({
+      success: true,
+      queue,
+      total: queue.length,
+    });
   },
 );
 

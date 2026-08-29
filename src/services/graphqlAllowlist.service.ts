@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { Counter } from "prom-client";
+import { logger } from "../utils/logger.js";
+
 
 export const rejectedAdhocQueries = new Counter({
   name: "graphql_rejected_adhoc_queries_total",
@@ -23,7 +25,7 @@ export class GraphqlAllowlistService {
       const parsed = JSON.parse(data);
       this.allowlist = parsed.queries || {};
     } catch (err) {
-      console.error("Failed to load GraphQL allowlist", err);
+      logger.error("Failed to load GraphQL allowlist", err);
       // Retain the old allowlist if parsing fails or clear it? 
       // Safe to not mutate on failure. But tests might want us to handle this gracefully.
     }

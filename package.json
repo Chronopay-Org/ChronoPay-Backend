@@ -16,6 +16,7 @@
     "format": "prettier --write \"src/**/*.{ts,js,cjs,mjs}\" \".github/workflows/*.{yml,yaml}\" \"eslint.config.js\" \"package.json\" \"tsconfig.json\" \"README.md\" \".prettierrc\"",
     "test": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --runInBand",
     "test:coverage": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --runInBand --coverage",
+    "pii-scan": "tsx scripts/pii-conformance-scan.ts",
     "migrate": "tsx src/scripts/migrate.ts",
     "canary": "tsx scripts/canary.ts",
     "generate-openapi": "tsx src/scripts/generate-openapi.ts",
@@ -24,12 +25,15 @@
     "sbom:upload": "tsx scripts/upload-sbom.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-kms": "^3.1097.0",
+    "@google-cloud/kms": "^5.7.0",
     "cors": "^2.8.5",
     "dataloader": "^2.2.3",
     "dotenv": "^17.4.2",
     "ethers": "^6.16.0",
     "express": "^4.21.0",
     "express-rate-limit": "^8.5.2",
+    "h3-js": "^4.5.0",
     "ioredis": "^5.11.0",
     "jose": "^6.2.3",
     "pg": "^8.21.0",
@@ -47,7 +51,8 @@
     "ws": "^8.21.0",
     "ethers": {
       "ws": "^8.21.0"
-    }
+    },
+    "fast-xml-parser": "^5.0.9"
   },
   "devDependencies": {
     "@cyclonedx/cyclonedx-npm": "^1.19.3",

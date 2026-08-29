@@ -1,8 +1,9 @@
 import {
   ReputationTransparencyService,
-  DEFAULT_SIGNAL_CATEGORIES,
 } from "./reputationTransparencyService.js";
 import { InMemoryCache } from "../cache/inMemoryCache.js";
+import { logger } from "../utils/logger.js";
+
 
 export type AlertType = "approach" | "demotion";
 export type RatingTier = "Top Rated" | "Standard" | "At Risk" | "New Supplier";
@@ -138,7 +139,7 @@ export class SupplierTierAlertService {
     });
 
     this.notificationHandlers.set("in_app", (alert) => {
-      console.log(
+      logger.info(
         `[in-app-alert] supplier=${alert.supplierId} type=${alert.alertType} ${alert.message}`,
       );
     });
@@ -252,7 +253,7 @@ export class SupplierTierAlertService {
         const result = await this.evaluateSupplier(supplierId);
         results.push(result);
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[tier-alert] Failed to evaluate supplier ${supplierId}:`,
           err instanceof Error ? err.message : err,
         );
@@ -323,7 +324,7 @@ export class SupplierTierAlertService {
     try {
       await handler(alert);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[tier-alert] Notification dispatch failed for alert ${alert.id}:`,
         err instanceof Error ? err.message : err,
       );

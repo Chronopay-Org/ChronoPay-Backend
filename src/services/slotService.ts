@@ -63,12 +63,59 @@ export interface SlotRepositoryInterface {
   getSlotsPage: (offset: number, limit: number) => Promise<PaginatedSlot[]>;
 }
 
+// ─── Hold / reservation types ─────────────────────────────────────────────────
+
+export interface SlotHold {
+  /** Unique hold identifier. */
+  id: string;
+  /** The slot this hold is against. */
+  slotId: string;
+  /** The buyer who placed the hold. */
+  buyerId: string;
+  /** Hold status — only 'held' holds are active. */
+  status: "held" | "released" | "expired";
+  /** Unix timestamp (ms) when the hold expires. */
+  expiresAt: number;
+  /** Unix timestamp (ms) when the hold was created. */
+  createdAt: number;
+}
+
+/** A hold record returned to the caller. buyer_id is redacted for non-owners. */
+export interface SlotHoldView {
+  id: string;
+  slotId: string;
+  /** Present only when the requester is the slot owner (professional). */
+  buyerId: string | null;
+  status: "held";
+  expiresAt: number;
+  createdAt: number;
+}
+
+export interface ListReservationsOptions {
+  /** Only return holds that expire after this timestamp (ms). Defaults to now. */
+  afterMs?: number;
+  /** Page number (1-based). */
+  page?: number;
+  /** Results per page. */
+  limit?: number;
+}
+
+export interface ListReservationsResult {
+  data: SlotHoldView[];
+  page: number;
+  limit: number;
+  total: number;
+}
+
 export class SlotService {
   private repository: SlotRepositoryInterface;
   private _slots: Slot[] = [];
   private nextId = 1;
   private timeSource: () => Date;
   private cache: any;
+  /** In-memory hold store. */
+  private _holds: SlotHold[] = [];
+  private _holdNextId = 1;
 
   constructor(arg1?: any, arg2?: any) {
     if (typeof arg1 === 'function') {
@@ -229,9 +276,75 @@ export class SlotService {
     return { ...this._slots[index] };
   }
 
+  /**
+   * Add an active hold against a slot (used by tests and checkout flows).
+   *
+   * @returns The created hold record.
+   */
+  addHold(data: {
+    slotId: string;
+    buyerId: string;
+    expiresAt: number;
+  }): SlotHold {
+    const now = this.timeSource().getTime();
+    const hold: SlotHold = {
+      id: String(this._holdNextId++),
+      slotId: String(data.slotId),
+      buyerId: data.buyerId,
+      status: "held",
+      expiresAt: data.expiresAt,
+      createdAt: now,
+    };
+    this._holds.push(hold);
+    return { ...hold };
+  }
+
+  /**
+   * Return active holds for a slot.
+   *
+   * Active = status 'held' AND expires_at > now.
+   *
+   * @param slotId       - The slot to query.
+   * @param isOwner      - When true the buyer_id is included; otherwise redacted.
+   * @param options      - Pagination / time-filter options.
+   */
+  listReservations(
+    slotId: string,
+    isOwner: boolean,
+    options: ListReservationsOptions = {},
+  ): ListReservationsResult {
+    const nowMs = options.afterMs ?? this.timeSource().getTime();
+    const page = options.page ?? 1;
+    const limit = options.limit ?? 10;
+
+    const active = this._holds.filter(
+      (h) =>
+        String(h.slotId) === String(slotId) &&
+        h.status === "held" &&
+        h.expiresAt > nowMs,
+    );
+
+    const total = active.length;
+    const offset = (page - 1) * limit;
+    const page_items = active.slice(offset, offset + limit);
+
+    const data: SlotHoldView[] = page_items.map((h) => ({
+      id: h.id,
+      slotId: h.slotId,
+      buyerId: isOwner ? h.buyerId : null,
+      status: "held",
+      expiresAt: h.expiresAt,
+      createdAt: h.createdAt,
+    }));
+
+    return { data, page, limit, total };
+  }
+
   reset(): void {
     this._slots = [];
     this.nextId = 1;
+    this._holds = [];
+    this._holdNextId = 1;
     if (this.cache) {
       this.cache.invalidate("slots:list:all");
     }

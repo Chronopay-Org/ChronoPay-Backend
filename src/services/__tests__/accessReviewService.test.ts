@@ -11,8 +11,8 @@
  *   - Edge cases: reviewer absent, mid-quarter role change, snapshot gap
  */
 
-import { AccessReviewService } from "../accessReviewService.js";
 import {
+  AccessReviewService,
   computeQuarterLabel,
   computeQuarterRange,
   generatePreviousQuarters,

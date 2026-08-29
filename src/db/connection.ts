@@ -133,7 +133,7 @@ export function getPool(): Pool {
     // Surface idle-client background errors to stderr instead of crashing
     // the process or swallowing them silently.
     pool.on("error", (err: Error) => {
-      console.error("[db/connection] Unexpected pool error:", err.message);
+      logger.error({ err }, "unexpected db pool error");
     });
   }
 
@@ -194,10 +194,7 @@ export async function withTransaction<T>(
       await client.query("ROLLBACK");
     } catch (rollbackErr) {
       // Log but do not mask — the caller needs to see the original failure.
-      console.error(
-        "[db/connection] ROLLBACK failed:",
-        (rollbackErr as Error).message,
-      );
+      logger.error({ err: rollbackErr }, "db ROLLBACK failed");
     }
     throw originalErr;
   } finally {

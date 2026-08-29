@@ -21,11 +21,14 @@ import {
   BookingIntentError,
   parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
+import { isAppError } from "../errors/AppError.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
 import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import { FraudScorer, FraudReasonCode, getFraudReasonCode, getFraudMessage } from "../services/fraudScorer.js";
+import { QuarantineStore } from "../services/quarantineStore.js";
 
 export function createBookingIntentsRouter() {
   const router = Router();
@@ -38,6 +41,15 @@ export function createBookingIntentsRouter() {
   function handleServiceError(error: unknown, res: Response): void {
     if (error instanceof BookingIntentError) {
       res.status(error.status).json({
+        success: false,
+        error: error.message,
+        code: error.code,
+      });
+      return;
+    }
+
+    if (isAppError(error)) {
+      res.status(error.statusCode).json({
         success: false,
         error: error.message,
         code: error.code,

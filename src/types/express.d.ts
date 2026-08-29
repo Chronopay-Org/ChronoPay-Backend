@@ -30,5 +30,11 @@ declare module "express-serve-static-core" {
      * Legacy auth property
      */
     auth?: any;
+    /**
+     * Set by `fairQueueBypass` middleware when a valid internal-bypass HMAC
+     * signature is presented. Contains the actor ID of the calling service.
+     * When set, `createAuthAwareRateLimiter` skips rate limiting for this request.
+     */
+    internalBypassActor?: string;
   }
 }

@@ -444,6 +444,15 @@
     "src/__tests__/db/connection.test.ts"
   ],
 
+  "src/db/migrations/019_add_active_booking_intent_unique_idx.ts": [
+    "src/__tests__/db/connection.test.ts",
+    "src/modules/booking-intents/__tests__/pg-booking-intent-repository.test.ts"
+  ],
+
+  "src/modules/booking-intents/pg-booking-intent-repository.ts": [
+    "src/modules/booking-intents/__tests__/pg-booking-intent-repository.test.ts"
+  ],
+
   "src/db/driftDetector.ts": [
     "src/__tests__/db/connection.test.ts"
   ],

@@ -1,5 +1,6 @@
 import pino from "pino";
 import { getTraceContext } from "../tracing/context.js";
+import { getReqId } from "./logContext.js";
 
 /**
  * Log levels following pino conventions:
@@ -112,6 +113,28 @@ const createLoggerConfig = (): any => {
   const config: any = {
     level: getLogLevel(),
     timestamp: pino.stdTimeFunctions.isoTime,
+    /**
+     * mixin is called for every log record and merges the returned object as
+     * top-level fields.  We use it to inject req_id (from reqIdStorage ALS) and
+     * trace_id / span_id (from tracingStorage ALS) so they appear alongside
+     * level/time/msg without any manual threading of context.
+     */
+    mixin() {
+      const extra: Record<string, string> = {};
+
+      const reqId = getReqId();
+      if (reqId) {
+        extra["req_id"] = reqId;
+      }
+
+      const traceCtx = getTraceContext();
+      if (traceCtx) {
+        extra["trace_id"] = traceCtx.traceId;
+        extra["span_id"] = traceCtx.spanId;
+      }
+
+      return extra;
+    },
     formatters: {
       /**
        * Custom level formatter for better readability
@@ -152,21 +175,46 @@ const createLoggerConfig = (): any => {
       }),
     },
     /**
-     * Redact option provides additional security by completely removing sensitive paths
+     * Redact option provides additional security by completely removing sensitive paths.
+     *
+     * Buyer PII paths cover the canonical booking-intent payload shape:
+     *   { buyer: { name, email, phone } }
+     * as well as arrays of buyers (e.g. bulk intents):
+     *   { buyers[*].name, buyers[*].email, buyers[*].phone }
+     *
+     * `remove: true` drops the key entirely rather than replacing it with a
+     * censor string, so no PII placeholder ever reaches log stores.
      */
     redact: {
       paths: [
+        // HTTP transport headers
         "headers.authorization",
         "headers.cookie",
         "headers['x-api-key']",
         "req.headers.authorization",
         "req.headers.cookie",
         "req.headers['x-api-key']",
+        // Generic body secrets
         "body.password",
         "body.secret",
         "query.token",
+        // Buyer PII — top-level buyer object (booking-intent payload)
+        "buyer.name",
+        "buyer.email",
+        "buyer.phone",
+        // Buyer PII — arrays of buyers (e.g. bulk intents)
+        "buyers[*].name",
+        "buyers[*].email",
+        "buyers[*].phone",
+        // Nested inside intent or booking objects
+        "intent.buyer.name",
+        "intent.buyer.email",
+        "intent.buyer.phone",
+        "booking.buyer.name",
+        "booking.buyer.email",
+        "booking.buyer.phone",
       ],
-      censor: "[REDACTED]",
+      remove: true,
     },
     /**
      * Ensure error causes are serialized

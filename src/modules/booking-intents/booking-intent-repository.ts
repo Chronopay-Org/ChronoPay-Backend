@@ -1,70 +1,51 @@
 import type { StrategyId, StrategyConfig } from "../../services/pricingStrategy.js";
+import type { HoldFeePolicySnapshot } from "../../services/holdFeePolicy.js";
 
-export type BookingIntentStatus = "pending" | "confirmed" | "firm" | "cancelled" | "expired";
+export type BookingIntentStatus =
+  | "pending"
+  | "confirmed"
+  | "firm"
+  | "cancelled"
+  | "expired"
+  | "hold_placed"
+  | "hold_refunded";
 
-/**
- * Immutable snapshot of the pricing inputs and result captured at intent
- * creation time.  Stored for auditability — the resolved price never changes
- * even if the slot's strategy is later updated.
- */
+export type BookingType = "standard" | "refundable_hold";
+
 export interface PricingSnapshot {
-  /** Strategy that produced the price. */
   strategyId: StrategyId;
-  /** Resolved price at the moment the intent was created. */
   resolvedPrice: number;
-  /** Base price used as input. */
   basePrice: number;
-  /** Slot start time (ms) used as input. */
   slotStartMs: number;
-  /** "now" timestamp (ms) used as input. */
   nowMs: number;
-  /** Active bookings count used as input. */
   activeBookings: number;
-  /** Capacity used as input. */
   capacity: number;
-  /** Strategy-specific config used as input. */
   config: StrategyConfig;
 }
 
 export interface CancellationPolicyVersion {
-  /** Semantic version string identifying the policy (e.g. "v1-timezone-tier", "v2-prorated") */
   versionId: string;
-  /** ISO 8601 timestamp when this policy became active */
   effectiveFrom: string;
-  /** Optional ISO 8601 timestamp when this policy was superseded (undefined = current) */
   effectiveUntil?: string;
-  /** Human-readable description of the policy terms */
   description: string;
 }
 
 export interface CancellationPolicySnapshot {
-  /** Version ID of the cancellation policy captured at booking time */
   policyVersionId: string;
-  /** Snapshot of the policy terms for auditability */
   policyTerms: ProratedCancellationTerms;
-  /** "now" timestamp (ms) when the snapshot was captured */
   capturedAtMs: number;
 }
 
 export interface ProratedCancellationTerms {
-  /** Cancellation fee tiers keyed by hours-until-start (inclusive floor) */
   tiers: {
-    /** Minimum hours until start for this tier */
     minHoursUntilStart: number;
-    /** Optional maximum hours until start (exclusive). Undefined = unbounded upper end */
     maxHoursUntilStart?: number;
-    /** Ratio (0–1) of the base price that is REFUNDED in this tier */
     refundRatio: number;
-    /** Flat cancellation fee (smallest currency unit) deducted from base refund */
     flatFee?: number;
-    /** Percentage fee (0–1) of the base refund, e.g. 0.05 = 5% */
     percentageFee?: number;
-    /** Tax reversal ratio (0–1) applied to the base refund */
     taxReversalRatio?: number;
   }[];
-  /** Minimum refund (smallest currency unit). Caps lower bound. */
   minRefundAmount?: number;
-  /** Maximum refund (smallest currency unit). Caps upper bound. */
   maxRefundAmount?: number;
 }
 
@@ -80,32 +61,37 @@ export interface BookingIntentRecord {
   tokenAsset?: string;
   mintTxHash?: string;
   createdAt: string;
-  bookingType: BookingType;
+  slotIds?: string[];
+  bundleId?: string;
+  supplierId?: string;
+  buyerId?: string;
+  escrowHoldId?: string;
+  bookingType?: BookingType;
   holdUntilMs?: number;
   holdPlacedAt?: string;
   refundedAt?: string;
-  refundMetadata?: RefundMetadata;
+  refundMetadata?: {
+    refundedAt: string;
+    refundedAmountCents: number;
+    refundReason: string;
+  };
   pricingSnapshot?: PricingSnapshot;
-  /**
-   * Cancellation policy version captured at booking creation time.
-   * Used for grandfathering — cancellations always apply the policy version
-   * that was active when the booking was made, even if the policy is later
-   * updated.
-   */
   cancellationPolicySnapshot?: CancellationPolicySnapshot;
+  holdFeePolicySnapshot?: HoldFeePolicySnapshot;
 }
 
 export interface BookingIntentRepository {
-  create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord>;
-  findById(id: string): BookingIntentRecord | undefined;
-  findBySlotId(slotId: string): BookingIntentRecord | undefined;
-  findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
-  findLatestBySlotId?(slotId: string): BookingIntentRecord | undefined;
-  listByCustomer(customerId: string): BookingIntentRecord[];
-  listAll(): BookingIntentRecord[];
-  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord;
-  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord;
-  findExpiredHolds(nowMs: number): BookingIntentRecord[];
+  create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> | BookingIntentRecord;
+  findById(id: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findBySlotId(slotId: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findLatestBySlotId?(slotId: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  listByCustomer(customerId: string): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
+  listAll(): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
+  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord | Promise<BookingIntentRecord>;
+  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord | Promise<BookingIntentRecord>;
+  updateTokenInfo?(id: string, tokenAsset: string, mintTxHash: string): Promise<void> | void;
+  findExpiredHolds(nowMs: number): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
 }
 
 const ACTIVE_HOLD_STATUSES: BookingIntentStatus[] = ["pending", "hold_placed"];
@@ -120,7 +106,6 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
       bookingType: "standard",
       ...intent,
     };
-
     this.intents.push(created);
     return { ...created };
   }
@@ -179,6 +164,17 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
     }
     this.intents[index] = { ...this.intents[index], ...updates };
     return { ...this.intents[index] };
+  }
+
+  updateTokenInfo(id: string, tokenAsset: string, mintTxHash: string): void {
+    const index = this.intents.findIndex((entry) => entry.id === id);
+    if (index !== -1) {
+      this.intents[index] = {
+        ...this.intents[index],
+        tokenAsset,
+        mintTxHash,
+      };
+    }
   }
 
   findExpiredHolds(nowMs: number): BookingIntentRecord[] {

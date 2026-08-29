@@ -25,3 +25,12 @@ Malformed values fail startup with a clear validation error.
 - Missing environment variables fall back to registry defaults.
 - Unknown feature flag lookups are treated as server misconfiguration and rejected.
 
+## Scheduled Percentage Rollouts
+
+Any flag in the registry above can additionally be ramped up gradually,
+per-tenant and per-environment, via a scheduled percentage rollout — see
+[`docs/feature-flag-rollouts.md`](./feature-flag-rollouts.md). The boolean
+flag documented here always remains the outer kill-switch: a rollout
+schedule can only narrow an *enabled* flag down to a percentage of traffic,
+never enable a flag that is disabled above.
+
