@@ -1,6 +1,10 @@
 // @ts-nocheck
 import { jest } from "@jest/globals";
 import { FraudScorer } from "../fraudScorer.js";
+import {
+  FraudReasonCode,
+  getFraudReasonCode,
+} from "../fraudReasonCodes.js";
 
 function createRequest(actorId: string, ip: string, fingerprint: string, tenantId = "tenant-alpha") {
   return {
@@ -19,6 +23,14 @@ function createRequest(actorId: string, ip: string, fingerprint: string, tenantI
   } as any;
 }
 
+function requestWithUa(actorId: string, ip: string, fp: string, ua?: string) {
+  const req = createRequest(actorId, ip, fp);
+  if (ua !== undefined) {
+    req.headers["user-agent"] = ua;
+  }
+  return req;
+}
+
 describe("FraudScorer", () => {
   it("does not flag unrelated requests", () => {
     const scorer = new FraudScorer();
@@ -28,6 +40,89 @@ describe("FraudScorer", () => {
     expect(result.score).toBe(0);
     expect(result.reasons).toEqual([]);
     expect(result.case).toBeUndefined();
+  });
+
+  describe("user-agent / device-fingerprint mismatch (issue #807)", () => {
+    it("binds a fingerprint to its first-seen user-agent without flagging", () => {
+      const scorer = new FraudScorer();
+      const result = scorer.evaluate(
+        "intent-1",
+        requestWithUa("user-1", "198.51.100.1", "fp-ua-1", "Mozilla/5.0 (Macintosh)"),
+      );
+      expect(result.score).toBe(0);
+      expect(result.reasons).toEqual([]);
+      expect(result.snapshot?.features.userAgent).toBe("mozilla/5.0 (macintosh)");
+      expect(result.snapshot?.features.userAgentMismatch).toBe(false);
+    });
+
+    it("flags the same fingerprint arriving with a different user-agent", () => {
+      const scorer = new FraudScorer();
+      scorer.evaluate(
+        "intent-1",
+        requestWithUa("user-1", "198.51.100.1", "fp-ua-2", "Mozilla/5.0 (Macintosh)"),
+      );
+      const result = scorer.evaluate(
+        "intent-2",
+        requestWithUa("user-1", "198.51.100.1", "fp-ua-2", "Mozilla/5.0 (iPhone)"),
+      );
+      expect(result.reasons).toContain("user_agent_mismatch");
+      expect(result.snapshot?.features.userAgentMismatch).toBe(true);
+    });
+
+    it("is case-insensitive and trim-normalized", () => {
+      const scorer = new FraudScorer();
+      scorer.evaluate(
+        "intent-1",
+        requestWithUa("user-1", "198.51.100.2", "fp-ua-3", "  Mozilla/5.0 (X11; UBUNTU) "),
+      );
+      const result = scorer.evaluate(
+        "intent-2",
+        requestWithUa("user-1", "198.51.100.2", "fp-ua-3", "mozilla/5.0 (x11; ubuntu)"),
+      );
+      expect(result.score).toBe(0);
+      expect(result.reasons).not.toContain("user_agent_mismatch");
+    });
+
+    it("does not flag when the fingerprint or user-agent is missing", () => {
+      const scorer = new FraudScorer();
+      const noUa = scorer.evaluate("intent-1", createRequest("user-1", "198.51.100.3", "fp-ua-4"));
+      expect(noUa.reasons).not.toContain("user_agent_mismatch");
+
+      const noFp = scorer.evaluate(
+        "intent-2",
+        requestWithUa("user-2", "198.51.100.4", "fp-ua-5", "Mozilla/5.0"),
+      );
+      expect(noFp.reasons).not.toContain("user_agent_mismatch");
+    });
+
+    it("only compares against the binding for the same fingerprint", () => {
+      const scorer = new FraudScorer();
+      scorer.evaluate(
+        "intent-1",
+        requestWithUa("user-1", "198.51.100.5", "fp-ua-6", "Mozilla/5.0 (Macintosh)"),
+      );
+      const diffFp = scorer.evaluate(
+        "intent-2",
+        requestWithUa("user-1", "198.51.100.5", "fp-ua-7", "Mozilla/5.0 (iPhone)"),
+      );
+      expect(diffFp.reasons).not.toContain("user_agent_mismatch");
+    });
+  });
+
+  describe("reason code mapping", () => {
+    it("maps user_agent_mismatch to DEVICE_UNRECOGNIZED", () => {
+      const scorer = new FraudScorer();
+      scorer.evaluate(
+        "intent-1",
+        requestWithUa("user-1", "198.51.100.6", "fp-ua-8", "Mozilla/5.0 (Macintosh)"),
+      );
+      const result = scorer.evaluate(
+        "intent-2",
+        requestWithUa("user-1", "198.51.100.6", "fp-ua-8", "Mozilla/5.0 (iPhone)"),
+      );
+      expect(result.reasons).toContain("user_agent_mismatch");
+      expect(getFraudReasonCode("user_agent_mismatch")).toBe(FraudReasonCode.DEVICE_UNRECOGNIZED);
+    });
   });
 
   it("detects shared IP and fingerprint co-occurrence and creates a review case", () => {

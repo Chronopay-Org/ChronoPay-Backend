@@ -18,6 +18,13 @@ describe("POST /api/v1/booking-intents", () => {
     setFeatureFlagsFromEnv(process.env);
   });
 
+  afterEach(() => {
+    // Clean up anti-fraud env so it cannot leak into other tests / apps.
+    delete process.env.FRAUD_STEP_UP_MODE;
+    delete process.env.FRAUD_STEP_UP_THRESHOLD;
+    delete process.env.FRAUD_MAX_INTENTS;
+  });
+
   afterAll(() => {
     delete process.env.FF_CREATE_BOOKING_INTENT;
     setFeatureFlagsFromEnv(process.env);
@@ -147,6 +154,106 @@ describe("POST /api/v1/booking-intents", () => {
         error: "You cannot create a booking intent for your own slot.",
         code: "FORBIDDEN",
       });
+    });
+  });
+
+  describe("Anti-fraud step-up (issue #807)", () => {
+    const DISPOSABLE_EMAIL = "attacker@tempmail.com";
+
+    it("blocks a high-velocity + disposable-email actor in challenge mode", async () => {
+      const freshApp = createApp({ apiKey: "test-api-key" });
+
+      // Five clean requests book/409 but never cross the threshold (score 0).
+      for (let i = 0; i < 5; i += 1) {
+        const res = await request(freshApp)
+          .post("/api/v1/booking-intents")
+          .set("x-chronopay-user-id", validUserId)
+          .set("x-chronopay-role", validRole)
+          .send({ slotId: validSlotId });
+        expect([201, 409]).toContain(res.status);
+      }
+
+      // Sixth request: velocity signal (count > max) + disposable email -> score 2.
+      const blocked = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", validUserId)
+        .set("x-chronopay-role", validRole)
+        .set("accept-language", "es")
+        .send({ slotId: validSlotId, email: DISPOSABLE_EMAIL });
+
+      expect(blocked.status).toBe(403);
+      expect(blocked.body).toMatchObject({
+        success: false,
+        error: "Booking intent blocked due to security policies.",
+        challengeRequired: true,
+      });
+      expect(typeof blocked.body.challengeToken).toBe("string");
+      expect(blocked.body.reasonCodes).toEqual(
+        expect.arrayContaining(["RATE_LIMIT_EXCEEDED", "INVALID_CONTACT_INFO"]),
+      );
+      // accept-language drives the localized message catalog.
+      expect(blocked.body.messages).toEqual(expect.arrayContaining([expect.any(String)]));
+    });
+
+    it("quarantines the high-score intent instead of dropping it", async () => {
+      process.env.FRAUD_STEP_UP_MODE = "quarantine";
+      const freshApp = createApp({ apiKey: "test-api-key" });
+
+      for (let i = 0; i < 5; i += 1) {
+        await request(freshApp)
+          .post("/api/v1/booking-intents")
+          .set("x-chronopay-user-id", validUserId)
+          .set("x-chronopay-role", validRole)
+          .send({ slotId: validSlotId });
+      }
+
+      const blocked = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", validUserId)
+        .set("x-chronopay-role", validRole)
+        .send({ slotId: validSlotId, email: DISPOSABLE_EMAIL });
+
+      expect(blocked.status).toBe(403);
+      expect(typeof blocked.body.quarantineId).toBe("string");
+      expect(blocked.body.challengeRequired).toBeUndefined();
+    });
+
+    it("lets a single borderline (review-tier) score through to creation", async () => {
+      const freshApp = createApp({ apiKey: "test-api-key" });
+
+      const res = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", validUserId)
+        .set("x-chronopay-role", validRole)
+        .send({ slotId: validSlotId, email: DISPOSABLE_EMAIL });
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+    });
+
+    it("surfaces a user-agent/device-fingerprint mismatch as DEVICE_UNRECOGNIZED", async () => {
+      process.env.FRAUD_STEP_UP_THRESHOLD = "1";
+      const freshApp = createApp({ apiKey: "test-api-key" });
+
+      const first = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", validUserId)
+        .set("x-chronopay-role", validRole)
+        .set("user-agent", "Mozilla/5.0 (Macintosh)")
+        .set("x-device-fingerprint", "fp-device-1")
+        .send({ slotId: validSlotId });
+      expect(first.status).toBe(201);
+
+      const second = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", validUserId)
+        .set("x-chronopay-role", validRole)
+        .set("user-agent", "Mozilla/5.0 (iPhone)")
+        .set("x-device-fingerprint", "fp-device-1")
+        .send({ slotId: validSlotId });
+
+      expect(second.status).toBe(403);
+      expect(second.body.reasonCodes).toContain("DEVICE_UNRECOGNIZED");
     });
   });
 });
