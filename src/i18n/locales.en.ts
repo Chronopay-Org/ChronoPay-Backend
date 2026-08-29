@@ -1,6 +1,6 @@
 /**
  * Localized error messages for English (en).
- * These map directly to i18n keys in errorTaxonomy.ts.
+ * These map directly to i18n keys in the error taxonomy (src/errors/errorCodes.ts).
  */
 export const EN_MESSAGES = {
   errors: {
@@ -45,6 +45,13 @@ export const EN_MESSAGES = {
       not_found: "Resource not found",
       conflict: "Conflict",
       unprocessable_entity: "Unprocessable entity",
+    },
+    bundle: {
+      expired: "Bundle has expired",
+      not_transferable: "Bundle is not transferable",
+    },
+    budget: {
+      query_budget_exceeded: "Query budget exceeded — the request consumed too much database time",
     },
     internal: {
       db_error: "Database error",

@@ -20,6 +20,7 @@
     "migrate": "tsx src/scripts/migrate.ts",
     "canary": "tsx scripts/canary.ts",
     "generate-openapi": "tsx src/scripts/generate-openapi.ts",
+    "generate:error-docs": "tsx scripts/generate-error-codes.ts",
     "release:sdk": "node scripts/release-sdk.js",
     "sbom": "tsx scripts/generate-sbom.ts",
     "sbom:upload": "tsx scripts/upload-sbom.ts"
