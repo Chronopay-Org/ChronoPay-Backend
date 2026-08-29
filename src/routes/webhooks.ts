@@ -63,7 +63,7 @@ const handleSettlementWebhook = async (req: Request, res: Response) => {
 
   const responseBody = { success: true, received: req.body };
   const saved = await WebhookIdempotencyStore.saveKey(tenantId, idempotencyKey, responseBody);
-  
+
   if (!saved) {
     // If it wasn't saved, someone else just saved it concurrently.
     const concurrentResponse = await WebhookIdempotencyStore.getExistingResponse(tenantId, idempotencyKey);
@@ -78,6 +78,21 @@ const handleSettlementWebhook = async (req: Request, res: Response) => {
         amount: Number(amount),
         timestamp: Number(timestamp),
         status: "pending_finality",
+        confirmations: 0,
+        attempts: 0,
+      });
+    }
+  } else if (eventType === "settlement_failed") {
+    // Provider-reported terminal failure. Recorded so the reconciler channel,
+    // admin replay flow, and audits can observe deterministically-failed
+    // settlements; on-chain finality is still re-verified before any payout.
+    if (!_settlements.has(idempotencyKey)) {
+      _settlements.set(idempotencyKey, {
+        transactionId: idempotencyKey,
+        eventType: String(eventType),
+        amount: Number(amount),
+        timestamp: Number(timestamp),
+        status: "failed",
         confirmations: 0,
         attempts: 0,
       });

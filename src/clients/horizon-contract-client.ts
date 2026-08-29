@@ -248,7 +248,60 @@ export interface HorizonTransactionRecord {
   created_at?: string;
   memo?: string;
   memo_type?: string;
+  successful?: boolean;
   [key: string]: unknown;
+}
+
+/**
+ * Ledger headers can be present before the embedded records array (Horizon
+ * uses HAL-style envelopes), so the record's `sequence` is optional at the
+ * type level and validated at runtime by callers.
+ */
+export interface HorizonLedgerCollectionResponse {
+  _embedded: {
+    records: Array<{
+      sequence?: number;
+      [key: string]: unknown;
+    }>;
+  };
+}
+
+/**
+ * On-chain finality view of a single Stellar transaction, as reported by the
+ * `SettlementFinalityProbe` contract used by the SettlementReconciler.
+ *
+ * - `found: false` means Horizon has no record of the transaction (it may
+ *   not have been confirmed yet, or it has vanished on a fork/reorg). This is
+ *   a *business outcome*, not an error — callers must branch on it.
+ * - `successful` is `false` only when the transaction is on-chain but was
+ *   rejected; it is `true` for accepted transactions and `undefined` when the
+ *   field is absent (callers should treat anything other than `true` as a
+ *   failed/uncertain settlement).
+ * - `confirmations` is derived from the latest ledger sequence at query time:
+ *   `max(0, latestLedger - ledger + 1)`.
+ */
+export interface ChainFinalityStatus {
+  found: boolean;
+  txHash: string;
+  successful?: boolean;
+  ledger?: number;
+  latestLedger?: number | null;
+  confirmations: number;
+}
+
+/**
+ * The narrow, testable contract the SettlementReconciler depends on.
+ *
+ * HorizonContractClient implements it; callers only need `getLatestLedgerSequence`
+ * and `getTransactionFinality`, which keeps the worker free of fragile
+ * error-message scraping and lets tests inject a fake probe directly.
+ */
+export interface SettlementFinalityProbe {
+  getLatestLedgerSequence(): Promise<number>;
+  getTransactionFinality(
+    txHash: string,
+    options?: { latestLedger?: number },
+  ): Promise<ChainFinalityStatus>;
 }
 
 /**
@@ -331,6 +384,120 @@ export class HorizonContractClient implements IContractClient {
     );
 
     return { data, blockNumber: 0 };
+  }
+
+  /**
+   * Returns the sequence number of the latest ledger on the connected Horizon
+   * network. Part of the {@link SettlementFinalityProbe} contract.
+   *
+   * Uses the retry/circuit-breaker path (`call`) because there is nothing
+   * ambiguous about a missing ledger header — any failure here is transient
+   * and must not bubble up to the polling worker.
+   */
+  async getLatestLedgerSequence(): Promise<number> {
+    const { data } = await this.call<HorizonLedgerCollectionResponse>({
+      address: "",
+      abi: [],
+      method: "getLatestLedger",
+      args: [],
+    });
+
+    const sequence = data?._embedded?.records?.[0]?.sequence;
+    if (typeof sequence !== "number") {
+      throw new ContractInvalidRequestError("Horizon returned no latest ledger sequence");
+    }
+    return sequence;
+  }
+
+  /**
+   * Queries chain finality for a single transaction. Part of the
+   * {@link SettlementFinalityProbe} contract.
+   *
+   * Unlike `call`, this probes Horizon directly so a 404 (transaction missing —
+   * could be a reorg or a not-yet-confirmed payment) is surfaced as
+   * `{ found: false }` instead of being masked into a
+   * `ContractInvalidRequestError` by `mapContractError`. All non-404 HTTP and
+   * network errors are thrown and treated as transient by callers.
+   *
+   * When `latestLedger` is omitted the latest ledger sequence is fetched first.
+   * Callers that already hold the sequence (e.g. a poll loop) should pass it to
+   * avoid an extra round-trip.
+   */
+  async getTransactionFinality(
+    txHash: string,
+    options: { latestLedger?: number } = {},
+  ): Promise<ChainFinalityStatus> {
+    const host = await this.hostManager.getHealthyHost();
+    const latestLedger = options.latestLedger ?? (await this.getLatestLedgerSequence());
+
+    const response = await withTimeout(
+      async (signal) => this.fetchTransactionResponse(host, txHash, signal),
+      timeoutConfig.http.contractMs,
+      "horizon",
+    );
+
+    if (response.status === 404) {
+      return {
+        found: false,
+        txHash,
+        latestLedger,
+        confirmations: 0,
+      };
+    }
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      const err = new HorizonHttpError(response.status, body);
+      this.hostManager.recordError(host, err);
+      throw err;
+    }
+
+    let tx: HorizonTransactionRecord;
+    try {
+      tx = (await response.json()) as HorizonTransactionRecord;
+    } catch {
+      throw new Error("Horizon returned malformed JSON response");
+    }
+
+    const ledger = typeof tx.ledger === "number" ? tx.ledger : undefined;
+    const confirmations =
+      ledger === undefined || latestLedger === null
+        ? 0
+        : Math.max(0, latestLedger - ledger + 1);
+
+    return {
+      found: true,
+      txHash,
+      successful: tx.successful,
+      ledger,
+      latestLedger,
+      confirmations,
+    };
+  }
+
+  /**
+   * Fetches a single transaction from the given host, recording host health.
+   * A 404 is a valid response from a healthy host (the transaction simply is
+   * not known), so it does not count against the host's error rate.
+   */
+  private async fetchTransactionResponse(
+    host: string,
+    txHash: string,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    const url = `${host}/transactions/${encodeURIComponent(txHash)}`;
+    try {
+      const response = await fetch(url, { signal });
+      if (response.ok || response.status === 404) {
+        this.hostManager.recordSuccess(host);
+      } else {
+        this.hostManager.recordError(host, new HorizonHttpError(response.status, ""));
+      }
+      return response;
+    } catch (err) {
+      this.hostManager.recordError(host, err);
+      throw err;
+    }
   }
 
   /**
