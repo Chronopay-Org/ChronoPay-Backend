@@ -25,6 +25,7 @@ import {
   createEmptyHoldFeeRegistry,
   HoldFeePolicyRegistry,
 } from "../../services/holdFeePolicy.js";
+import { CheckoutSessionService } from "../../services/checkout.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -421,6 +422,70 @@ export class BookingIntentService {
 
     const policy = new CancellationPolicyService();
     return policy.calculateRefund(intent);
+  }
+
+  refundIntent(
+    intentId: string,
+    actor: AuthContext,
+    input: { reason?: string; cancelledAtMs?: number } = {},
+  ): {
+    intent: BookingIntentRecord;
+    refundAmountCents: number;
+    refundRatio: number;
+    consumedRatio: number;
+    reason: string;
+  } {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+      throw new BookingIntentError(403, "You are not authorized to refund this booking intent.");
+    }
+
+    if (
+      intent.status === "cancelled" ||
+      intent.status === "expired" ||
+      intent.status === "hold_refunded"
+    ) {
+      throw new BookingIntentError(409, `Cannot refund intent with status "${intent.status}".`);
+    }
+
+    const cancelledAtMs = input.cancelledAtMs ?? this.nowMs();
+    if (!Number.isFinite(cancelledAtMs)) {
+      throw new BookingIntentError(400, "cancelledAtMs must be a valid number.");
+    }
+
+    const amountCents = this.resolveIntentPrice(intent);
+    const refundSummary = CheckoutSessionService.calculateDurationBasedRefund({
+      amountCents,
+      startTimeMs: intent.startTime,
+      endTimeMs: intent.endTime,
+      nowMs: cancelledAtMs,
+      curve: "linear",
+    });
+
+    const reason = (input.reason ?? "partial_refund").trim() || "partial_refund";
+    const updated = this.bookingIntentRepository.update(intentId, {
+      status: "cancelled",
+      refundedAt: this.now(),
+      refundMetadata: {
+        refundedAt: this.now(),
+        refundedAmountCents: refundSummary.refundAmountCents,
+        refundReason: reason,
+      },
+    });
+
+    this.schedulingService.releaseSlot(intent.slotId);
+
+    return {
+      intent: updated,
+      refundAmountCents: refundSummary.refundAmountCents,
+      refundRatio: refundSummary.remainingRatio,
+      consumedRatio: refundSummary.consumedRatio,
+      reason,
+    };
   }
 
   expireIntent(intentId: string): BookingIntentRecord {

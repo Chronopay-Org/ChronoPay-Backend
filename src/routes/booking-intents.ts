@@ -238,6 +238,41 @@ export function createBookingIntentsRouter(
     },
   );
 
+  router.post(
+    "/:id/refund",
+    requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    requireAuthenticatedActor(["customer", "admin"]),
+    createAuthAwareRateLimiter(),
+    auditMiddleware("REFUND_BOOKING_INTENT"),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+        const cancelledAtMs =
+          typeof req.body?.cancelledAtMs === "number" ? req.body.cancelledAtMs : undefined;
+
+        if (
+          req.body &&
+          Object.prototype.hasOwnProperty.call(req.body, "cancelledAtMs") &&
+          cancelledAtMs === undefined
+        ) {
+          throw new BookingIntentError(400, "cancelledAtMs must be a valid number.");
+        }
+
+        const refund = await bookingIntentService.refundIntent(req.params.id, req.auth!, {
+          reason,
+          cancelledAtMs,
+        });
+
+        res.status(200).json({
+          success: true,
+          refund,
+        });
+      } catch (error) {
+        handleServiceError(error, res);
+      }
+    },
+  );
+
   router.get(
     "/:id/cancel-preview",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
