@@ -42,6 +42,7 @@ describe("BookingIntentService", () => {
       mockSlotRepo.findById.mockReturnValue(slot);
       mockRepo.findBySlotIdAndCustomer.mockReturnValue(undefined);
       mockRepo.findBySlotId.mockReturnValue(undefined);
+      // @ts-expect-error - Auto-fixed by script
       mockRepo.create.mockResolvedValue({
         id: "intent-1",
         slotId: slot.id,

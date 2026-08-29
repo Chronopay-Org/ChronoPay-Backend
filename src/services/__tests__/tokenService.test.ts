@@ -44,8 +44,7 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockContractService.sendTransaction.mockImplementation(async (desc, action) => {
       return await action();
     });
-    // @ts-expect-error - Auto-fixed by script
-    mockRepo.updateTokenInfo.mockResolvedValue(undefined);
+    (mockRepo.updateTokenInfo as jest.MockedFunction<NonNullable<BookingIntentRepository["updateTokenInfo"]>>).mockImplementation(async () => {});
 
     const result = await service.mintTimeToken(intentId, {
       buyerPublicKey: "G_BUYER_456",
@@ -84,7 +83,7 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockContractService.sendTransaction.mockImplementation(async (desc, action) => {
       return await action();
     });
-    mockRepo.updateTokenInfo.mockResolvedValue(undefined);
+    (mockRepo.updateTokenInfo as jest.MockedFunction<NonNullable<BookingIntentRepository["updateTokenInfo"]>>).mockImplementation(async () => {});
 
     const result = await service.mintTimeToken(intentId, {
       buyerPublicKey: "G_BUYER_456",
@@ -110,7 +109,7 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockContractService.sendTransaction.mockImplementation(async (desc, action) => {
       return await action();
     });
-    mockRepo.updateTokenInfo.mockResolvedValue(undefined);
+    (mockRepo.updateTokenInfo as jest.MockedFunction<NonNullable<BookingIntentRepository["updateTokenInfo"]>>).mockImplementation(async () => {});
 
     const result = await service.mintTimeToken(intentId, {
       buyerPublicKey: "G_BUYER_456",

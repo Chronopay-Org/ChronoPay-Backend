@@ -433,14 +433,17 @@ describe("fairQueueBypass + createAuthAwareRateLimiter integration", () => {
     default: jest.fn<any>().mockImplementation(() => mockRedis),
   }));
 
-  const { createAuthAwareRateLimiter } = await import("../rateLimiter.js");
-  const { _setTestMock, _resetStore } = await import("../rateLimitStore.js");
+  let createAuthAwareRateLimiter: typeof import("../rateLimiter.js")["createAuthAwareRateLimiter"];
+  let _setTestMock: typeof import("../rateLimitStore.js")["_setTestMock"];
+  let _resetStore: typeof import("../rateLimitStore.js")["_resetStore"];
 
   let app: express.Express;
   const WINDOW_MS = 60_000;
   const LIMIT = 2;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    ({ createAuthAwareRateLimiter } = await import("../rateLimiter.js"));
+    ({ _setTestMock, _resetStore } = await import("../rateLimitStore.js"));
     _setTestMock(true);
   });
 
