@@ -1,6 +1,8 @@
 import request from "supertest";
 import express from "express";
 import { createBookingIntentsRouter } from "../routes/booking-intents.js";
+import { setFeatureFlagsFromEnv } from "../flags/service.js";
+import { featureFlagContextMiddleware } from "../middleware/featureFlags.js";
 import {
   InMemoryBookingIntentRepository,
   type BookingIntentRecord,
@@ -28,11 +30,21 @@ describe("booking intents endpoints", () => {
   let repo: InMemoryBookingIntentRepository;
 
   beforeEach(() => {
+    process.env.FF_CREATE_BOOKING_INTENT = "true";
+    setFeatureFlagsFromEnv(process.env);
     repo = new InMemoryBookingIntentRepository();
     app = express();
     app.use(express.json());
-    // @ts-expect-error - Auto-fixed by script
-    app.use("/api/v1/booking-intents", createBookingIntentsRouter(repo));
+    app.use(featureFlagContextMiddleware);
+    app.use(
+      "/api/v1/booking-intents",
+      createBookingIntentsRouter({ bookingIntentRepository: repo }),
+    );
+  });
+
+  afterAll(() => {
+    delete process.env.FF_CREATE_BOOKING_INTENT;
+    setFeatureFlagsFromEnv(process.env);
   });
 
   // ─── GET /:id ───────────────────────────────────────────────────────────────
@@ -102,7 +114,9 @@ describe("booking intents endpoints", () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.intents).toHaveLength(2);
-      expect(res.body.intents.every((i: BookingIntentRecord) => i.customerId === "user1")).toBe(true);
+      expect(res.body.intents.every((i: BookingIntentRecord) => i.customerId === "user1")).toBe(
+        true,
+      );
     });
 
     it("returns all intents for an admin", async () => {
@@ -160,7 +174,7 @@ describe("concurrent booking-intent creates — one active per slot", () => {
     app.post("/intents", async (req: any, res: any) => {
       try {
         const intent = await service.createIntent(req.body, {
-          userId: req.headers["x-user-id"] as string ?? userId,
+          userId: (req.headers["x-user-id"] as string) ?? userId,
           role: "customer",
         });
         res.status(201).json({ success: true, intent });
@@ -184,10 +198,7 @@ describe("concurrent booking-intent creates — one active per slot", () => {
     };
 
     const requests = Array.from({ length: 5 }, (_, i) =>
-      request(app)
-        .post("/intents")
-        .set("x-user-id", `customer-${i}`)
-        .send(body),
+      request(app).post("/intents").set("x-user-id", `customer-${i}`).send(body),
     );
 
     const responses = await Promise.all(requests);
@@ -199,9 +210,7 @@ describe("concurrent booking-intent creates — one active per slot", () => {
     expect(created).toHaveLength(1);
     expect(conflicted).toHaveLength(4);
 
-    const conflictBodies = responses
-      .filter((r) => r.status === 409)
-      .map((r) => r.body);
+    const conflictBodies = responses.filter((r) => r.status === 409).map((r) => r.body);
     conflictBodies.forEach((body) => {
       expect(body.success).toBe(false);
       expect(body.code).toBe("CONFLICT");
@@ -209,16 +218,16 @@ describe("concurrent booking-intent creates — one active per slot", () => {
   });
 
   it("allows a new intent for a slot once the prior intent is no longer active", async () => {
-    const { intentRepo, service } = makeServiceApp();
+    const { service } = makeServiceApp();
 
     const actor = { userId: "user1", role: "customer" as const };
 
-    // Create the first intent and confirm it (terminal state).
+    // Create the first intent and cancel it (terminal state releases the slot).
     const first = await service.createIntent({ slotId: ALICE_SLOT_ID }, actor);
-    intentRepo.updateStatus(first.id, "confirmed");
+    service.cancelIntent(first.id, actor);
 
-    // A second create for the same slot should now succeed because "confirmed"
-    // is not in the active statuses covered by the partial index.
+    // A second create for the same slot should now succeed because the prior
+    // intent is no longer active (the in-memory analogue of the partial index).
     const second = await service.createIntent({ slotId: ALICE_SLOT_ID }, actor);
     expect(second.slotId).toBe(ALICE_SLOT_ID);
     expect(second.status).toBe("pending");
