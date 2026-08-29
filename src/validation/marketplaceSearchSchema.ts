@@ -124,6 +124,7 @@ export const MarketplaceSearchSchema = z.object({
       path: ["cursor"],
     });
   }
+});
   /**
    * When true (default), slots that are currently held are excluded from
    * browse results. Set to false only in admin / operator contexts where
