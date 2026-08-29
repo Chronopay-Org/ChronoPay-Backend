@@ -83,4 +83,35 @@ describe("TokenService", () => {
       new AppError("Booking intent not found", 404, "INTENT_NOT_FOUND")
     );
   });
+
+  describe("buildMintEnvelope", () => {
+    it("builds a correct Stellar transaction envelope for minting", () => {
+      const { Keypair, TransactionBuilder, Networks, Transaction } = require("@stellar/stellar-sdk");
+      const signer = Keypair.random();
+      const sourceAccount = signer.publicKey();
+      
+      const envelopeXdr = service.buildMintEnvelope(
+        intentId,
+        sourceAccount,
+        "1000",
+        "100",
+        signer,
+        Networks.TESTNET
+      );
+
+      // Decode the envelope
+      const tx = new Transaction(envelopeXdr, Networks.TESTNET);
+      expect(tx.source).toBe(sourceAccount);
+      expect(tx.sequence).toBe("1000");
+      expect(tx.fee).toBe("100");
+      expect(tx.signatures.length).toBe(1);
+
+      // Memo check (hash uniqueness)
+      const crypto = require("crypto");
+      const expectedHash = crypto.createHash("sha256").update(intentId).digest();
+      expect(tx.memo.type).toBe("hash");
+      expect(tx.memo.value).toEqual(expectedHash);
+    });
+  });
 });
+
