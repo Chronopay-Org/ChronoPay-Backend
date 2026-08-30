@@ -1,22 +1,135 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://example.com/log-schema.json",
-  "title": "LogEntry",
+  "title": "ChronoPay Log Entry Schema",
+  "description": "Structured logging schema for ChronoPay backend services",
+  "version": "1.0.0",
   "type": "object",
   "properties": {
     "level": {
       "type": "string",
-      "enum": ["fatal","error","warn","info","debug","trace"]
+      "enum": ["FATAL","ERROR","WARN","INFO","DEBUG","TRACE"],
+      "description": "Log level following pino conventions (uppercase)"
     },
-    "msg": {"type":"string"},
-    "requestId": {"type":"string"},
-    "route": {"type":"string"},
-    "latencyMs": {"type":"number"},
-    "errCode": {"type":"string"}
+    "time": {
+      "type": "string",
+      "description": "ISO 8601 timestamp"
+    },
+    "msg": {
+      "type": "string",
+      "description": "Log message"
+    },
+    "req_id": {
+      "type": "string",
+      "description": "Request identifier for traceability"
+    },
+    "requestId": {
+      "type": "string",
+      "description": "Alternative request identifier field"
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Distributed trace identifier"
+    },
+    "span_id": {
+      "type": "string",
+      "description": "Span identifier for distributed tracing"
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Alternative trace identifier field"
+    },
+    "spanId": {
+      "type": "string",
+      "description": "Alternative span identifier field"
+    },
+    "route": {
+      "type": "string",
+      "description": "API route or endpoint path"
+    },
+    "latencyMs": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Request latency in milliseconds"
+    },
+    "duration_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Alternative duration field in milliseconds"
+    },
+    "errCode": {
+      "type": "string",
+      "description": "Error code for error-level logs"
+    },
+    "service": {
+      "type": "string",
+      "description": "Service name"
+    },
+    "version": {
+      "type": "string",
+      "description": "Service version"
+    },
+    "environment": {
+      "type": "string",
+      "description": "Deployment environment"
+    },
+    "pid": {
+      "type": "number",
+      "description": "Process ID"
+    },
+    "hostname": {
+      "type": "string",
+      "description": "Hostname"
+    },
+    "userId": {
+      "type": "string",
+      "description": "User identifier"
+    },
+    "apiKeyId": {
+      "type": "string",
+      "description": "API key identifier"
+    },
+    "method": {
+      "type": "string",
+      "description": "HTTP method"
+    },
+    "statusCode": {
+      "type": "number",
+      "description": "HTTP status code"
+    },
+    "error": {
+      "type": "object",
+      "description": "Error details",
+      "properties": {
+        "name": {"type": "string"},
+        "message": {"type": "string"},
+        "stack": {"type": "string"},
+        "code": {"type": "string"},
+        "cause": {"type": ["string", "object", "null"]}
+      }
+    }
   },
-  "required": ["level","msg","requestId","route","latencyMs"],
-  "if": {"properties":{"level":{"const":"error"}}},
-  "then": {"required":["errCode"]},
+  "required": ["level", "time", "msg"],
+  "anyOf": [
+    {
+      "required": ["req_id"]
+    },
+    {
+      "required": ["requestId"]
+    }
+  ],
+  "if": {
+    "properties": {
+      "level": {"const": "ERROR"}
+    },
+    "required": ["level"]
+  },
+  "then": {
+    "anyOf": [
+      {"required": ["errCode"]},
+      {"required": ["error"]}
+    ]
+  },
   "additionalProperties": false,
   "registry": {
     "http_request": {

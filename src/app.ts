@@ -12,7 +12,7 @@ import {
   notFoundHandler,
 } from "./middleware/errorHandling.js";
 import { validateRequiredFields, validateBody } from "./middleware/validation.js";
-import { authenticateToken as requireAuth } from "./middleware/auth.js";
+
 import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
@@ -54,6 +54,7 @@ import adminRouter from "./routes/admin.js";
 import graceWindowRouter from "./routes/graceWindow.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
 import webhookRoutes, { registerWebhookRoutes } from "./routes/webhooks.js";
+import createBookingIntentsRouter from "./routes/booking-intents.js";
 import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
 import fraudModelsRouter from "./routes/fraudModels.js";
 import flagRolloutsRouter from "./routes/flagRollouts.js";
@@ -72,8 +73,6 @@ import {
 
 // Import modules
 import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
-import { InMemoryBookingIntentRepository } from "./modules/booking-intents/booking-intent-repository.js";
-import { BookingIntentService } from "./modules/booking-intents/booking-intent-service.js";
 import { ConflictPreviewService } from "./services/conflictPreviewService.js";
 import { RecurrenceError } from "./services/recurrenceService.js";
 import { ConflictPreviewBodySchema } from "./middleware/schemas.js";
@@ -87,7 +86,6 @@ export interface AppFactoryOptions {
   enableContentNegotiation?: boolean;
   contentNegotiationExcludePaths?: string[];
   slotRepository?: any;
-  bookingIntentService?: any;
   dbPool?: Pick<Pool, "query"> | null;
   redisClient?: RedisClient | null;
   horizonContractService?: ContractService;
@@ -617,32 +615,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use("/api/v1/subscriptions", subscriptionRouter);
 
   // 4. Booking Intents Routes
-  const bookingIntentRepo = new InMemoryBookingIntentRepository();
-  const bookingIntentService =
-    options.bookingIntentService || new BookingIntentService(bookingIntentRepo, slotRepo);
-
-  app.post(
-    "/api/v1/booking-intents",
-    requireAuth(["customer"]),
-    async (req: any, res: Response) => {
-      try {
-        const { slotId, note } = req.body;
-        if (!slotId || slotId === "slot!") {
-          return res.status(400).json({ success: false, error: "slotId is required." });
-        }
-        if (note === " ")
-          return res.status(400).json({ success: false, error: "Note cannot be empty." });
-
-        const actor = req.auth;
-        const bookingIntent = bookingIntentService.createIntent({ slotId, note }, actor);
-        res.status(201).json({ success: true, bookingIntent });
-      } catch (error: any) {
-        const status = error.status || 400;
-        const message = status === 500 ? "Unable to create booking intent." : error.message;
-        res.status(status).json({ success: false, error: message });
-      }
-    },
-  );
+  app.use("/api/v1/booking-intents", createBookingIntentsRouter());
 
   // 5. Webhooks Routes
   registerWebhookRoutes(app);

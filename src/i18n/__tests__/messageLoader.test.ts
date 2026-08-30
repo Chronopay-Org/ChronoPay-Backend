@@ -147,6 +147,16 @@ describe("i18n Message Loader", () => {
       const msgEn = resolveMessage("errors.validation.bad_request" as any, "en");
       expect(msg).toBe(msgEn);
     });
+
+    it("should return the key when the path resolves to a nested object", () => {
+      const msg = resolveMessage("errors.validation" as any, "en");
+      expect(msg).toBe("errors.validation");
+    });
+
+    it("should return the key when the path walks past a leaf string", () => {
+      const msg = resolveMessage("errors.validation.bad_request.extra" as any, "en");
+      expect(msg).toBe("errors.validation.bad_request.extra");
+    });
   });
 
   describe("Message Consistency Across Locales", () => {

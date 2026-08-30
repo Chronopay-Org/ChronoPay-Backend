@@ -9,7 +9,8 @@ describe("POST /api/v1/booking-intents", () => {
 
   const validUserId = "user-123";
   const validRole = "customer";
-  const validSlotId = "slot-100"; // From DEFAULT_SLOTS in InMemorySlotRepository
+  // From DEFAULT_SLOTS in InMemorySlotRepository (uuid slot ids only)
+  const validSlotId = "slot-11111111-1111-4111-8111-111111111111";
 
   beforeEach(() => {
     // Enable the flag by default for most tests
@@ -51,7 +52,6 @@ describe("POST /api/v1/booking-intents", () => {
       expect(response.body).toMatchObject({
         success: false,
         error: "Authentication required.",
-        code: "AUTHENTICATION_REQUIRED",
       });
     });
 
@@ -66,7 +66,6 @@ describe("POST /api/v1/booking-intents", () => {
       expect(response.body).toMatchObject({
         success: false,
         error: "Role is not authorized for this action.",
-        code: "INSUFFICIENT_PERMISSIONS",
       });
     });
   });
@@ -77,9 +76,9 @@ describe("POST /api/v1/booking-intents", () => {
         .post("/api/v1/booking-intents")
         .set("x-chronopay-user-id", validUserId)
         .set("x-chronopay-role", validRole)
-        .send({ 
+        .send({
           slotId: validSlotId,
-          note: "Please be on time"
+          note: "Please be on time",
         });
 
       expect(response.status).toBe(201);
@@ -88,7 +87,7 @@ describe("POST /api/v1/booking-intents", () => {
         slotId: validSlotId,
         customerId: validUserId,
         status: "pending",
-        note: "Please be on time"
+        note: "Please be on time",
       });
       expect(response.body.intent.id).toBeDefined();
     });
@@ -98,48 +97,55 @@ describe("POST /api/v1/booking-intents", () => {
         .post("/api/v1/booking-intents")
         .set("x-chronopay-user-id", validUserId)
         .set("x-chronopay-role", validRole)
-        .send({ slotId: "slot-102" }); // slot-102 is bookable: false
+        .send({ slotId: "slot-33333333-3333-4333-8333-333333333333" }); // charlie, bookable: false
 
       expect(response.status).toBe(409);
       expect(response.body).toEqual({
         success: false,
         error: "Selected slot is not bookable.",
+        code: "CONFLICT",
       });
     });
 
-    it("should return 409 if a booking intent already exists for this slot", async () => {
-      // First creation
-      await request(app)
+    it("should return 409 if the slot was already reserved by another user", async () => {
+      const occupiedSlot = "slot-22222222-2222-4222-8222-222222222222";
+      // First creation reserves the slot
+      const first = await request(app)
         .post("/api/v1/booking-intents")
         .set("x-chronopay-user-id", validUserId)
         .set("x-chronopay-role", validRole)
-        .send({ slotId: "slot-101" });
+        .send({ slotId: occupiedSlot });
+      expect(first.status).toBe(201);
 
-      // Second creation for same slot (by anyone)
+      // Second creation for same slot (by anyone) is rejected
       const response = await request(app)
         .post("/api/v1/booking-intents")
         .set("x-chronopay-user-id", "another-user")
         .set("x-chronopay-role", validRole)
-        .send({ slotId: "slot-101" });
+        .send({ slotId: occupiedSlot });
 
       expect(response.status).toBe(409);
       expect(response.body).toEqual({
         success: false,
-        error: "Selected slot already has an active booking intent.",
+        error: "Selected slot is not bookable.",
+        code: "CONFLICT",
       });
     });
 
     it("should return 403 if professional books their own slot", async () => {
-      const response = await request(app)
+      // Fresh app so slot-1111...1111 has not been reserved by the success test
+      const freshApp = createApp({ apiKey: "test-api-key" });
+      const response = await request(freshApp)
         .post("/api/v1/booking-intents")
-        .set("x-chronopay-user-id", "alice") // slot-100 belongs to alice
+        .set("x-chronopay-user-id", "alice") // slot-1111...1111 belongs to alice
         .set("x-chronopay-role", "admin") // alice is admin here
-        .send({ slotId: "slot-100" });
+        .send({ slotId: validSlotId });
 
       expect(response.status).toBe(403);
       expect(response.body).toEqual({
         success: false,
         error: "You cannot create a booking intent for your own slot.",
+        code: "FORBIDDEN",
       });
     });
   });

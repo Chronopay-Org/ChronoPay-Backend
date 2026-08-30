@@ -105,7 +105,7 @@ describe("POST /api/v1/booking-intents idempotency", () => {
   };
 
   const url = "/api/v1/booking-intents";
-  const body = { slotId: "slot-100", note: "window seat" };
+  const body = { slotId: "slot-11111111-1111-4111-8111-111111111111", note: "window seat" };
 
   it("replays original response for same key and same body", async () => {
     const redisMock = new InMemoryRedisMock();
@@ -156,7 +156,7 @@ describe("POST /api/v1/booking-intents idempotency", () => {
       .set(actorHeaders)
       .set("x-forwarded-for", "127.0.0.1")
       .set("Idempotency-Key", "booking-intent-key-2")
-      .send({ slotId: "slot-100", note: "different payload" });
+      .send({ slotId: "slot-11111111-1111-4111-8111-111111111111", note: "different payload" });
 
     expect(first.status).toBe(201);
     expect(second.status).toBe(422);
@@ -166,8 +166,16 @@ describe("POST /api/v1/booking-intents idempotency", () => {
   it("without idempotency key does normal non-idempotent behavior", async () => {
     setRedisClient(new InMemoryRedisMock());
 
-    const first = await request(app).post(url).set(actorHeaders).set("x-forwarded-for", "127.0.0.1").send(body);
-    const second = await request(app).post(url).set(actorHeaders).set("x-forwarded-for", "127.0.0.1").send(body);
+    const first = await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .send(body);
+    const second = await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .send(body);
 
     expect(first.status).toBe(201);
     // second attempt without key follows regular business rules (duplicate conflict)
