@@ -154,11 +154,7 @@ export class BookingIntentService {
       this.bundleTransferabilityService.assertBundleTransferable(slot, actor);
     } catch (err) {
       if (err instanceof BundleNotTransferableError) {
-        throw new BookingIntentError(
-          422,
-          err.message,
-          ERROR_CODES.BUNDLE_NOT_TRANSFERABLE.code,
-        );
+        throw new BookingIntentError(422, err.message, ERROR_CODES.BUNDLE_NOT_TRANSFERABLE.code);
       }
       throw err;
     }
@@ -256,6 +252,26 @@ export class BookingIntentService {
     this.schedulingService.reserveSlot(input.slotId);
 
     return intent;
+  }
+
+  getIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    return intent;
+  }
+
+  listIntents(actor: AuthContext): BookingIntentRecord[] {
+    if (actor.role === "admin") {
+      return this.bookingIntentRepository.listAll();
+    }
+    return this.bookingIntentRepository.listByCustomer(actor.userId);
   }
 
   async createRecurringIntents(
@@ -550,7 +566,7 @@ export function parseCreateBookingIntentBody(
       throw new BookingIntentError(400, "rrule must be a non-empty string.");
     }
     const normalizedRRule = rrule.trim();
-    
+
     // Assert error for ambiguous inputs without explicit offset
     if (normalizedRRule.includes("DTSTART")) {
       const dtstartMatch = normalizedRRule.match(/DTSTART(?:;[^:]*)?:(.*)(?:\n|$)/);
@@ -559,7 +575,10 @@ export function parseCreateBookingIntentBody(
         const hasZ = dtstartVal.endsWith("Z");
         const hasTzid = normalizedRRule.includes("TZID=");
         if (!hasZ && !hasTzid) {
-          throw new BookingIntentError(400, "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)");
+          throw new BookingIntentError(
+            400,
+            "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)",
+          );
         }
       }
     }

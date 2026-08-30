@@ -298,33 +298,33 @@ export interface SequenceRecoveryOptions {
  *
  * `args[0]` carries the primary resource identifier (account id, tx hash, or XDR).
  */
+import { HorizonHostManager } from "./horizon-host-manager.js";
+
 export class HorizonContractClient implements IContractClient {
-  private readonly horizonUrl: string;
+  private readonly hostManager: HorizonHostManager;
   private readonly networkPassphrase: string;
   private readonly contractService: ContractService;
 
-  constructor(horizonUrl: string, networkPassphrase: string, contractService: ContractService) {
-    this.horizonUrl = horizonUrl.replace(/\/$/, "");
+  constructor(horizonUrls: string | string[], networkPassphrase: string, contractService: ContractService) {
+    const urls = Array.isArray(horizonUrls) ? horizonUrls : horizonUrls.split(',').map(u => u.trim());
+    this.hostManager = new HorizonHostManager(urls);
     this.networkPassphrase = networkPassphrase;
     this.contractService = contractService;
   }
 
   /**
    * Executes a read-only Horizon query.
-   *
-   * Supported methods:
-   *   - "getAccount"      → GET /accounts/{args[0]}
-   *   - "getTransactions" → GET /accounts/{args[0]}/transactions
-   *   - "getTransaction"  → GET /transactions/{args[0]}
    */
   async call<T>(args: ContractInteractionArgs): Promise<ContractCallResult<T>> {
-    const url = this.buildReadUrl(args.method, args.args);
-
     const data = await this.contractService.call<T>(
       `horizon:${args.method}`,
       () =>
         withTimeout(
-          async (signal) => this.fetchJson<T>(url, { signal }),
+          async (signal) => {
+            const host = await this.hostManager.getHealthyHost();
+            const url = this.buildReadUrl(host, args.method, args.args);
+            return this.fetchJson<T>(url, host, { signal });
+          },
           timeoutConfig.http.contractMs,
           "horizon",
         ),
@@ -335,8 +335,6 @@ export class HorizonContractClient implements IContractClient {
 
   /**
    * Submits a signed Stellar transaction XDR envelope to Horizon.
-   *
-   * args.args[0] must be the base64-encoded XDR transaction envelope.
    */
   async sendTransaction(args: ContractInteractionArgs): Promise<TransactionResult> {
     const xdr = args.args[0] as string;
@@ -345,14 +343,15 @@ export class HorizonContractClient implements IContractClient {
       validateFeeBumpTransaction(xdr);
     }
 
-    const url = `${this.horizonUrl}/transactions`;
+    const host = await this.hostManager.getHealthyHost();
+    const url = `${host}/transactions`;
 
     const response = await this.contractService.sendTransaction<{ hash: string }>(
       "horizon:submitTransaction",
       () =>
         withTimeout(
           async (signal) =>
-            this.fetchJson<{ hash: string }>(url, {
+            this.fetchJson<{ hash: string }>(url, host, {
               method: "POST",
               headers: {
                 "Content-Type": "application/x-www-form-urlencoded",
@@ -368,9 +367,10 @@ export class HorizonContractClient implements IContractClient {
     return {
       hash: response.hash,
       wait: async () => {
-        const txUrl = `${this.horizonUrl}/transactions/${response.hash}`;
+        const currentHost = await this.hostManager.getHealthyHost();
+        const txUrl = `${currentHost}/transactions/${response.hash}`;
         return withTimeout(
-          async (signal) => this.fetchJson(txUrl, { signal }),
+          async (signal) => this.fetchJson(txUrl, currentHost, { signal }),
           timeoutConfig.http.contractMs,
           "horizon",
         );
@@ -662,7 +662,8 @@ export class HorizonContractClient implements IContractClient {
       queryParams.destination_asset_issuer = options.destinationAsset.asset_issuer;
     }
 
-    const url = `${this.horizonUrl}/paths/strict-send?${new URLSearchParams(queryParams).toString()}`;
+    const host = await this.hostManager.getHealthyHost();
+    const url = `${host}/paths/strict-send?${new URLSearchParams(queryParams).toString()}`;
 
     let response: HorizonPathResponse;
     try {
@@ -670,7 +671,7 @@ export class HorizonContractClient implements IContractClient {
         "horizon:findPaths",
         () =>
           withTimeout(
-            async (signal) => this.fetchJson<HorizonPathResponse>(url, { signal }),
+            async (signal) => this.fetchJson<HorizonPathResponse>(url, host, { signal }),
             timeoutConfig.http.contractMs,
             "horizon",
           ),
@@ -746,13 +747,13 @@ export class HorizonContractClient implements IContractClient {
     };
   }
 
-  private buildReadUrl(method: string, methodArgs: any[]): string {
+  private buildReadUrl(host: string, method: string, methodArgs: any[]): string {
     const id = methodArgs[0] as string;
     switch (method) {
       case "getAccount":
-        return `${this.horizonUrl}/accounts/${encodeURIComponent(id)}`;
+        return `${host}/accounts/${encodeURIComponent(id)}`;
       case "getTransactions": {
-        let url = `${this.horizonUrl}/accounts/${encodeURIComponent(id)}/transactions`;
+        let url = `${host}/accounts/${encodeURIComponent(id)}/transactions`;
         const options = methodArgs[1] as HorizonPaginationOptions | undefined;
         if (options) {
           const params = new URLSearchParams();
@@ -767,24 +768,26 @@ export class HorizonContractClient implements IContractClient {
         return url;
       }
       case "getTransaction":
-        return `${this.horizonUrl}/transactions/${encodeURIComponent(id)}`;
+        return `${host}/transactions/${encodeURIComponent(id)}`;
       case "getLatestLedger":
-        return `${this.horizonUrl}/ledgers?limit=1&order=desc`;
+        return `${host}/ledgers?limit=1&order=desc`;
       case "findPaths": {
         const queryParams = methodArgs[0] as Record<string, string>;
         const params = new URLSearchParams(queryParams);
-        return `${this.horizonUrl}/paths/strict-send?${params.toString()}`;
+        return `${host}/paths/strict-send?${params.toString()}`;
       }
       default:
         throw new ContractInvalidRequestError(`Unknown Horizon method: ${method}`);
     }
   }
 
-  private async fetchJson<T>(url: string, init: RequestInit = {}): Promise<T> {
+  private async fetchJson<T>(url: string, host: string, init: RequestInit = {}): Promise<T> {
     let response: Response;
     try {
       response = await fetch(url, init);
+      this.hostManager.recordSuccess(host);
     } catch (err) {
+      this.hostManager.recordError(host, err);
       // Network-level error (ECONNRESET, ETIMEDOUT, etc.) — rethrow raw so
       // mapContractError in ContractService can classify it correctly.
       throw err;
@@ -792,7 +795,9 @@ export class HorizonContractClient implements IContractClient {
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new HorizonHttpError(response.status, body);
+      const err = new HorizonHttpError(response.status, body);
+      this.hostManager.recordError(host, err);
+      throw err;
     }
 
     try {
