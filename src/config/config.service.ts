@@ -96,6 +96,22 @@ export class ConfigService {
     return this.envConfig.internalBypassToleranceMs;
   }
 
+  public get mfaIssuer() {
+    return this.envConfig.mfaIssuer;
+  }
+
+  public get mfaFreshnessMs() {
+    return this.envConfig.mfaFreshnessMs;
+  }
+
+  public get mfaWindowPeriods() {
+    return this.envConfig.mfaWindowPeriods;
+  }
+
+  public get mfaChallengeTtlSec() {
+    return this.envConfig.mfaChallengeTtlSec;
+  }
+
   public get jwtIssuer() {
     return this.envConfig.jwtIssuer;
   }
@@ -117,6 +133,8 @@ export class ConfigService {
       "API_KEY",
       "STELLAR_SECRET_KEY",
       "WEBHOOK_SECRET",
+      "MFA_ENCRYPTION_KEY",
+      "MFA_CHALLENGE_SECRET",
     ];
 
     for (const key of relevantKeys) {

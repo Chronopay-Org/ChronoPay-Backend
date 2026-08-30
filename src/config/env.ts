@@ -45,6 +45,14 @@ export interface EnvConfig {
   internalOverrideSecretPrev?: string;
   /** Acceptable clock skew (ms) for the bypass timestamp. Default 30 000. */
   internalBypassToleranceMs: number;
+  /** Issuer label embedded in TOTP otpauth URIs and QR code labels. */
+  mfaIssuer?: string;
+  /** Max age (ms) of an MFA challenge before `requireFreshMfa` rejects it. Default 15 min. */
+  mfaFreshnessMs: number;
+  /** Clock-skew windows accepted around the current TOTP step on verification. Default 1. */
+  mfaWindowPeriods: number;
+  /** Lifetime (seconds) of an issued MFA challenge token. Default 300. */
+  mfaChallengeTtlSec: number;
 }
 
 export class EnvValidationError extends Error {
@@ -101,6 +109,26 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
 
+  const mfaIssuer = parseOptionalString(env.MFA_ISSUER);
+  const mfaFreshnessMs = parsePositiveInteger(
+    env.MFA_FRESHNESS_MS,
+    "MFA_FRESHNESS_MS",
+    15 * 60 * 1000,
+    issues,
+  );
+  const mfaWindowPeriods = parsePositiveInteger(
+    env.MFA_WINDOW_PERIODS,
+    "MFA_WINDOW_PERIODS",
+    1,
+    issues,
+  );
+  const mfaChallengeTtlSec = parsePositiveInteger(
+    env.MFA_CHALLENGE_TTL_SEC,
+    "MFA_CHALLENGE_TTL_SEC",
+    300,
+    issues,
+  );
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -123,6 +151,10 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     internalOverrideSecret,
     internalOverrideSecretPrev,
     internalBypassToleranceMs,
+    mfaIssuer,
+    mfaFreshnessMs,
+    mfaWindowPeriods,
+    mfaChallengeTtlSec,
   };
 }
 

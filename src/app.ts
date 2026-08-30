@@ -50,6 +50,7 @@ function isTruthyEnvValue(value: string | undefined): boolean {
 import checkoutRouter from "./routes/checkout.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
+import authRouter from "./routes/auth.js";
 import adminRouter from "./routes/admin.js";
 import graceWindowRouter from "./routes/graceWindow.js";
 import { legalHoldRouter } from "./routes/legalHold.js";
@@ -505,6 +506,9 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3a. OAuth2 Routes
   app.use("/api/v1/auth/oauth", oauth2Router);
+
+  // 3a-i. Auth routes (JWT verify + TOTP MFA enroll/verify)
+  app.use("/api/v1/auth", authRouter);
 
   // 3b. Admin Routes
   app.use("/api/v1/admin", adminRouter);
