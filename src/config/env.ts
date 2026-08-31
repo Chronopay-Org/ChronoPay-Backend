@@ -270,25 +270,6 @@ function parseOptionalUrl(rawValue: string | undefined, key: string, issues: str
   }
 }
 
-function parseUrlList(rawValue: string | undefined, key: string, issues: string[]): string[] {
-  if (rawValue === undefined) return [];
-  const urls = rawValue.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
-  const validUrls: string[] = [];
-  for (const value of urls) {
-    try {
-      const url = new URL(value);
-      if (!["http:", "https:"].includes(url.protocol)) {
-        issues.push(`${key} URLs must use http or https scheme.`);
-      } else {
-        validUrls.push(value);
-      }
-    } catch {
-      issues.push(`${key} must contain valid URLs.`);
-    }
-  }
-  return validUrls;
-}
-
 function _parseReplicaId(rawValue: string | undefined): string {
   if (rawValue === undefined || rawValue.trim().length === 0) {
     // Fall back to the OS hostname so each pod/container gets a distinct ID

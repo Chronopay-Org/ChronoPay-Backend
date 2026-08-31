@@ -151,6 +151,35 @@ export const MarketplaceSearchSchema = z.object({
     });
   }
 });
+  /**
+   * When true (default), slots that are currently held are excluded from
+   * browse results. Set to false only in admin / operator contexts where
+   * held slots must still be visible.
+   */
+  suppressHeld: z.boolean().default(true),
+
+  /**
+   * When true, the estimated hold-release time is included in each
+   * returned slot where policy allows disclosure.  Ignored when
+   * suppressHeld is true (held slots are not returned at all).
+   */
+  showHeldReleaseEta: z.boolean().default(false),
+
+  // Sorting/ranking
+  sortBy: z.enum(["rating", "price", "relevance"]).default("relevance"),
+
+  // Facet counts
+  includeFacets: z.boolean().default(false),
+
+  // Result diversification
+  diversify: z.boolean().default(true),
+  supplierCap: z
+    .number()
+    .int()
+    .min(MIN_SUPPLIER_CAP, `supplierCap must be >= ${MIN_SUPPLIER_CAP}`)
+    .max(MAX_SUPPLIER_CAP, `supplierCap must be <= ${MAX_SUPPLIER_CAP}`)
+    .optional(),
+});
 
 export type MarketplaceSearchQueryInput = z.input<typeof MarketplaceSearchSchema>;
 export type MarketplaceSearchQuery = z.output<typeof MarketplaceSearchSchema>;

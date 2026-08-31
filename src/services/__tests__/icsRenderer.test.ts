@@ -64,20 +64,6 @@ interface MultiBookingLegLeg {
 // ICS parsing helpers for test assertions
 // ---------------------------------------------------------------------------
 
-function _parseIcsProperties(ics: string): Map<string, string> {
-  const props = new Map<string, string>();
-  // Unfold lines first
-  const unfolded = ics.replace(/\r\n /g, "");
-  for (const line of unfolded.split("\r\n")) {
-    const colonIdx = line.indexOf(":");
-    if (colonIdx === -1) continue;
-    const name = line.slice(0, colonIdx);
-    const value = line.slice(colonIdx + 1);
-    props.set(name, value);
-  }
-  return props;
-}
-
 function getIcsProperty(ics: string, name: string): string | undefined {
   const unfolded = ics.replace(/\r\n /g, "");
   const regex = new RegExp(`^${name}((?:;[^:]*)*):(.+)$`, "m");
@@ -92,10 +78,6 @@ function getIcsRawLine(ics: string, name: string): string | undefined {
   if (!match) return undefined;
   // Return the full property line without unfolding artifacts
   return `${name}${match[1]}:${match[2]}`;
-}
-
-function _countLines(ics: string): number {
-  return ics.trim().split(/\r?\n/).length;
 }
 
 // ---------------------------------------------------------------------------
