@@ -276,6 +276,54 @@ export class CheckoutSessionService {
     this.tenantSlippageConfig.clear();
   }
 
+  static calculateDurationBasedRefund(params: {
+    amountCents: number;
+    startTimeMs: number;
+    endTimeMs: number;
+    nowMs: number;
+    curve?: "linear";
+  }): {
+    refundAmountCents: number;
+    consumedRatio: number;
+    remainingRatio: number;
+  } {
+    if (!Number.isFinite(params.amountCents) || params.amountCents < 0) {
+      throw new CheckoutError(
+        "INVALID_REFUND_AMOUNT",
+        "Refund amount must be a non-negative finite number.",
+        400,
+      );
+    }
+
+    if (!Number.isFinite(params.startTimeMs) || !Number.isFinite(params.endTimeMs)) {
+      throw new CheckoutError(
+        "INVALID_REFUND_WINDOW",
+        "Refund timing window must be finite numbers.",
+        400,
+      );
+    }
+
+    if (params.endTimeMs <= params.startTimeMs) {
+      return {
+        refundAmountCents: 0,
+        consumedRatio: 1,
+        remainingRatio: 0,
+      };
+    }
+
+    const totalMs = params.endTimeMs - params.startTimeMs;
+    const consumedMs = Math.min(Math.max(params.nowMs - params.startTimeMs, 0), totalMs);
+    const consumedRatio = totalMs === 0 ? 1 : consumedMs / totalMs;
+    const remainingRatio = Math.max(0, Math.min(1, 1 - consumedRatio));
+    const refundAmountCents = Math.round(params.amountCents * remainingRatio);
+
+    return {
+      refundAmountCents,
+      consumedRatio,
+      remainingRatio,
+    };
+  }
+
   static async processPartialRefundPathPayment(
     request: {
       sessionId: string;
@@ -337,18 +385,23 @@ export class CheckoutSessionService {
       });
 
       // Audit log the executed path payment quote for audit persistence
-      this.emitAuditEvent("partial_refund_path_payment.executed", "success", `session:${request.sessionId}`, {
-        sessionId: request.sessionId,
-        tenantId,
-        quoteId: quote.quoteId,
-        sourceAmount: quote.sourceAmount,
-        destinationAmount: quote.destinationAmount,
-        minDestinationAmount: quote.minDestinationAmount,
-        effectiveSlippagePercent: quote.effectiveSlippagePercent,
-        maxSlippageTolerancePercent: quote.maxSlippageTolerancePercent,
-        path: quote.path,
-        quotedAt: quote.quotedAt,
-      });
+      this.emitAuditEvent(
+        "partial_refund_path_payment.executed",
+        "success",
+        `session:${request.sessionId}`,
+        {
+          sessionId: request.sessionId,
+          tenantId,
+          quoteId: quote.quoteId,
+          sourceAmount: quote.sourceAmount,
+          destinationAmount: quote.destinationAmount,
+          minDestinationAmount: quote.minDestinationAmount,
+          effectiveSlippagePercent: quote.effectiveSlippagePercent,
+          maxSlippageTolerancePercent: quote.maxSlippageTolerancePercent,
+          path: quote.path,
+          quotedAt: quote.quotedAt,
+        },
+      );
 
       // Update session metadata with audit quote
       const updatedMetadata: Record<string, string | number | boolean> = {

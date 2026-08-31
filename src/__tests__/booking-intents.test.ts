@@ -231,6 +231,73 @@ describe("booking intents endpoints", () => {
 // in-memory analogue) allows a new intent once the prior one is no longer
 // active — i.e. the constraint is partial, not global.
 
+describe("POST /:id/refund", () => {
+  it("returns a proportional refund for a partially consumed booking", async () => {
+    const intent = await repo.create({
+      ...BASE_INTENT,
+      id: "intent-refund-1",
+      customerId: "user1",
+      professional: "pro-1",
+      status: "confirmed",
+      startTime: 0,
+      endTime: 1000,
+      pricingSnapshot: {
+        strategyId: "fixed",
+        resolvedPrice: 1000,
+        basePrice: 1000,
+        slotStartMs: 0,
+        nowMs: 0,
+        activeBookings: 1,
+        capacity: 1,
+        config: {},
+      },
+    });
+
+    const res = await request(app)
+      .post(`/api/v1/booking-intents/${intent.id}/refund`)
+      .send({ cancelledAtMs: 400, reason: "customer_cancel" })
+      .set("x-chronopay-user-id", "user1")
+      .set("x-chronopay-role", "customer");
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.refund.refundAmountCents).toBe(600);
+    expect(res.body.refund.refundRatio).toBeCloseTo(0.6, 5);
+    expect(res.body.refund.reason).toBe("customer_cancel");
+  });
+
+  it("rejects invalid cancellation timestamps on refund requests", async () => {
+    const intent = await repo.create({
+      ...BASE_INTENT,
+      id: "intent-refund-2",
+      customerId: "user1",
+      professional: "pro-1",
+      status: "confirmed",
+      startTime: 0,
+      endTime: 1000,
+      pricingSnapshot: {
+        strategyId: "fixed",
+        resolvedPrice: 1000,
+        basePrice: 1000,
+        slotStartMs: 0,
+        nowMs: 0,
+        activeBookings: 1,
+        capacity: 1,
+        config: {},
+      },
+    });
+
+    const res = await request(app)
+      .post(`/api/v1/booking-intents/${intent.id}/refund`)
+      .send({ cancelledAtMs: "bad" })
+      .set("x-chronopay-user-id", "user1")
+      .set("x-chronopay-role", "customer");
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+});
+
 describe("concurrent booking-intent creates — one active per slot", () => {
   // Build a lightweight app wired to explicit repos so we can control state.
   function makeServiceApp(userId = "user1") {

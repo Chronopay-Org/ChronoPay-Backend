@@ -213,25 +213,33 @@ export function createBookingIntentsRouter(
   );
 
   router.post(
-    "/:id/no-show",
+    "/:id/refund",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
-    requireAuthenticatedActor(["professional", "admin"]),
+    requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
-    auditMiddleware("NO_SHOW_BOOKING_INTENT"),
+    auditMiddleware("REFUND_BOOKING_INTENT"),
     async (req: Request, res: Response): Promise<void> => {
       try {
-        const forfeitRatio =
-          typeof req.body?.forfeitRatio === "number" ? req.body.forfeitRatio : undefined;
         const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+        const cancelledAtMs =
+          typeof req.body?.cancelledAtMs === "number" ? req.body.cancelledAtMs : undefined;
 
-        const result = await bookingIntentService.markNoShow(req.params.id, req.auth!, {
+        if (
+          req.body &&
+          Object.prototype.hasOwnProperty.call(req.body, "cancelledAtMs") &&
+          cancelledAtMs === undefined
+        ) {
+          throw new BookingIntentError(400, "cancelledAtMs must be a valid number.");
+        }
+
+        const refund = await bookingIntentService.refundIntent(req.params.id, req.auth!, {
           reason,
-          forfeitRatio,
+          cancelledAtMs,
         });
 
         res.status(200).json({
           success: true,
-          result,
+          refund,
         });
       } catch (error) {
         handleServiceError(error, res);
