@@ -147,6 +147,77 @@ describe("booking intents endpoints", () => {
       expect(res.status).toBe(401);
     });
   });
+
+  describe("POST /:id/no-show", () => {
+    it("allows a supplier to mark a confirmed booking as a no-show and forfeit escrow share", async () => {
+      const created = await repo.create({
+        ...BASE_INTENT,
+        id: "intent-no-show-1",
+        professional: "pro-1",
+        customerId: "user1",
+        status: "confirmed",
+        pricingSnapshot: {
+          strategyId: "fixed",
+          resolvedPrice: 1500,
+          basePrice: 1500,
+          slotStartMs: 1000,
+          nowMs: 1500,
+          activeBookings: 1,
+          capacity: 1,
+          config: {},
+        },
+      });
+
+      const res = await request(app)
+        .post("/api/v1/booking-intents/intent-no-show-1/no-show")
+        .send({ reason: "Buyer did not arrive", forfeitRatio: 0.2 })
+        .set("x-chronopay-user-id", "pro-1")
+        .set("x-chronopay-role", "professional");
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.result.status).toBe("no_show");
+      expect(res.body.result.forfeitAmountCents).toBe(300);
+      expect(res.body.result.reputationDelta).toBeLessThan(0);
+      expect(res.body.result.buyerId).toBe("user1");
+    });
+
+    it("rejects a customer from marking no-show", async () => {
+      await repo.create({
+        ...BASE_INTENT,
+        id: "intent-no-show-2",
+        professional: "pro-1",
+        customerId: "user1",
+      });
+
+      const res = await request(app)
+        .post("/api/v1/booking-intents/intent-no-show-2/no-show")
+        .send({ reason: "No show" })
+        .set("x-chronopay-user-id", "user1")
+        .set("x-chronopay-role", "customer");
+
+      expect(res.status).toBe(403);
+      expect(res.body.success).toBe(false);
+    });
+
+    it("rejects invalid forfeit ratios", async () => {
+      await repo.create({
+        ...BASE_INTENT,
+        id: "intent-no-show-3",
+        professional: "pro-1",
+        customerId: "user1",
+      });
+
+      const res = await request(app)
+        .post("/api/v1/booking-intents/intent-no-show-3/no-show")
+        .send({ forfeitRatio: 2 })
+        .set("x-chronopay-user-id", "pro-1")
+        .set("x-chronopay-role", "professional");
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+  });
 });
 
 // ─── Concurrent-create: at-most-one active intent per slot ───────────────────
