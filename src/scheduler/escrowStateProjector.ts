@@ -172,7 +172,7 @@ export class EscrowStateProjector {
       );
     }
 
-    const intent = this.findActiveIntent(event);
+    const intent = await this.findActiveIntent(event);
     if (!intent) {
       return noop(
         "noop_unknown_intent",
@@ -213,12 +213,12 @@ export class EscrowStateProjector {
       );
     }
 
-    return this.transition(intent, target, event);
+    return await this.transition(intent, target, event);
   }
 
   // ─── Lookup helpers ────────────────────────────────────────────────────────
 
-  private findActiveIntent(event: EscrowEvent): BookingIntentRecord | undefined {
+  private async findActiveIntent(event: EscrowEvent): Promise<BookingIntentRecord | undefined> {
     // If the contract annotates the event with a bookingIntentId, the id is
     // authoritative provenance — we MUST use the id-pointer or fail-closed.
     // Silently re-routing to a slot-keyed lookup would obscure intent
@@ -226,21 +226,21 @@ export class EscrowStateProjector {
     // "id points at a different slot" cases. The caller maps undefined
     // to noop_unknown_intent.
     if (event.bookingIntentId) {
-      const byId = this.bookingIntentRepository.findById(event.bookingIntentId);
+      const byId = await this.bookingIntentRepository.findById(event.bookingIntentId);
       if (!byId) return undefined;
       if (byId.slotId !== event.slotId) return undefined;
       return byId;
     }
-    return this.lookupBySlot(event.slotId);
+    return await this.lookupBySlot(event.slotId);
   }
 
-  private lookupBySlot(slotId: string): BookingIntentRecord | undefined {
+  private async lookupBySlot(slotId: string): Promise<BookingIntentRecord | undefined> {
     if (this.bookingIntentRepository.findLatestBySlotId) {
-      return this.bookingIntentRepository.findLatestBySlotId(slotId);
+      return await this.bookingIntentRepository.findLatestBySlotId(slotId);
     }
     // Fallback for repository implementations that do not provide the
     // indexed lookup. O(n) but only used in tests / legacy repos.
-    const all = this.bookingIntentRepository.listAll();
+    const all = await this.bookingIntentRepository.listAll();
     const candidates = all.filter((i) => i.slotId === slotId);
     if (candidates.length === 0) return undefined;
     return candidates.reduce((latest, current) =>
@@ -257,12 +257,12 @@ export class EscrowStateProjector {
    * 
    * Emits audit events for firm booking escalation (Captured event).
    */
-  private transition(
+  private async transition(
     intent: BookingIntentRecord,
     nextStatus: BookingIntentStatus,
     event: EscrowEvent,
-  ): ProjectionOutcome {
-    const updated = this.bookingIntentRepository.updateStatus(intent.id, nextStatus);
+  ): Promise<ProjectionOutcome> {
+    const updated = await this.bookingIntentRepository.updateStatus(intent.id, nextStatus);
 
     // Emit firm booking receipt when payment is captured
     if (event.kind === "Captured" && nextStatus === "firm") {

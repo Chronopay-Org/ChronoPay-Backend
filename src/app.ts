@@ -63,6 +63,7 @@ import redactionPolicyRouter from "./routes/redactionPolicy.js";
 import { gdprExportRouter } from "./routes/gdprExport.js";
 import reputationRouter from "./routes/reputation.js";
 import partnerQuotaRouter from "./routes/partnerQuota.js";
+import subscriptionRouter from "./routes/subscriptions.js";
 import { requireAdminToken } from "./middleware/authorization.js";
 import { listReputationEvents } from "./services/reputationWriteAudit.js";
 import {
@@ -281,7 +282,16 @@ export function createApp(options: AppFactoryOptions = {}) {
     );
   }
 
-  app.use(express.json({ limit: "100kb" }));
+  app.use(
+    express.json({
+      limit: "100kb",
+      // Preserve the raw request body so HMAC-based webhook signature
+      // verification can be performed over the exact bytes that were sent.
+      verify: (req: express.Request, _res, buf) => {
+        (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+      },
+    }),
+  );
   app.use(express.urlencoded({ extended: true, limit: "100kb" }));
   app.use(parseCookies);
   app.use(metricsMiddleware);
@@ -613,6 +623,9 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3d-i. Partner Quota Dashboard
   app.use("/api/v1/partner", partnerQuotaRouter);
+
+  // 3d-ii. Subscription Products & Subscriptions
+  app.use("/api/v1/subscriptions", subscriptionRouter);
 
   // 4. Booking Intents Routes
   app.use("/api/v1/booking-intents", createBookingIntentsRouter());

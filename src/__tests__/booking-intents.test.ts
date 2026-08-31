@@ -8,6 +8,7 @@ import {
   type BookingIntentRecord,
 } from "../modules/booking-intents/booking-intent-repository.js";
 import { BookingIntentService } from "../modules/booking-intents/booking-intent-service.js";
+import type { VerifiedJwtPayload } from "../utils/jwt.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 
 // Minimal valid intent fields (minus id, which the repo assigns)
@@ -146,6 +147,77 @@ describe("booking intents endpoints", () => {
       expect(res.status).toBe(401);
     });
   });
+
+  describe("POST /:id/no-show", () => {
+    it("allows a supplier to mark a confirmed booking as a no-show and forfeit escrow share", async () => {
+      const created = await repo.create({
+        ...BASE_INTENT,
+        id: "intent-no-show-1",
+        professional: "pro-1",
+        customerId: "user1",
+        status: "confirmed",
+        pricingSnapshot: {
+          strategyId: "fixed",
+          resolvedPrice: 1500,
+          basePrice: 1500,
+          slotStartMs: 1000,
+          nowMs: 1500,
+          activeBookings: 1,
+          capacity: 1,
+          config: {},
+        },
+      });
+
+      const res = await request(app)
+        .post("/api/v1/booking-intents/intent-no-show-1/no-show")
+        .send({ reason: "Buyer did not arrive", forfeitRatio: 0.2 })
+        .set("x-chronopay-user-id", "pro-1")
+        .set("x-chronopay-role", "professional");
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.result.status).toBe("no_show");
+      expect(res.body.result.forfeitAmountCents).toBe(300);
+      expect(res.body.result.reputationDelta).toBeLessThan(0);
+      expect(res.body.result.buyerId).toBe("user1");
+    });
+
+    it("rejects a customer from marking no-show", async () => {
+      await repo.create({
+        ...BASE_INTENT,
+        id: "intent-no-show-2",
+        professional: "pro-1",
+        customerId: "user1",
+      });
+
+      const res = await request(app)
+        .post("/api/v1/booking-intents/intent-no-show-2/no-show")
+        .send({ reason: "No show" })
+        .set("x-chronopay-user-id", "user1")
+        .set("x-chronopay-role", "customer");
+
+      expect(res.status).toBe(403);
+      expect(res.body.success).toBe(false);
+    });
+
+    it("rejects invalid forfeit ratios", async () => {
+      await repo.create({
+        ...BASE_INTENT,
+        id: "intent-no-show-3",
+        professional: "pro-1",
+        customerId: "user1",
+      });
+
+      const res = await request(app)
+        .post("/api/v1/booking-intents/intent-no-show-3/no-show")
+        .send({ forfeitRatio: 2 })
+        .set("x-chronopay-user-id", "pro-1")
+        .set("x-chronopay-role", "professional");
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+  });
 });
 
 // ─── Concurrent-create: at-most-one active intent per slot ───────────────────
@@ -158,6 +230,73 @@ describe("booking intents endpoints", () => {
 // The "after terminal state" case verifies that the partial index (and the
 // in-memory analogue) allows a new intent once the prior one is no longer
 // active — i.e. the constraint is partial, not global.
+
+describe("POST /:id/refund", () => {
+  it("returns a proportional refund for a partially consumed booking", async () => {
+    const intent = await repo.create({
+      ...BASE_INTENT,
+      id: "intent-refund-1",
+      customerId: "user1",
+      professional: "pro-1",
+      status: "confirmed",
+      startTime: 0,
+      endTime: 1000,
+      pricingSnapshot: {
+        strategyId: "fixed",
+        resolvedPrice: 1000,
+        basePrice: 1000,
+        slotStartMs: 0,
+        nowMs: 0,
+        activeBookings: 1,
+        capacity: 1,
+        config: {},
+      },
+    });
+
+    const res = await request(app)
+      .post(`/api/v1/booking-intents/${intent.id}/refund`)
+      .send({ cancelledAtMs: 400, reason: "customer_cancel" })
+      .set("x-chronopay-user-id", "user1")
+      .set("x-chronopay-role", "customer");
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.refund.refundAmountCents).toBe(600);
+    expect(res.body.refund.refundRatio).toBeCloseTo(0.6, 5);
+    expect(res.body.refund.reason).toBe("customer_cancel");
+  });
+
+  it("rejects invalid cancellation timestamps on refund requests", async () => {
+    const intent = await repo.create({
+      ...BASE_INTENT,
+      id: "intent-refund-2",
+      customerId: "user1",
+      professional: "pro-1",
+      status: "confirmed",
+      startTime: 0,
+      endTime: 1000,
+      pricingSnapshot: {
+        strategyId: "fixed",
+        resolvedPrice: 1000,
+        basePrice: 1000,
+        slotStartMs: 0,
+        nowMs: 0,
+        activeBookings: 1,
+        capacity: 1,
+        config: {},
+      },
+    });
+
+    const res = await request(app)
+      .post(`/api/v1/booking-intents/${intent.id}/refund`)
+      .send({ cancelledAtMs: "bad" })
+      .set("x-chronopay-user-id", "user1")
+      .set("x-chronopay-role", "customer");
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+});
 
 describe("concurrent booking-intent creates — one active per slot", () => {
   // Build a lightweight app wired to explicit repos so we can control state.
@@ -176,6 +315,7 @@ describe("concurrent booking-intent creates — one active per slot", () => {
         const intent = await service.createIntent(req.body, {
           userId: (req.headers["x-user-id"] as string) ?? userId,
           role: "customer",
+          claims: {} as VerifiedJwtPayload,
         });
         res.status(201).json({ success: true, intent });
       } catch (err: any) {
@@ -220,7 +360,7 @@ describe("concurrent booking-intent creates — one active per slot", () => {
   it("allows a new intent for a slot once the prior intent is no longer active", async () => {
     const { service } = makeServiceApp();
 
-    const actor = { userId: "user1", role: "customer" as const };
+    const actor = { userId: "user1", role: "customer" as const, claims: {} as VerifiedJwtPayload };
 
     // Create the first intent and cancel it (terminal state releases the slot).
     const first = await service.createIntent({ slotId: ALICE_SLOT_ID }, actor);
