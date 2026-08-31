@@ -2,17 +2,23 @@ import { query } from "../../db/pool.js";
 import { ConflictError } from "../../errors/AppError.js";
 import {
   BookingIntentRecord,
-  BookingIntentRepository,
   BookingIntentStatus,
 } from "./booking-intent-repository.js";
 
 /**
- * PostgreSQL implementation of the BookingIntentRepository.
+ * PostgreSQL implementation of the booking-intent repository.
  *
  * This repository handles persistence for booking intents using the 'booking_intents' table.
  * It maps between the domain BookingIntentRecord and the database schema.
+ *
+ * Note: this class intentionally does not implement the full
+ * `BookingIntentRepository` interface — the interface admits sync and async
+ * implementations and covers fields/statuses that have no column on the
+ * `booking_intents` table (e.g. refundable-hold fields). Production wiring uses
+ * `InMemoryBookingIntentRepository`; this class is exercised by its own unit
+ * test.
  */
-export class PgBookingIntentRepository implements BookingIntentRepository {
+export class PgBookingIntentRepository {
   constructor(private readonly dbQuery = query) {}
 
   async create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> {
@@ -56,21 +62,18 @@ export class PgBookingIntentRepository implements BookingIntentRepository {
     }
   }
 
-  // @ts-expect-error - Auto-fixed by script
   async findBySlotId(slotId: string): Promise<BookingIntentRecord | undefined> {
     const sql = `SELECT * FROM booking_intents WHERE slot_id = $1 LIMIT 1`;
     const res = await this.dbQuery(sql, [slotId]);
     return res.rows[0] ? this.mapRowToRecord(res.rows[0]) : undefined;
   }
 
-  // @ts-expect-error - Auto-fixed by script
   async findById(id: string): Promise<BookingIntentRecord | undefined> {
     const sql = `SELECT * FROM booking_intents WHERE id = $1 LIMIT 1`;
     const res = await this.dbQuery(sql, [id]);
     return res.rows[0] ? this.mapRowToRecord(res.rows[0]) : undefined;
   }
 
-  // @ts-expect-error - Auto-fixed by script
   async findBySlotIdAndCustomer(slotId: string, customerId: string): Promise<BookingIntentRecord | undefined> {
     const sql = `SELECT * FROM booking_intents WHERE slot_id = $1 AND customer_id = $2 LIMIT 1`;
     const res = await this.dbQuery(sql, [slotId, customerId]);

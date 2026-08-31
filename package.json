@@ -20,6 +20,7 @@
     "migrate": "tsx src/scripts/migrate.ts",
     "canary": "tsx scripts/canary.ts",
     "generate-openapi": "tsx src/scripts/generate-openapi.ts",
+    "generate:error-docs": "tsx scripts/generate-error-codes.ts",
     "release:sdk": "node scripts/release-sdk.js",
     "sbom": "tsx scripts/generate-sbom.ts",
     "sbom:upload": "tsx scripts/upload-sbom.ts"
@@ -27,6 +28,7 @@
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1097.0",
     "@google-cloud/kms": "^5.7.0",
+    "ajv-formats": "^3.0.1",
     "cors": "^2.8.5",
     "dataloader": "^2.2.3",
     "dotenv": "^17.4.2",

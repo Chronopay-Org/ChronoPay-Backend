@@ -274,21 +274,26 @@ describe("EnvValidationError", () => {
 
 describe("HORIZON_URL", () => {
   it("returns undefined when omitted", () => {
-    expect(load().horizonUrl).toBeUndefined();
+    expect(load().horizonUrls).toBeUndefined();
   });
 
-  it("accepts https:// URL", () => {
-    expect(load({ HORIZON_URL: "https://horizon-testnet.stellar.org" }).horizonUrl).toBe(
+  it("parses valid HORIZON_URL", () => {
+    expect(load({ HORIZON_URL: "https://horizon-testnet.stellar.org" }).horizonUrls).toEqual([
       "https://horizon-testnet.stellar.org",
-    );
+    ]);
+    // Allow trailing slashes to be kept by the env parser (they are stripped in the client)
+    expect(load({ HORIZON_URL: "http://localhost:8000" }).horizonUrls).toEqual(["http://localhost:8000"]);
   });
 
-  it("accepts http:// URL", () => {
-    expect(load({ HORIZON_URL: "http://localhost:8000" }).horizonUrl).toBe("http://localhost:8000");
+  it("ignores whitespace-only HORIZON_URL", () => {
+    expect(load({ HORIZON_URL: "   " }).horizonUrls).toBeUndefined();
   });
 
-  it("returns undefined for whitespace-only value", () => {
-    expect(load({ HORIZON_URL: "   " }).horizonUrl).toBeUndefined();
+  it("parses valid HORIZON_URLS", () => {
+    expect(load({ HORIZON_URLS: "https://horizon1.com, http://horizon2.com " }).horizonUrls).toEqual([
+      "https://horizon1.com",
+      "http://horizon2.com",
+    ]);
   });
 
   it("rejects non-http scheme", () => {

@@ -71,10 +71,7 @@ export class FlagRolloutScheduler {
         this.runCount++;
         this.runOnce();
       } catch (err) {
-        logger.error(
-          "[flag-rollout-scheduler] Advance tick failed:",
-          err instanceof Error ? err.message : err,
-        );
+        logger.error({ err }, "[flag-rollout-scheduler] Advance tick failed");
       }
 
       if (this.isRunning) {

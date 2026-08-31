@@ -30,6 +30,8 @@ export interface FraudFeatureVector {
   hasHeaderFp: boolean;
   hasStoredFp: boolean;
   fingerprintMismatch: boolean;
+  userAgent?: string;
+  userAgentMismatch: boolean;
   disposableEmail: boolean;
   sharedIp: boolean;
   sharedFingerprint: boolean;
@@ -86,9 +88,11 @@ export class FraudScorer {
   private readonly velocityTracker = new VelocityTracker(this.velocityWindowMs);
   private readonly ipIndex = new Map<string, Set<string>>();
   private readonly fingerprintIndex = new Map<string, Set<string>>();
+  /** First-seen (normalized) user-agent bound to each device fingerprint hash. */
+  private readonly fingerprintUaIndex = new Map<string, string>();
 
   private specVersion: string =
-    process.env.FRAUD_FEATURE_SPEC_VERSION || "v1.0.0";
+    process.env.FRAUD_FEATURE_SPEC_VERSION || "v1.1.0";
   private defaultSamplingRate: number =
     process.env.FRAUD_FEATURE_SAMPLING_RATE !== undefined
       ? Number(process.env.FRAUD_FEATURE_SAMPLING_RATE)
@@ -138,8 +142,28 @@ export class FraudScorer {
       reasons.push("fingerprint_mismatch");
     }
 
+    // User-agent / fingerprint mismatch: a device fingerprint is bound to the
+    // user-agent it was first seen with. The same fingerprint arriving with a
+    // different user-agent is a strong impersonation / session-reuse signal.
+    const headerUa =
+      (req.headers["user-agent"] as string | undefined)?.trim().toLowerCase() ||
+      undefined;
+    let userAgentMismatch = false;
+    if (headerFp && fingerprintHash && headerUa) {
+      const boundUa = this.fingerprintUaIndex.get(fingerprintHash);
+      if (boundUa === undefined) {
+        this.fingerprintUaIndex.set(fingerprintHash, headerUa);
+      } else if (boundUa !== headerUa) {
+        userAgentMismatch = true;
+      }
+    }
+    if (userAgentMismatch) {
+      reasons.push("user_agent_mismatch");
+    }
+
     // Disposable email detection
-    const email = (req.body as any)?.email as string | undefined;
+    const rawBody = (req as any)?.rawParsedBody;
+    const email = ((rawBody ?? req.body) as any)?.email as string | undefined;
     const emailDomain = email ? email.split("@")[1]?.toLowerCase() : undefined;
     const isDisposable = Boolean(emailDomain && this.disposableList.has(emailDomain));
     if (isDisposable) {
@@ -201,6 +225,8 @@ export class FraudScorer {
       hasHeaderFp: Boolean(headerFp),
       hasStoredFp: Boolean(storedFp),
       fingerprintMismatch,
+      userAgent: headerUa,
+      userAgentMismatch,
       disposableEmail: isDisposable,
       sharedIp,
       sharedFingerprint,

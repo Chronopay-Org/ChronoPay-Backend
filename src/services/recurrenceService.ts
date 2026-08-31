@@ -1,6 +1,9 @@
 // @ts-nocheck
 // rrule is a CJS module; import the default export and destructure for
 // compatibility with Jest's --experimental-vm-modules ESM test environment.
+// Actual interop varies by consumer, so resolve through `.default` when
+// present (`import * as` only exposes `default`/`rrule` under Node's
+// CJS-ESM bridge for rrule 2.8.x).
 import * as rruleLib from "rrule";
 import type { RRule as RRuleType } from "rrule";
 import { AuditLogger, defaultAuditLogger } from "./auditLogger.js";
@@ -9,7 +12,8 @@ import {
   TimezoneResolverService,
   createInMemoryTimezoneResolverDeps,
 } from "./timezoneResolverService.js";
-const { RRule: _RRule, rrulestr } = rruleLib as any as {
+const rruleCjs = (rruleLib as any).default ?? rruleLib;
+const { RRule: _RRule, rrulestr } = rruleCjs as {
   RRule: typeof RRuleType;
   rrulestr: (rruleStr: string, options?: Record<string, unknown>) => RRuleType;
 };

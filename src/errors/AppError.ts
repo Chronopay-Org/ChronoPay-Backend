@@ -12,14 +12,15 @@
  * See `docs/error-codes.md` for the full taxonomy.
  */
 
-import { ERROR_CODES, type ErrorCodeString } from "./errorCodes.js";
 import {
+  ERROR_CODES,
   ERROR_TAXONOMY,
   type ErrorCode,
+  type ErrorCodeString,
   type ErrorType,
   isPublicError,
   type I18nMessageKey,
-} from "./errorTaxonomy.js";
+} from "./errorCodes.js";
 
 export interface AppErrorEnvelope {
   success: false;

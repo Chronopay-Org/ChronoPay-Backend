@@ -23,7 +23,7 @@ describe("Fair Queue Metrics", () => {
       if (authHeader?.startsWith("Bearer user:")) {
         req.auth = { userId: authHeader.split(":")[1] };
       } else if (authHeader?.startsWith("Bearer apikey:")) {
-        req.apiKeyId = authHeader.split(":")[1];
+        (req as any).apiKeyId = authHeader.split(":")[1];
       }
       // ensure we don't skip rate limit in test environment for this route
       (req as any)._skipRateLimit = false;

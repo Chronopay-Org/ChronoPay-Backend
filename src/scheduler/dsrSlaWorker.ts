@@ -131,8 +131,8 @@ export async function runCycle(
         result.errors++;
         result.byThreshold[threshold].errors++;
         logger.error(
+          { err },
           `[dsrSlaWorker] alert dispatch failed dsrId=${dsr.id} threshold=${threshold}d`,
-          err,
         );
       }
     }
@@ -223,7 +223,7 @@ export class DsrSlaWorker {
         );
       }
     } catch (err) {
-      logger.error("[dsrSlaWorker] cycle error", err);
+      logger.error({ err }, "[dsrSlaWorker] cycle error");
     } finally {
       this.schedule();
     }

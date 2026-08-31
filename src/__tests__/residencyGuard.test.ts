@@ -7,6 +7,7 @@ import {
   detectDataRegion,
   deriveWaiverScope,
   WaiverRow,
+  WaiverStore,
 } from "../services/residencyGuard.js";
 import { register } from "../metrics.js";
 
@@ -262,8 +263,8 @@ describe("residency guard", () => {
 
     it("fails closed when waiver lookup throws", async () => {
       // Create a store that throws on findActiveWaivers
-      const failingStore = {
-        findActiveWaivers: jest.fn().mockRejectedValue(new Error("db unavailable")),
+      const failingStore: WaiverStore = {
+        findActiveWaivers: jest.fn<WaiverStore["findActiveWaivers"]>().mockRejectedValue(new Error("db unavailable")),
       };
 
       const guard = createResidencyGuard(failingStore, ["us-east-1"]);

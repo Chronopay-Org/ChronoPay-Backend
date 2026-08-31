@@ -105,7 +105,7 @@ describe("POST /api/v1/booking-intents idempotency", () => {
   };
 
   const url = "/api/v1/booking-intents";
-  const body = { slotId: "slot-100", note: "window seat" };
+  const body = { slotId: "slot-11111111-1111-4111-8111-111111111111", note: "window seat" };
 
   it("replays original response for same key and same body", async () => {
     const redisMock = new InMemoryRedisMock();
@@ -137,8 +137,11 @@ describe("POST /api/v1/booking-intents idempotency", () => {
     expect(stored.status).toBe("completed");
     expect(stored.statusCode).toBe(201);
 
-    // Audit middleware should have been called only for the first (original) request
-    expect(auditSpy).toHaveBeenCalledTimes(1);
+    // Audit events only for the first (original) request, and only for new
+    // intents: the CREATE_BOOKING_INTENT action plus the per-intent fraud_score
+    // event (issue #807). Idempotent replays short-circuit before the audit and
+    // anti-fraud middleware, so they emit nothing.
+    expect(auditSpy).toHaveBeenCalledTimes(2);
   });
 
   it("returns 422 for same key with different payload", async () => {
@@ -156,7 +159,7 @@ describe("POST /api/v1/booking-intents idempotency", () => {
       .set(actorHeaders)
       .set("x-forwarded-for", "127.0.0.1")
       .set("Idempotency-Key", "booking-intent-key-2")
-      .send({ slotId: "slot-100", note: "different payload" });
+      .send({ slotId: "slot-11111111-1111-4111-8111-111111111111", note: "different payload" });
 
     expect(first.status).toBe(201);
     expect(second.status).toBe(422);
@@ -166,8 +169,16 @@ describe("POST /api/v1/booking-intents idempotency", () => {
   it("without idempotency key does normal non-idempotent behavior", async () => {
     setRedisClient(new InMemoryRedisMock());
 
-    const first = await request(app).post(url).set(actorHeaders).set("x-forwarded-for", "127.0.0.1").send(body);
-    const second = await request(app).post(url).set(actorHeaders).set("x-forwarded-for", "127.0.0.1").send(body);
+    const first = await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .send(body);
+    const second = await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .send(body);
 
     expect(first.status).toBe(201);
     // second attempt without key follows regular business rules (duplicate conflict)
