@@ -31,6 +31,13 @@ import { InMemoryBookingIntentRepository } from "../modules/booking-intents/book
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { FraudScorer } from "../services/fraudScorer.js";
+import {
+  FraudReasonCode,
+  getFraudReasonCode,
+  getFraudMessage,
+} from "../services/fraudReasonCodes.js";
+import { QuarantineStore } from "../services/quarantineStore.js";
+import { InMemoryFxRateProvider } from "../services/fxRateProvider.js";
 
 export function createBookingIntentsRouter(
   options: {
@@ -183,6 +190,33 @@ export function createBookingIntentsRouter(
         res.status(200).json({
           success: true,
           intent,
+        });
+      } catch (error) {
+        handleServiceError(error, res);
+      }
+    },
+  );
+
+  router.post(
+    "/:id/no-show",
+    requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    requireAuthenticatedActor(["professional", "admin"]),
+    createAuthAwareRateLimiter(),
+    auditMiddleware("NO_SHOW_BOOKING_INTENT"),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const forfeitRatio =
+          typeof req.body?.forfeitRatio === "number" ? req.body.forfeitRatio : undefined;
+        const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+
+        const result = await bookingIntentService.markNoShow(req.params.id, req.auth!, {
+          reason,
+          forfeitRatio,
+        });
+
+        res.status(200).json({
+          success: true,
+          result,
         });
       } catch (error) {
         handleServiceError(error, res);
