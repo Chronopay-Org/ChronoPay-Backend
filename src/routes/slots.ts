@@ -15,6 +15,11 @@ import { validateBody } from "../middleware/validation.js";
 import { isValidIANATimezone } from "../validation/reminderValidation.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
+import {
+  createSecondaryListing,
+  getSlotRecordById,
+  type SecondaryListingInput,
+} from "../repositories/slotRepository.js";
 
 const router = Router();
 const SLOT_NOT_FOUND = "Slot not found";
@@ -155,6 +160,108 @@ router.get(
       });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error.message });
+    }
+  },
+);
+
+/**
+ * POST /api/v1/slots/:id/listings
+ *
+ * Create a secondary marketplace listing for a slot that has already been
+ * transferred to a buyer. The listing is only valid when the current actor is
+ * the current owner and the supplier previously granted resale consent.
+ */
+router.post(
+  "/:id/listings",
+  parseSlotIdParam,
+  requireAuthenticatedActor(["customer", "admin"]),
+  async (req: Request, res: Response) => {
+    try {
+      const slotId = req.params.id;
+      const actorId = req.auth?.userId;
+
+      if (!actorId) {
+        return res.status(401).json({ success: false, error: "Authentication required." });
+      }
+
+      let slot: any;
+      try {
+        slot = await slotService.findById(slotId);
+      } catch (error) {
+        if (error instanceof SlotNotFoundError) {
+          slot = getSlotRecordById(slotId);
+          if (!slot) {
+            return res.status(404).json({ success: false, error: SLOT_NOT_FOUND });
+          }
+        } else {
+          throw error;
+        }
+      }
+
+      const ownerId = (slot as any)?.ownerId ?? (slot as any)?.buyerId ?? (slot as any)?.professional ?? actorId;
+
+      if (req.auth?.role !== "admin" && ownerId !== actorId) {
+        return res.status(403).json({
+          success: false,
+          error: "Only the current slot owner may create a secondary listing.",
+        });
+      }
+
+      if ((slot as any)?.transferable === false) {
+        return res.status(422).json({
+          success: false,
+          error: "This slot is not eligible for resale because the supplier disallowed secondary listing.",
+        });
+      }
+
+      const body = req.body as Partial<SecondaryListingInput>;
+      const priceFloorCents = Number(body.priceFloorCents);
+      const expiresAt = Number(body.expiresAt);
+      const supplierConsent = body.supplierConsent === true;
+
+      if (!Number.isInteger(priceFloorCents) || priceFloorCents <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "priceFloorCents must be a positive integer",
+        });
+      }
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        return res.status(400).json({
+          success: false,
+          error: "expiresAt must be a future unix timestamp in ms",
+        });
+      }
+      if (!supplierConsent) {
+        return res.status(422).json({
+          success: false,
+          error: "Supplier consent is required before a slot can be listed for resale.",
+        });
+      }
+
+      const listing = await createSecondaryListing(slotId, {
+        priceFloorCents,
+        expiresAt,
+        supplierConsent,
+      }, actorId);
+
+      return res.status(201).json({
+        success: true,
+        listing,
+      });
+    } catch (error: any) {
+      if (error instanceof SlotNotFoundError) {
+        return res.status(404).json({ success: false, error: SLOT_NOT_FOUND });
+      }
+      if (typeof error?.message === "string" && error.message.includes("already exists")) {
+        return res.status(409).json({
+          success: false,
+          error: error.message,
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        error: error?.message || "Unable to create listing",
+      });
     }
   },
 );
