@@ -82,6 +82,12 @@ export interface BookingIntentRecord {
   pricingSnapshot?: PricingSnapshot;
   cancellationPolicySnapshot?: CancellationPolicySnapshot;
   holdFeePolicySnapshot?: HoldFeePolicySnapshot;
+  fxRateSnapshot?: {
+    rate: number;
+    baseCurrency: string;
+    targetCurrency: string;
+    capturedAtMs: number;
+  };
 }
 
 export interface BookingIntentRepository {

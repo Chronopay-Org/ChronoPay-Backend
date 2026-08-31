@@ -38,6 +38,7 @@ import {
   getFraudMessage,
 } from "../services/fraudReasonCodes.js";
 import { QuarantineStore } from "../services/quarantineStore.js";
+import { InMemoryFxRateProvider } from "../services/fxRateProvider.js";
 
 export function createBookingIntentsRouter(
   options: {
