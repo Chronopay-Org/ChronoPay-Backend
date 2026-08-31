@@ -74,12 +74,12 @@ export function startDisputeDeadlineScheduler(
 
       if (result.resolved.length > 0) {
         logger.info(
-          `[dispute-deadline] Resolved ${result.resolved.length} dispute(s):`,
-          result.resolved.map((r) => `${r.disputeId} (${r.fromStatus}→${r.toStatus})`).join(", "),
+          { resolved: result.resolved.map((r) => `${r.disputeId} (${r.fromStatus}→${r.toStatus})`) },
+          `[dispute-deadline] Resolved ${result.resolved.length} dispute(s)`,
         );
       }
     } catch (err) {
-      logger.error("[dispute-deadline] Scan error:", err);
+      logger.error({ err }, "[dispute-deadline] Scan error");
     }
   }, pollIntervalMs);
 

@@ -89,7 +89,7 @@ router.get("/quota", async (req: Request, res: Response) => {
       success: true,
       data: status,
     });
-  } catch (err) {
+  } catch (_err) {
     res.status(500).json({
       success: false,
       error: "Failed to retrieve quota status.",

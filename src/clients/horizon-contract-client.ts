@@ -12,6 +12,13 @@ import { withTimeout } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
 import { validateFeeBumpTransaction } from "./fee-bump-validator.js";
 import { CursorStore, InMemoryCursorStore } from "./cursor-store.js";
+import {
+  computeRateLimitDelay,
+  isRateLimitError,
+  DEFAULT_RATE_LIMIT_RETRY_CONFIG,
+  RateLimitRetryConfig,
+} from "../utils/retry-policy.js";
+import { recordRateLimitRemaining, recordQueueDepth } from "../metrics/horizonMetrics.js";
 
 export interface StellarAsset {
   asset_type: "native" | "credit_alphanum4" | "credit_alphanum12";
@@ -70,7 +77,225 @@ export interface ExecutedPathPaymentQuote {
   quotedAt: number;
 }
 
-// ─── SSE reconnection constants ──────────────────────────────────────────────
+/**
+ * Options for the per-host token-bucket scheduler inside HorizonContractClient.
+ *
+ * The bucket tracks remaining requests in the current Horizon rate-limit
+ * window using the `X-RateLimit-Remaining` / `X-RateLimit-Reset` response
+ * headers.  When the bucket is empty, outgoing requests are queued until the
+ * window resets.
+ */
+export interface TokenBucketOptions {
+  /**
+   * Initial token capacity assumed before the first response headers arrive.
+   * Defaults to 10 to allow the first few requests to go through and prime
+   * the bucket from real header values.
+   */
+  initialCapacity?: number;
+  /**
+   * Maximum number of requests allowed to queue while waiting for the bucket
+   * to refill.  Additional requests beyond this limit are rejected immediately
+   * with a ContractRateLimitError.  Defaults to 200.
+   */
+  maxQueueDepth?: number;
+  /**
+   * Override the per-host 429-backoff configuration used when the server
+   * returns HTTP 429 despite the local bucket having tokens.
+   */
+  rateLimitRetryConfig?: Partial<RateLimitRetryConfig>;
+}
+
+/**
+ * Per-host token-bucket that throttles outgoing Horizon requests based on
+ * rate-limit response headers.
+ *
+ * - Reads `X-RateLimit-Remaining` and `X-RateLimit-Reset` from each response.
+ * - When `remaining` drops to zero, queues new requests in a FIFO promise
+ *   queue and releases them once the reset epoch has passed.
+ * - Emits `horizon_rate_limit_remaining` and `horizon_request_queue_depth`
+ *   gauges on every state change.
+ *
+ * Thread-safety: JavaScript is single-threaded, so no explicit locking is
+ * required.  All mutations occur synchronously between `await` boundaries.
+ */
+export class HorizonTokenBucket {
+  private readonly host: string;
+  private readonly maxQueueDepth: number;
+
+  /** Tokens remaining in the current window (-1 = unknown / not yet seen). */
+  private remaining: number;
+  /** Unix timestamp (ms) at which the window resets.  0 = unknown. */
+  private resetAtMs: number;
+
+  /** FIFO queue of resolve callbacks for requests waiting on a refill. */
+  private readonly queue: Array<() => void> = [];
+
+  /** Whether a drain loop is currently running. */
+  private draining = false;
+
+  constructor(host: string, options: TokenBucketOptions = {}) {
+    this.host = host;
+    this.remaining = options.initialCapacity ?? 10;
+    this.maxQueueDepth = options.maxQueueDepth ?? 200;
+    this.resetAtMs = 0;
+    this.publishMetrics();
+  }
+
+  /**
+   * Acquire a token before sending a request.  If the bucket is empty, the
+   * returned promise resolves once the window has reset.
+   *
+   * @throws ContractRateLimitError when the queue is full.
+   */
+  async acquire(): Promise<void> {
+    // Fast path: tokens are available.
+    if (this.remaining > 0 || this.remaining === -1) {
+      if (this.remaining > 0) {
+        this.remaining -= 1;
+        this.publishMetrics();
+      }
+      return;
+    }
+
+    // Bucket is empty — check whether the reset has already passed.
+    const now = Date.now();
+    if (this.resetAtMs > 0 && now >= this.resetAtMs) {
+      // Window has reset; the next response will give us a fresh count.
+      this.remaining = -1;
+      this.publishMetrics();
+      return;
+    }
+
+    // Queue the request.
+    if (this.queue.length >= this.maxQueueDepth) {
+      throw new ContractRateLimitError(
+        `Horizon rate limit queue for ${this.host} is full (depth=${this.maxQueueDepth})`,
+      );
+    }
+
+    await new Promise<void>((resolve) => {
+      this.queue.push(resolve);
+      this.publishMetrics();
+    });
+  }
+
+  /**
+   * Update the bucket state from a response's rate-limit headers and drain
+   * any queued requests.
+   *
+   * @param remaining  Value of the `X-RateLimit-Remaining` header (NaN = absent).
+   * @param resetEpoch Value of the `X-RateLimit-Reset` header in Unix seconds (NaN = absent).
+   */
+  update(remaining: number, resetEpoch: number): void {
+    if (Number.isFinite(remaining) && remaining >= 0) {
+      this.remaining = remaining;
+    }
+    if (Number.isFinite(resetEpoch) && resetEpoch > 0) {
+      this.resetAtMs = resetEpoch * 1_000;
+    }
+
+    this.publishMetrics();
+    this.drain();
+  }
+
+  /**
+   * Called when a 429 is received.  Drains the queue once the reset time is
+   * reached (or after the supplied retryAfterMs delay).
+   */
+  async backoff(retryAfterMs?: number): Promise<void> {
+    const now = Date.now();
+    const waitMs =
+      retryAfterMs !== undefined && retryAfterMs > 0
+        ? retryAfterMs
+        : this.resetAtMs > now
+          ? this.resetAtMs - now
+          : 1_000; // fallback: wait 1 s
+
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+
+    // After waiting, reset to unknown so the next response re-initialises.
+    this.remaining = -1;
+    this.publishMetrics();
+    this.drain();
+  }
+
+  /** Number of requests currently in the queue. */
+  get queueDepth(): number {
+    return this.queue.length;
+  }
+
+  /** Current remaining-token count (−1 means unknown). */
+  get tokens(): number {
+    return this.remaining;
+  }
+
+  // ─── Private helpers ────────────────────────────────────────────────────────
+
+  private drain(): void {
+    if (this.draining) return;
+    this.draining = true;
+
+    try {
+      while (
+        this.queue.length > 0 &&
+        (this.remaining > 0 || this.remaining === -1)
+      ) {
+        const resolve = this.queue.shift()!;
+        if (this.remaining > 0) {
+          this.remaining -= 1;
+        }
+        resolve();
+      }
+    } finally {
+      this.draining = false;
+      this.publishMetrics();
+    }
+  }
+
+  private publishMetrics(): void {
+    if (this.remaining >= 0) {
+      recordRateLimitRemaining(this.host, this.remaining);
+    }
+    recordQueueDepth(this.host, this.queue.length);
+  }
+}
+
+// ─── Internal bucket registry ─────────────────────────────────────────────────
+
+const _tokenBuckets = new Map<string, HorizonTokenBucket>();
+
+/**
+ * Return the shared token-bucket for a given host URL, creating it on first
+ * access.  Exported for test access.
+ */
+export function getTokenBucketForHost(
+  host: string,
+  options?: TokenBucketOptions,
+): HorizonTokenBucket {
+  if (!_tokenBuckets.has(host)) {
+    _tokenBuckets.set(host, new HorizonTokenBucket(host, options));
+  }
+  return _tokenBuckets.get(host)!;
+}
+
+/**
+ * Replace the bucket for a given host.  Intended for test injection only.
+ * @internal
+ */
+export function _setTokenBucketForHost(host: string, bucket: HorizonTokenBucket): void {
+  _tokenBuckets.set(host, bucket);
+}
+
+/**
+ * Clear all registered token-buckets.  Intended for test isolation only.
+ * @internal
+ */
+export function _clearTokenBuckets(): void {
+  _tokenBuckets.clear();
+}
+
+// ─── HorizonContractClient class ──────────────────────────────────────────────
+
 
 /** Initial backoff delay (ms) before the first reconnect attempt. */
 export const SSE_BACKOFF_BASE_MS = 1_000;
@@ -248,7 +473,60 @@ export interface HorizonTransactionRecord {
   created_at?: string;
   memo?: string;
   memo_type?: string;
+  successful?: boolean;
   [key: string]: unknown;
+}
+
+/**
+ * Ledger headers can be present before the embedded records array (Horizon
+ * uses HAL-style envelopes), so the record's `sequence` is optional at the
+ * type level and validated at runtime by callers.
+ */
+export interface HorizonLedgerCollectionResponse {
+  _embedded: {
+    records: Array<{
+      sequence?: number;
+      [key: string]: unknown;
+    }>;
+  };
+}
+
+/**
+ * On-chain finality view of a single Stellar transaction, as reported by the
+ * `SettlementFinalityProbe` contract used by the SettlementReconciler.
+ *
+ * - `found: false` means Horizon has no record of the transaction (it may
+ *   not have been confirmed yet, or it has vanished on a fork/reorg). This is
+ *   a *business outcome*, not an error — callers must branch on it.
+ * - `successful` is `false` only when the transaction is on-chain but was
+ *   rejected; it is `true` for accepted transactions and `undefined` when the
+ *   field is absent (callers should treat anything other than `true` as a
+ *   failed/uncertain settlement).
+ * - `confirmations` is derived from the latest ledger sequence at query time:
+ *   `max(0, latestLedger - ledger + 1)`.
+ */
+export interface ChainFinalityStatus {
+  found: boolean;
+  txHash: string;
+  successful?: boolean;
+  ledger?: number;
+  latestLedger?: number | null;
+  confirmations: number;
+}
+
+/**
+ * The narrow, testable contract the SettlementReconciler depends on.
+ *
+ * HorizonContractClient implements it; callers only need `getLatestLedgerSequence`
+ * and `getTransactionFinality`, which keeps the worker free of fragile
+ * error-message scraping and lets tests inject a fake probe directly.
+ */
+export interface SettlementFinalityProbe {
+  getLatestLedgerSequence(): Promise<number>;
+  getTransactionFinality(
+    txHash: string,
+    options?: { latestLedger?: number },
+  ): Promise<ChainFinalityStatus>;
 }
 
 /**
@@ -304,12 +582,24 @@ export class HorizonContractClient implements IContractClient {
   private readonly hostManager: HorizonHostManager;
   private readonly networkPassphrase: string;
   private readonly contractService: ContractService;
+  private readonly tokenBucketOptions: TokenBucketOptions;
+  private readonly rateLimitRetryConfig: RateLimitRetryConfig;
 
-  constructor(horizonUrls: string | string[], networkPassphrase: string, contractService: ContractService) {
+  constructor(
+    horizonUrls: string | string[],
+    networkPassphrase: string,
+    contractService: ContractService,
+    tokenBucketOptions: TokenBucketOptions = {},
+  ) {
     const urls = Array.isArray(horizonUrls) ? horizonUrls : horizonUrls.split(',').map(u => u.trim());
     this.hostManager = new HorizonHostManager(urls);
     this.networkPassphrase = networkPassphrase;
     this.contractService = contractService;
+    this.tokenBucketOptions = tokenBucketOptions;
+    this.rateLimitRetryConfig = {
+      ...DEFAULT_RATE_LIMIT_RETRY_CONFIG,
+      ...(tokenBucketOptions.rateLimitRetryConfig ?? {}),
+    };
   }
 
   /**
@@ -331,6 +621,120 @@ export class HorizonContractClient implements IContractClient {
     );
 
     return { data, blockNumber: 0 };
+  }
+
+  /**
+   * Returns the sequence number of the latest ledger on the connected Horizon
+   * network. Part of the {@link SettlementFinalityProbe} contract.
+   *
+   * Uses the retry/circuit-breaker path (`call`) because there is nothing
+   * ambiguous about a missing ledger header — any failure here is transient
+   * and must not bubble up to the polling worker.
+   */
+  async getLatestLedgerSequence(): Promise<number> {
+    const { data } = await this.call<HorizonLedgerCollectionResponse>({
+      address: "",
+      abi: [],
+      method: "getLatestLedger",
+      args: [],
+    });
+
+    const sequence = data?._embedded?.records?.[0]?.sequence;
+    if (typeof sequence !== "number") {
+      throw new ContractInvalidRequestError("Horizon returned no latest ledger sequence");
+    }
+    return sequence;
+  }
+
+  /**
+   * Queries chain finality for a single transaction. Part of the
+   * {@link SettlementFinalityProbe} contract.
+   *
+   * Unlike `call`, this probes Horizon directly so a 404 (transaction missing —
+   * could be a reorg or a not-yet-confirmed payment) is surfaced as
+   * `{ found: false }` instead of being masked into a
+   * `ContractInvalidRequestError` by `mapContractError`. All non-404 HTTP and
+   * network errors are thrown and treated as transient by callers.
+   *
+   * When `latestLedger` is omitted the latest ledger sequence is fetched first.
+   * Callers that already hold the sequence (e.g. a poll loop) should pass it to
+   * avoid an extra round-trip.
+   */
+  async getTransactionFinality(
+    txHash: string,
+    options: { latestLedger?: number } = {},
+  ): Promise<ChainFinalityStatus> {
+    const host = await this.hostManager.getHealthyHost();
+    const latestLedger = options.latestLedger ?? (await this.getLatestLedgerSequence());
+
+    const response = await withTimeout(
+      async (signal) => this.fetchTransactionResponse(host, txHash, signal),
+      timeoutConfig.http.contractMs,
+      "horizon",
+    );
+
+    if (response.status === 404) {
+      return {
+        found: false,
+        txHash,
+        latestLedger,
+        confirmations: 0,
+      };
+    }
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      const err = new HorizonHttpError(response.status, body);
+      this.hostManager.recordError(host, err);
+      throw err;
+    }
+
+    let tx: HorizonTransactionRecord;
+    try {
+      tx = (await response.json()) as HorizonTransactionRecord;
+    } catch {
+      throw new Error("Horizon returned malformed JSON response");
+    }
+
+    const ledger = typeof tx.ledger === "number" ? tx.ledger : undefined;
+    const confirmations =
+      ledger === undefined || latestLedger === null
+        ? 0
+        : Math.max(0, latestLedger - ledger + 1);
+
+    return {
+      found: true,
+      txHash,
+      successful: tx.successful,
+      ledger,
+      latestLedger,
+      confirmations,
+    };
+  }
+
+  /**
+   * Fetches a single transaction from the given host, recording host health.
+   * A 404 is a valid response from a healthy host (the transaction simply is
+   * not known), so it does not count against the host's error rate.
+   */
+  private async fetchTransactionResponse(
+    host: string,
+    txHash: string,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    const url = `${host}/transactions/${encodeURIComponent(txHash)}`;
+    try {
+      const response = await fetch(url, { signal });
+      if (response.ok || response.status === 404) {
+        this.hostManager.recordSuccess(host);
+      } else {
+        this.hostManager.recordError(host, new HorizonHttpError(response.status, ""));
+      }
+      return response;
+    } catch (err) {
+      this.hostManager.recordError(host, err);
+      throw err;
+    }
   }
 
   /**
@@ -782,6 +1186,10 @@ export class HorizonContractClient implements IContractClient {
   }
 
   private async fetchJson<T>(url: string, host: string, init: RequestInit = {}): Promise<T> {
+    // ── Token-bucket acquisition ────────────────────────────────────────────
+    const bucket = getTokenBucketForHost(host, this.tokenBucketOptions);
+    await bucket.acquire();
+
     let response: Response;
     try {
       response = await fetch(url, init);
@@ -793,8 +1201,39 @@ export class HorizonContractClient implements IContractClient {
       throw err;
     }
 
+    // ── Update bucket from response headers ─────────────────────────────────
+    const remainingHeader = response.headers.get("X-RateLimit-Remaining");
+    const resetHeader = response.headers.get("X-RateLimit-Reset");
+    const remaining = remainingHeader !== null ? parseInt(remainingHeader, 10) : NaN;
+    const resetEpoch = resetHeader !== null ? parseInt(resetHeader, 10) : NaN;
+    bucket.update(remaining, resetEpoch);
+
     if (!response.ok) {
       const body = await response.text().catch(() => "");
+
+      if (response.status === 429) {
+        // Parse Retry-After header if present (seconds or HTTP-date).
+        const retryAfterHeader = response.headers.get("Retry-After");
+        let retryAfterMs: number | undefined;
+        if (retryAfterHeader !== null) {
+          const parsed = parseInt(retryAfterHeader, 10);
+          if (Number.isFinite(parsed) && parsed > 0) {
+            retryAfterMs = parsed * 1_000;
+          }
+        } else if (Number.isFinite(resetEpoch) && resetEpoch > 0) {
+          const nowMs = Date.now();
+          const resetMs = resetEpoch * 1_000;
+          retryAfterMs = Math.max(0, resetMs - nowMs);
+        }
+
+        // Schedule a bucket backoff so queued requests are held until the
+        // window resets.  The backoff fires asynchronously so we don't block
+        // the current call returning the error to the caller.
+        bucket.backoff(retryAfterMs).catch(() => {
+          /* Intentionally silent — backoff is best-effort */
+        });
+      }
+
       const err = new HorizonHttpError(response.status, body);
       this.hostManager.recordError(host, err);
       throw err;

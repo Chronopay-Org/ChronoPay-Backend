@@ -7,7 +7,12 @@ import type {
   PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
-import { SchedulingService, BundleNotTransferableError } from "../../services/schedulingService.js";
+import {
+  SchedulingService,
+  BundleNotTransferableError,
+  RecurringBookingRulesEngine,
+  RecurringBookingRulesError,
+} from "../../services/schedulingService.js";
 import { BundleTransferabilityService } from "../../services/bundleTransferabilityService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
@@ -34,6 +39,7 @@ export interface CreateBookingIntentInput {
   basePrice?: number;
   bookingType?: BookingType;
   holdDeadlineMs?: number;
+  buyerCurrency?: import("../../utils/amount.js").SupportedCurrencies;
 }
 
 export interface CreateRecurringBookingInput {
@@ -41,6 +47,7 @@ export interface CreateRecurringBookingInput {
   note?: string;
   bookingType?: BookingType;
   holdDeadlineMs?: number;
+  buyerCurrency?: import("../../utils/amount.js").SupportedCurrencies;
 }
 
 export interface AutoRefundResult {
@@ -91,6 +98,7 @@ export class BookingIntentService {
     private readonly nowMs: () => number = () => Date.now(),
     policyRegistry?: VersionedPolicyRegistry,
     holdFeeRegistry?: HoldFeePolicyRegistry,
+    private readonly fxRateProvider?: import("../../services/fxRateProvider.js").FxRateProvider,
   ) {
     const reg = policyRegistry ?? createDefaultRegistry();
     this.getPolicyRegistrySync = () => reg;
@@ -209,12 +217,27 @@ export class BookingIntentService {
     const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
     const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
+    let fxRateSnapshot: { rate: number; baseCurrency: string; targetCurrency: string; capturedAtMs: number; } | undefined;
+    if (slot.currency && input.buyerCurrency && this.fxRateProvider) {
+      try {
+        const rate = await this.fxRateProvider.getRate(slot.currency, input.buyerCurrency);
+        fxRateSnapshot = {
+          rate,
+          baseCurrency: slot.currency,
+          targetCurrency: input.buyerCurrency,
+          capturedAtMs: this.nowMs(),
+        };
+      } catch (err: any) {
+        throw new BookingIntentError(500, err.message ?? "Failed to fetch FX rate");
+      }
+    }
+
     const bookingType = input.bookingType ?? "standard";
     const status = bookingType === "refundable_hold" ? "hold_placed" : "pending";
     const holdPlacedAt = bookingType === "refundable_hold" ? this.now() : undefined;
     const holdUntilMs = bookingType === "refundable_hold" ? input.holdDeadlineMs : undefined;
 
-    const intent = this.bookingIntentRepository.create({
+    const intent = await this.bookingIntentRepository.create({
       slotId: slot.id,
       professional: slot.professional,
       customerId: actor.userId,
@@ -229,6 +252,7 @@ export class BookingIntentService {
       pricingSnapshot,
       cancellationPolicySnapshot,
       holdFeePolicySnapshot,
+      fxRateSnapshot,
     });
 
     this.schedulingService.reserveSlot(input.slotId);
@@ -260,13 +284,25 @@ export class BookingIntentService {
     input: CreateRecurringBookingInput,
     actor: AuthContext,
   ): Promise<{ successes: BookingIntentRecord[]; failures: { date: string; reason: string }[] }> {
-    const { expandRRule, RecurrenceError } = await import("../../services/recurrenceService.js");
+    const engine = new RecurringBookingRulesEngine({
+      slotRepository: this.slotRepository,
+      bookingIntentRepository: this.bookingIntentRepository,
+      now: this.now,
+      assertBundleTransferable: (slot, act) =>
+        this.bundleTransferabilityService.assertBundleTransferable(slot, act as AuthContext),
+      capturePolicySnapshots: (professionalId) => ({
+        cancellationPolicySnapshot: this.captureCancellationPolicySnapshot(),
+        holdFeePolicySnapshot: this.captureHoldFeePolicySnapshot(professionalId),
+      }),
+    });
 
-    let occurrences: Date[];
     try {
-      occurrences = expandRRule(input.rrule);
+      const report = await engine.createRecurringBookings(input.rrule, actor as never, {
+        note: input.note,
+      });
+      return report;
     } catch (err) {
-      if (err instanceof RecurrenceError) {
+      if (err instanceof RecurringBookingRulesError) {
         throw new BookingIntentError(400, err.message);
       }
       throw err;
@@ -325,6 +361,25 @@ export class BookingIntentService {
       const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
       const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
+      let fxRateSnapshot: { rate: number; baseCurrency: string; targetCurrency: string; capturedAtMs: number; } | undefined;
+      if (slot.currency && input.buyerCurrency && this.fxRateProvider) {
+        try {
+          const rate = await this.fxRateProvider.getRate(slot.currency, input.buyerCurrency);
+          fxRateSnapshot = {
+            rate,
+            baseCurrency: slot.currency,
+            targetCurrency: input.buyerCurrency,
+            capturedAtMs: this.nowMs(),
+          };
+        } catch (err: any) {
+          failures.push({
+            date: occ.toISOString(),
+            reason: err.message ?? "Failed to fetch FX rate",
+          });
+          continue;
+        }
+      }
+
       const intent = await this.bookingIntentRepository.create({
         slotId: slot.id,
         professional: slot.professional,
@@ -336,6 +391,7 @@ export class BookingIntentService {
         createdAt: this.now(),
         cancellationPolicySnapshot,
         holdFeePolicySnapshot,
+        fxRateSnapshot,
       });
 
       // Reserve slot
@@ -532,6 +588,88 @@ export class BookingIntentService {
     return updated;
   }
 
+  async markNoShow(
+    intentId: string,
+    actor: AuthContext,
+    input: { reason?: string; forfeitRatio?: number } = {},
+  ): Promise<{
+    intent: BookingIntentRecord;
+    status: BookingIntentStatus;
+    buyerId: string;
+    supplierId: string;
+    forfeitAmountCents: number;
+    reputationDelta: number;
+    reason: string;
+  }> {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (actor.role !== "admin" && intent.professional !== actor.userId) {
+      throw new BookingIntentError(
+        403,
+        "Only the supplier can mark this booking intent as a no-show.",
+      );
+    }
+
+    if (
+      intent.status !== "confirmed" &&
+      intent.status !== "pending" &&
+      intent.status !== "hold_placed"
+    ) {
+      throw new BookingIntentError(
+        409,
+        `Cannot mark intent with status "${intent.status}" as a no-show.`,
+      );
+    }
+
+    const ratio = input.forfeitRatio ?? 0.2;
+    if (!Number.isFinite(ratio) || ratio <= 0 || ratio > 1) {
+      throw new BookingIntentError(400, "forfeitRatio must be a number between 0 and 1.");
+    }
+
+    const baseAmount = this.resolveIntentPrice(intent);
+    const forfeitAmountCents = Math.round(baseAmount * ratio);
+    const reason = (input.reason ?? "Buyer no-show").trim();
+    const normalizedReason = reason.length > 0 ? reason : "Buyer no-show";
+
+    const updated = this.bookingIntentRepository.update(intentId, {
+      status: "no_show",
+    });
+
+    this.schedulingService.releaseSlot(intent.slotId);
+
+    const scoreBefore = 0;
+    const scoreAfter = -1;
+    await writeReputationScore({
+      supplierId: intent.customerId,
+      actorId: actor.userId,
+      cause: "no_show",
+      causeId: intent.id,
+      scoreBefore,
+      scoreAfter,
+      metadata: {
+        buyerId: intent.customerId,
+        supplierId: intent.professional,
+        bookingIntentId: intent.id,
+        forfeitRatio: ratio,
+        forfeitAmountCents,
+        reason: normalizedReason,
+      },
+    });
+
+    return {
+      intent: updated,
+      status: updated.status,
+      buyerId: intent.customerId,
+      supplierId: intent.professional,
+      forfeitAmountCents,
+      reputationDelta: scoreAfter - scoreBefore,
+      reason: normalizedReason,
+    };
+  }
+
   createIntentTraced(
     input: CreateBookingIntentInput,
     actor: AuthContext,
@@ -552,13 +690,22 @@ export function parseCreateBookingIntentBody(
     throw new BookingIntentError(400, "Booking intent payload must be a JSON object.");
   }
 
-  const { slotId, note, rrule, bookingType, holdDeadlineMs } = body as {
+  const { slotId, note, rrule, bookingType, holdDeadlineMs, buyerCurrency } = body as {
     slotId?: unknown;
     note?: unknown;
     rrule?: unknown;
     bookingType?: unknown;
     holdDeadlineMs?: unknown;
+    buyerCurrency?: unknown;
   };
+
+  let parsedBuyerCurrency: import("../../utils/amount.js").SupportedCurrencies | undefined;
+  if (buyerCurrency !== undefined) {
+    if (typeof buyerCurrency !== "string" || !["USD", "EUR", "GBP", "XLM"].includes(buyerCurrency)) {
+      throw new BookingIntentError(400, "Invalid buyerCurrency. Must be one of USD, EUR, GBP, XLM.");
+    }
+    parsedBuyerCurrency = buyerCurrency as import("../../utils/amount.js").SupportedCurrencies;
+  }
 
   let parsedBookingType: BookingType | undefined;
   if (bookingType !== undefined) {
@@ -583,20 +730,19 @@ export function parseCreateBookingIntentBody(
       throw new BookingIntentError(400, "rrule must be a non-empty string.");
     }
     const normalizedRRule = rrule.trim();
-
-    // Assert error for ambiguous inputs without explicit offset
-    if (normalizedRRule.includes("DTSTART")) {
-      const dtstartMatch = normalizedRRule.match(/DTSTART(?:;[^:]*)?:(.*)(?:\n|$)/);
-      if (dtstartMatch) {
-        const dtstartVal = dtstartMatch[1];
-        const hasZ = dtstartVal.endsWith("Z");
-        const hasTzid = normalizedRRule.includes("TZID=");
-        if (!hasZ && !hasTzid) {
-          throw new BookingIntentError(
-            400,
-            "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)",
-          );
-        }
+    // Assert error for ambiguous inputs without explicit offset. Line-based
+    // parsing is linear (avoids a backtracking regex on attacker-controlled
+    // rrule text).
+    const dtstartLine = normalizedRRule
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("DTSTART"));
+    if (dtstartLine) {
+      const valueStart = dtstartLine.indexOf(":");
+      const dtstartVal = valueStart >= 0 ? dtstartLine.slice(valueStart + 1) : "";
+      const hasZ = dtstartVal.endsWith("Z");
+      const hasTzid = normalizedRRule.includes("TZID=");
+      if (!hasZ && !hasTzid) {
+        throw new BookingIntentError(400, "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)");
       }
     }
 
@@ -619,6 +765,7 @@ export function parseCreateBookingIntentBody(
       note: sanitizedNote,
       bookingType: parsedBookingType,
       holdDeadlineMs: parsedHoldDeadlineMs,
+      buyerCurrency: parsedBuyerCurrency,
     };
   }
 
@@ -650,5 +797,6 @@ export function parseCreateBookingIntentBody(
     note: sanitizedNote,
     bookingType: parsedBookingType,
     holdDeadlineMs: parsedHoldDeadlineMs,
+    buyerCurrency: parsedBuyerCurrency,
   };
 }

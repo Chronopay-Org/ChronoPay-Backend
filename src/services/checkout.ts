@@ -17,7 +17,6 @@ import { defaultAuditLogger } from "./auditLogger.js";
 import { withSpan } from "../tracing/hooks.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
 import { query } from "../db/pool.js";
-import { logger } from "../utils/logger.js";
 
 import {
   HorizonContractClient,

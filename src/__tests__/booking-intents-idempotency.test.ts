@@ -137,8 +137,11 @@ describe("POST /api/v1/booking-intents idempotency", () => {
     expect(stored.status).toBe("completed");
     expect(stored.statusCode).toBe(201);
 
-    // Audit middleware should have been called only for the first (original) request
-    expect(auditSpy).toHaveBeenCalledTimes(1);
+    // Audit events only for the first (original) request, and only for new
+    // intents: the CREATE_BOOKING_INTENT action plus the per-intent fraud_score
+    // event (issue #807). Idempotent replays short-circuit before the audit and
+    // anti-fraud middleware, so they emit nothing.
+    expect(auditSpy).toHaveBeenCalledTimes(2);
   });
 
   it("returns 422 for same key with different payload", async () => {

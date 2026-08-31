@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { HorizonContractClient } from "../clients/horizon-contract-client.js";
+import { type SettlementFinalityProbe } from "../clients/horizon-contract-client.js";
 import { settlementsPendingFinality } from "../metrics.js";
 import { getPayoutQuarantineService } from "./quarantineStore.js";
 import { logger } from "../utils/logger.js";
@@ -82,7 +82,7 @@ export const settlementEvents = new EventEmitter();
 export const refundSettlementEvents = new EventEmitter();
 
 export class SettlementReconciler {
-  private readonly horizonClient: HorizonContractClient;
+  private readonly horizonClient: SettlementFinalityProbe;
   private readonly minConfirmations: number;
   private isRunning: boolean = false;
   private intervalId: NodeJS.Timeout | null = null;
@@ -101,7 +101,7 @@ export class SettlementReconciler {
   private readonly _random: () => number;
 
   constructor(
-    horizonClient: HorizonContractClient,
+    horizonClient: SettlementFinalityProbe,
     options: {
       minConfirmations?: number;
       /**
@@ -205,16 +205,10 @@ export class SettlementReconciler {
     // 2. Fetch the latest ledger sequence number
     let latestLedger: number;
     try {
-      const ledgerResponse = await this.horizonClient.call<any>({
-        address: "",
-        abi: [],
-        method: "getLatestLedger",
-        args: [],
-      });
-      latestLedger = ledgerResponse.data._embedded.records[0].sequence;
+      latestLedger = await this.horizonClient.getLatestLedgerSequence();
     } catch (error: any) {
       logger.warn(
-        { error: error.message },
+        { error: error?.message },
         "SettlementReconciler failed to fetch latest ledger from Horizon. Skipping loop.",
       );
       return;
@@ -248,46 +242,14 @@ export class SettlementReconciler {
       settlement.lastPolledAt = this._now();
 
       try {
-        // Query the specific transaction from Horizon
-        const txResponse = await this.horizonClient.call<any>({
-          address: "",
-          abi: [],
-          method: "getTransaction",
-          args: [settlement.transactionId],
+        // Query chain finality for the settlement transaction
+        const status = await this.horizonClient.getTransactionFinality(settlement.transactionId, {
+          latestLedger,
         });
 
-        const tx = txResponse.data;
-        if (!tx.successful) {
-          // Transaction exists but failed on-chain — mark as failed immediately.
-          settlement.status = "failed";
-          getPayoutQuarantineService().recordFailure({
-            payoutId: settlement.transactionId,
-            errorClass: "SETTLEMENT",
-            errorMessage: "Settlement transaction was rejected by the network",
-            threshold: Number(process.env.PAYOUT_QUARANTINE_THRESHOLD ?? 3),
-          });
-          _settlements.set(settlement.transactionId, settlement);
-          continue;
-        }
-
-        const txLedger = tx.ledger;
-        const confirmations = latestLedger - txLedger + 1;
-
-        settlement.ledgerNumber = txLedger;
-        settlement.confirmations = confirmations >= 0 ? confirmations : 0;
-
-        if (settlement.confirmations >= this.minConfirmations) {
-          settlement.status = "payout_ready";
-        }
-
-        _settlements.set(settlement.transactionId, settlement);
-      } catch (error: any) {
-        const isNotFound =
-          error.statusCode === 404 ||
-          error.message.includes("404") ||
-          error.message.includes("not found");
-
-        if (isNotFound) {
+        if (!status.found) {
+          // Horizon has no record of the transaction — either it has not been
+          // confirmed yet (pending finality) or it has vanished on a fork.
           if (settlement.status === "payout_ready") {
             // CRITICAL: transaction previously payout_ready has disappeared — fork/reorg.
             settlement.status = "reorg_flagged";
@@ -359,12 +321,36 @@ export class SettlementReconciler {
 
             _settlements.set(settlement.transactionId, settlement);
           }
-        } else {
-          logger.warn(
-            { transactionId: settlement.transactionId, error: error.message },
-            "Transient error querying transaction from Horizon. Retrying next loop.",
-          );
+          continue;
         }
+
+        if (status.successful !== true) {
+          // Transaction exists but failed on-chain (or its success status is
+          // unknown) — mark as failed immediately.
+          settlement.status = "failed";
+          getPayoutQuarantineService().recordFailure({
+            payoutId: settlement.transactionId,
+            errorClass: "SETTLEMENT",
+            errorMessage: "Settlement transaction was rejected by the network",
+            threshold: Number(process.env.PAYOUT_QUARANTINE_THRESHOLD ?? 3),
+          });
+          _settlements.set(settlement.transactionId, settlement);
+          continue;
+        }
+
+        settlement.ledgerNumber = status.ledger;
+        settlement.confirmations = status.confirmations;
+
+        if (settlement.confirmations >= this.minConfirmations) {
+          settlement.status = "payout_ready";
+        }
+
+        _settlements.set(settlement.transactionId, settlement);
+      } catch (error: any) {
+        logger.warn(
+          { transactionId: settlement.transactionId, error: error?.message },
+          "Transient error querying transaction from Horizon. Retrying next loop.",
+        );
       }
     }
 
@@ -480,16 +466,10 @@ export class SettlementReconciler {
 
     let latestLedger: number;
     try {
-      const ledgerResponse = await this.horizonClient.call<any>({
-        address: "",
-        abi: [],
-        method: "getLatestLedger",
-        args: [],
-      });
-      latestLedger = ledgerResponse.data._embedded.records[0].sequence;
+      latestLedger = await this.horizonClient.getLatestLedgerSequence();
     } catch (error: any) {
       logger.warn(
-        { error: error.message },
+        { error: error?.message },
         "SettlementReconciler.refunds failed to fetch latest ledger. Skipping loop.",
       );
       return;
@@ -502,14 +482,22 @@ export class SettlementReconciler {
       record.lastPolledAt = Date.now();
 
       try {
-        const txResponse = await this.horizonClient.call<any>({
-          address: "",
-          abi: [],
-          method: "getTransaction",
-          args: [txHash],
+        const status = await this.horizonClient.getTransactionFinality(txHash, {
+          latestLedger,
         });
-        const tx = txResponse.data;
-        if (!tx.successful) {
+
+        if (!status.found) {
+          if (record.status === "settled") {
+            logger.fatal(
+              { refundRequestId: record.refundRequestId },
+              "CRITICAL: Settled refund chain tx disappeared (reorg). Escalate immediately.",
+            );
+            refundSettlementEvents.emit("refund.reorg", { record });
+          }
+          continue;
+        }
+
+        if (status.successful !== true) {
           record.status = "failed";
           record.failedAt = Date.now();
           record.failureReason = "Refund chain transaction rejected";
@@ -518,8 +506,7 @@ export class SettlementReconciler {
           continue;
         }
 
-        const txLedger = tx.ledger;
-        const confirmations = Math.max(0, latestLedger - txLedger + 1);
+        const confirmations = status.confirmations;
         record.confirmations = confirmations;
 
         if (record.status === "submitted") record.status = "pending_finality";
@@ -532,17 +519,10 @@ export class SettlementReconciler {
 
         _refundSettlements.set(record.refundRequestId, record);
       } catch (error: any) {
-        const isNotFound =
-          error.statusCode === 404 ||
-          error.message?.includes("404") ||
-          error.message?.includes("not found");
-        if (isNotFound && record.status === "settled") {
-          logger.fatal(
-            { refundRequestId: record.refundRequestId },
-            "CRITICAL: Settled refund chain tx disappeared (reorg). Escalate immediately.",
-          );
-          refundSettlementEvents.emit("refund.reorg", { record });
-        }
+        logger.warn(
+          { refundRequestId: record.refundRequestId, error: error?.message },
+          "Transient error querying refund transaction from Horizon. Retrying next loop.",
+        );
       }
     }
   }
@@ -583,4 +563,29 @@ export class SettlementReconciler {
       treasuryForfeitsTaxCents,
     };
   }
+}
+
+export interface StartSettlementReconcilerOptions {
+  horizonClient: SettlementFinalityProbe;
+  minConfirmations?: number;
+  pollIntervalMs?: number;
+  defaultProviderRetryConfig?: ProviderRetryConfig;
+  /** @internal test-only clock override */
+  _now?: () => number;
+  /** @internal test-only random override */
+  _random?: () => number;
+}
+
+/**
+ * Boot helper for the production worker — builds a SettlementReconciler from an
+ * already-constructed {@link SettlementFinalityProbe} and immediately starts
+ * its poll loop. Kept separate from the class so unit tests can start/stop
+ * workers with a fake probe and so `src/index.ts` wiring stays thin.
+ */
+export function startSettlementReconciler(
+  options: StartSettlementReconcilerOptions,
+): SettlementReconciler {
+  const reconciler = new SettlementReconciler(options.horizonClient, options);
+  reconciler.start();
+  return reconciler;
 }
