@@ -42,6 +42,7 @@ describe("BookingIntentService", () => {
       mockSlotRepo.findById.mockReturnValue(slot);
       mockRepo.findBySlotIdAndCustomer.mockReturnValue(undefined);
       mockRepo.findBySlotId.mockReturnValue(undefined);
+      // @ts-expect-error - Auto-fixed by script
       mockRepo.create.mockResolvedValue({
         id: "intent-1",
         slotId: slot.id,
@@ -100,6 +101,29 @@ describe("BookingIntentService", () => {
       await expect(service.createIntent(input, actor)).rejects.toThrow(
         new BookingIntentError(409, "Selected slot already has an active booking intent."),
       );
+    });
+
+    it("captures fxRateSnapshot when slot has currency and buyerCurrency is provided", async () => {
+      const mockFxProvider = { getRate: jest.fn().mockResolvedValue(1.5) } as any;
+      const serviceWithFx = new BookingIntentService(mockRepo, mockSlotRepo, () => "2026-01-01T00:00:00.000Z", () => 1234567890, undefined, undefined, mockFxProvider);
+      
+      const slotWithCurrency = { ...slot, currency: "USD" as any, amount_minor: 1000 };
+      mockSlotRepo.findById.mockReturnValue(slotWithCurrency);
+      mockRepo.findBySlotIdAndCustomer.mockReturnValue(undefined);
+      mockRepo.findBySlotId.mockReturnValue(undefined);
+      mockRepo.create.mockResolvedValue({ id: "intent-1" } as any);
+
+      await serviceWithFx.createIntent({ ...input, buyerCurrency: "EUR" as any }, actor);
+
+      expect(mockFxProvider.getRate).toHaveBeenCalledWith("USD", "EUR");
+      expect(mockRepo.create).toHaveBeenCalledWith(expect.objectContaining({
+        fxRateSnapshot: {
+          rate: 1.5,
+          baseCurrency: "USD",
+          targetCurrency: "EUR",
+          capturedAtMs: 1234567890
+        }
+      }));
     });
   });
 });

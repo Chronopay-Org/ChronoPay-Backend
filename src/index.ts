@@ -87,6 +87,49 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
 // Polls the outbox_events table for un-acked events, publishes them via the
 // configured callback, and marks them as acknowledged.  Guarantees at-least-once
 // delivery.  Set OUTBOX_RELAY_DISABLED=true to skip.
+// ─── Subscription Slot Generator Worker ────────────────────────────────────
+// Idempotent background worker that auto-mints recurring slots for active
+// subscriptions. Set SUBSCRIPTION_SLOT_GENERATOR_DISABLED=true to skip.
+(async () => {
+  if (process.env.SUBSCRIPTION_SLOT_GENERATOR_DISABLED === "true") {
+    logger.info("subscription-slot-generator disabled via SUBSCRIPTION_SLOT_GENERATOR_DISABLED");
+    return;
+  }
+
+  const { createSubscriptionSlotGenerator } = await import(
+    "./scheduler/subscriptionSlotGenerator.js"
+  );
+  const { SubscriptionService } = await import("./services/subscriptionService.js");
+
+  // In production, use SQL-backed repositories; here we use in-memory for the
+  // standalone worker. The app.ts routes use their own repository instances.
+  const { InMemorySubscriptionProductRepository } = await import(
+    "./modules/subscriptions/subscription-product-repository.js"
+  );
+  const { InMemorySubscriptionRepository } = await import(
+    "./modules/subscriptions/subscription-repository.js"
+  );
+  const { InMemorySlotRepository } = await import(
+    "./modules/slots/slot-repository.js"
+  );
+
+  const productRepo = new InMemorySubscriptionProductRepository();
+  const subscriptionRepo = new InMemorySubscriptionRepository();
+  const slotRepo = new InMemorySlotRepository();
+  const service = new SubscriptionService(productRepo, subscriptionRepo, slotRepo);
+
+  const controller = new AbortController();
+  _shutdownHooks.push(() => controller.abort());
+
+  const generator = createSubscriptionSlotGenerator(service, {
+    intervalMs: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_INTERVAL_MS) || undefined,
+    batchSize: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_BATCH_SIZE) || undefined,
+  });
+
+  generator.start();
+  logger.info("subscription-slot-generator worker started");
+})();
+
 const _shutdownHooks: Array<() => void> = [];
 (async () => {
   if (process.env.OUTBOX_RELAY_DISABLED === "true") {
@@ -98,7 +141,6 @@ const _shutdownHooks: Array<() => void> = [];
     "./services/outboxRelay.js"
   );
   const { getPool } = await import("./db/connection.js");
-  const { logger } = await import("./utils/logger.js");
 
   const pool = getPool();
   const store = new SqlOutboxStore(pool);
@@ -120,6 +162,41 @@ const _shutdownHooks: Array<() => void> = [];
   });
 
   logger.info("outbox-relay worker started");
+})();
+
+// ─── Settlement Finality Reconciler (#804) ─────────────────────────────────
+// Polls Horizon to verify on-chain finality for provider settlements before
+// any payout is marked ready, and flags forks/reorgs. Enabled when Horizon
+// URLs are configured; set SETTLEMENT_RECONCILER_DISABLED=true to skip.
+(async () => {
+  if (process.env.SETTLEMENT_RECONCILER_DISABLED === "true") {
+    logger.info("settlement-reconciler disabled via SETTLEMENT_RECONCILER_DISABLED");
+    return;
+  }
+  if (!config.horizonUrls || config.horizonUrls.length === 0) {
+    logger.info("settlement-reconciler skipped: no HORIZON_URLS configured");
+    return;
+  }
+
+  const { ContractService } = await import("./services/contract.service.js");
+  const { HorizonContractClient } = await import("./clients/horizon-contract-client.js");
+  const { startSettlementReconciler } = await import("./services/settlementReconciler.js");
+
+  const contractService = new ContractService();
+  const horizonClient = new HorizonContractClient(
+    config.horizonUrls,
+    config.networkPassphrase ?? "Test SDF Network ; September 2015",
+    contractService,
+  );
+
+  const reconciler = startSettlementReconciler({
+    horizonClient,
+    pollIntervalMs: Number(process.env.SETTLEMENT_RECONCILER_POLL_INTERVAL_MS) || undefined,
+    minConfirmations: Number(process.env.MIN_LEDGER_CONFIRMATIONS) || undefined,
+  });
+  _shutdownHooks.push(() => reconciler.stop());
+
+  logger.info("settlement-reconciler started");
 })();
 
 const PORT = config.port || 3001;

@@ -48,6 +48,49 @@ function readRolesConfig(): RolesConfig {
   return JSON.parse(raw) as RolesConfig;
 }
 
+/**
+ * Wraps a Set in a proxy that throws on mutation, giving a real runtime
+ * immutability guarantee (Object.freeze does not block Set#add).
+ */
+function immutableSet<T>(values: Iterable<T>): ReadonlySet<T> {
+  const set = new Set<T>(values);
+  return new Proxy(set, {
+    get(target, prop, _receiver) {
+      if (prop === "add" || prop === "delete" || prop === "clear") {
+        return () => {
+          throw new TypeError("RBAC hierarchy is immutable after startup");
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as ReadonlySet<T>;
+}
+
+/**
+ * Wraps a Map in a proxy that throws on mutation and makes every value an
+ * immutable set, so the resolved role hierarchy cannot be altered at runtime.
+ */
+function immutableHierarchyMap<K, V>(
+  entries: Iterable<readonly [K, V]>,
+): ReadonlyMap<K, ReadonlySet<V>> {
+  const map = new Map<K, ReadonlySet<V>>();
+  for (const [key, value] of entries) {
+    map.set(key, immutableSet(value as Iterable<V>));
+  }
+  return new Proxy(map, {
+    get(target, prop, _receiver) {
+      if (prop === "set" || prop === "delete" || prop === "clear") {
+        return () => {
+          throw new TypeError("RBAC hierarchy is immutable after startup");
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as ReadonlyMap<K, ReadonlySet<V>>;
+}
+
 export function buildRoleHierarchy(config: RolesConfig): RoleHierarchy {
   if (!config || typeof config !== "object" || !config.roles || typeof config.roles !== "object") {
     throw new Error("roles.json must define a roles object");
@@ -86,7 +129,9 @@ export function buildRoleHierarchy(config: RolesConfig): RoleHierarchy {
     }
 
     if (visiting.has(role)) {
-      throw new Error(`roles.json contains a cyclic role definition: ${[...path, role].join(" -> ")}`);
+      throw new Error(
+        `roles.json contains a cyclic role definition: ${[...path, role].join(" -> ")}`,
+      );
     }
 
     visiting.add(role);
@@ -110,9 +155,12 @@ export function buildRoleHierarchy(config: RolesConfig): RoleHierarchy {
     }
   }
 
+  // Wrap the resolved structure in immutable proxies so concurrent readers can
+  // never mutate the shared hierarchy after startup (data integrity under
+  // concurrent requests).
   return {
-    roles: new Set(directImplications.keys()),
-    effectiveRolesByRole,
+    roles: immutableSet(directImplications.keys()),
+    effectiveRolesByRole: immutableHierarchyMap(effectiveRolesByRole),
   };
 }
 
@@ -138,13 +186,15 @@ function emitRbacAudit(
 ): void {
   // Never log raw header values. Roles are normalized and accepted only after
   // they are found in roles.json, which keeps audit metadata bounded.
-  defaultAuditLogger.log({
-    action: code,
-    actorIp: req.ip || req.socket?.remoteAddress,
-    resource: req.originalUrl,
-    status,
-    metadata: { method: req.method, ...extra },
-  }).catch(() => {});
+  defaultAuditLogger
+    .log({
+      action: code,
+      actorIp: req.ip || req.socket?.remoteAddress,
+      resource: req.originalUrl,
+      status,
+      metadata: { method: req.method, ...extra },
+    })
+    .catch(() => {});
 }
 
 export function auditRoleDenied(
@@ -157,7 +207,9 @@ export function auditRoleDenied(
 }
 
 export function requireRole(requiredRoles: UserRole | UserRole[]) {
-  const requiredRoleSet = new Set(normalizeRoleList(Array.isArray(requiredRoles) ? requiredRoles : [requiredRoles]));
+  const requiredRoleSet = new Set(
+    normalizeRoleList(Array.isArray(requiredRoles) ? requiredRoles : [requiredRoles]),
+  );
 
   if (requiredRoleSet.size === 0) {
     throw new Error("requireRole must declare at least one required role");
@@ -187,11 +239,7 @@ export function requireRole(requiredRoles: UserRole | UserRole[]) {
 
       if (!isKnownRole(parsedRole)) {
         emitRbacAudit(req, "RBAC_INVALID_ROLE", 400);
-        return sendErrorResponse(
-          res,
-          new BadRequestError("Invalid user role"),
-          req,
-        );
+        return sendErrorResponse(res, new BadRequestError("Invalid user role"), req);
       }
 
       const authorized = [...requiredRoleSet].some((requiredRole) =>
@@ -205,21 +253,14 @@ export function requireRole(requiredRoles: UserRole | UserRole[]) {
         });
         return sendErrorResponse(
           res,
-          new ForbiddenError(
-            "Insufficient permissions",
-            ERROR_CODES.INSUFFICIENT_PERMISSIONS.code,
-          ),
+          new ForbiddenError("Insufficient permissions", ERROR_CODES.INSUFFICIENT_PERMISSIONS.code),
           req,
         );
       }
 
       return next();
     } catch {
-      return sendErrorResponse(
-        res,
-        new InternalServerError("Authorization middleware error"),
-        req,
-      );
+      return sendErrorResponse(res, new InternalServerError("Authorization middleware error"), req);
     }
   };
 }
@@ -231,7 +272,7 @@ export const roles = Object.fromEntries(
 /**
  * Middleware factory that requires a specific permission
  * Uses the fine-grained permission catalog with wildcard grant evaluation
- * 
+ *
  * @param requiredPermission - The permission required to access the resource
  * @returns Express middleware function
  */
@@ -264,23 +305,22 @@ export function requirePermission(requiredPermission: Permission) {
 
       if (!isKnownRole(parsedRole)) {
         emitRbacAudit(req, "RBAC_INVALID_ROLE", 400);
-        return sendErrorResponse(
-          res,
-          new BadRequestError("Invalid user role"),
-          req,
-        );
+        return sendErrorResponse(res, new BadRequestError("Invalid user role"), req);
       }
 
       const granted = hasPermission(permissionCatalog, parsedRole, normalizedPermission);
 
-      // Audit the permission check
-      await auditPermissionCheck(
+      // Audit the permission check. Audit backend failures must never change
+      // the authorization outcome, so the write is fire-and-forget: the deny
+      // audit below is emitted through emitRbacAudit which already swallows
+      // failures.
+      auditPermissionCheck(
         parsedRole,
         normalizedPermission,
         granted,
         req.ip || req.socket?.remoteAddress,
         req.originalUrl,
-      );
+      ).catch(() => {});
 
       if (!granted) {
         emitRbacAudit(req, "RBAC_FORBIDDEN", 403, {
@@ -289,21 +329,14 @@ export function requirePermission(requiredPermission: Permission) {
         });
         return sendErrorResponse(
           res,
-          new ForbiddenError(
-            "Insufficient permissions",
-            ERROR_CODES.INSUFFICIENT_PERMISSIONS.code,
-          ),
+          new ForbiddenError("Insufficient permissions", ERROR_CODES.INSUFFICIENT_PERMISSIONS.code),
           req,
         );
       }
 
       return next();
     } catch (_error) {
-      return sendErrorResponse(
-        res,
-        new InternalServerError("Authorization middleware error"),
-        req,
-      );
+      return sendErrorResponse(res, new InternalServerError("Authorization middleware error"), req);
     }
   };
 }
@@ -311,7 +344,7 @@ export function requirePermission(requiredPermission: Permission) {
 /**
  * Gets all effective permissions for the current user's role
  * Useful for returning capability information to clients
- * 
+ *
  * @param role - The user role
  * @returns Set of all permissions the role has access to
  */

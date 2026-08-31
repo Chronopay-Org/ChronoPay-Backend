@@ -6,6 +6,8 @@ import {
   InMemoryBookingIntentRepository,
 } from "../../modules/booking-intents/booking-intent-repository.js";
 import { AppError } from "../../errors/AppError.js";
+import { Keypair, Networks, Transaction } from "@stellar/stellar-sdk";
+import crypto from "crypto";
 
 describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
   let service: TokenService;
@@ -44,8 +46,7 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockContractService.sendTransaction.mockImplementation(async (desc, action) => {
       return await action();
     });
-    // @ts-expect-error - Auto-fixed by script
-    mockRepo.updateTokenInfo.mockResolvedValue(undefined);
+    (mockRepo.updateTokenInfo as jest.MockedFunction<NonNullable<BookingIntentRepository["updateTokenInfo"]>>).mockImplementation(async () => {});
 
     const result = await service.mintTimeToken(intentId, {
       buyerPublicKey: "G_BUYER_456",
@@ -84,7 +85,7 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockContractService.sendTransaction.mockImplementation(async (desc, action) => {
       return await action();
     });
-    mockRepo.updateTokenInfo.mockResolvedValue(undefined);
+    (mockRepo.updateTokenInfo as jest.MockedFunction<NonNullable<BookingIntentRepository["updateTokenInfo"]>>).mockImplementation(async () => {});
 
     const result = await service.mintTimeToken(intentId, {
       buyerPublicKey: "G_BUYER_456",
@@ -110,7 +111,7 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     mockContractService.sendTransaction.mockImplementation(async (desc, action) => {
       return await action();
     });
-    mockRepo.updateTokenInfo.mockResolvedValue(undefined);
+    (mockRepo.updateTokenInfo as jest.MockedFunction<NonNullable<BookingIntentRepository["updateTokenInfo"]>>).mockImplementation(async () => {});
 
     const result = await service.mintTimeToken(intentId, {
       buyerPublicKey: "G_BUYER_456",
@@ -193,6 +194,34 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
     await expect(service.mintTimeToken("unknown")).rejects.toThrow(
       new AppError("Booking intent not found", 404, "INTENT_NOT_FOUND"),
     );
+  });
+
+  describe("buildMintEnvelope", () => {
+    it("builds a correct Stellar transaction envelope for minting", () => {
+      const signer = Keypair.random();
+      const sourceAccount = signer.publicKey();
+      
+      const envelopeXdr = service.buildMintEnvelope(
+        intentId,
+        sourceAccount,
+        "1000",
+        "100",
+        signer,
+        Networks.TESTNET
+      );
+
+      // Decode the envelope
+      const tx = new Transaction(envelopeXdr, Networks.TESTNET);
+      expect(tx.source).toBe(sourceAccount);
+      expect(tx.sequence).toBe("1000");
+      expect(tx.fee).toBe("100");
+      expect(tx.signatures.length).toBe(1);
+
+      // Memo check (hash uniqueness)
+      const expectedHash = crypto.createHash("sha256").update(intentId).digest();
+      expect(tx.memo.type).toBe("hash");
+      expect(tx.memo.value).toEqual(expectedHash);
+    });
   });
 });
 

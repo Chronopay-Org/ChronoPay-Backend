@@ -36,6 +36,8 @@ export function getFraudReasonCode(internalReason: string): FraudReasonCode {
       return FraudReasonCode.RATE_LIMIT_EXCEEDED;
     case "fingerprint_mismatch":
       return FraudReasonCode.DEVICE_UNRECOGNIZED;
+    case "user_agent_mismatch":
+      return FraudReasonCode.DEVICE_UNRECOGNIZED;
     case "disposable_email":
       return FraudReasonCode.INVALID_CONTACT_INFO;
     default:
