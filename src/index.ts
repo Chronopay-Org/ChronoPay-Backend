@@ -87,6 +87,49 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
 // Polls the outbox_events table for un-acked events, publishes them via the
 // configured callback, and marks them as acknowledged.  Guarantees at-least-once
 // delivery.  Set OUTBOX_RELAY_DISABLED=true to skip.
+// ─── Subscription Slot Generator Worker ────────────────────────────────────
+// Idempotent background worker that auto-mints recurring slots for active
+// subscriptions. Set SUBSCRIPTION_SLOT_GENERATOR_DISABLED=true to skip.
+(async () => {
+  if (process.env.SUBSCRIPTION_SLOT_GENERATOR_DISABLED === "true") {
+    logger.info("subscription-slot-generator disabled via SUBSCRIPTION_SLOT_GENERATOR_DISABLED");
+    return;
+  }
+
+  const { createSubscriptionSlotGenerator } = await import(
+    "./scheduler/subscriptionSlotGenerator.js"
+  );
+  const { SubscriptionService } = await import("./services/subscriptionService.js");
+
+  // In production, use SQL-backed repositories; here we use in-memory for the
+  // standalone worker. The app.ts routes use their own repository instances.
+  const { InMemorySubscriptionProductRepository } = await import(
+    "./modules/subscriptions/subscription-product-repository.js"
+  );
+  const { InMemorySubscriptionRepository } = await import(
+    "./modules/subscriptions/subscription-repository.js"
+  );
+  const { InMemorySlotRepository } = await import(
+    "./modules/slots/slot-repository.js"
+  );
+
+  const productRepo = new InMemorySubscriptionProductRepository();
+  const subscriptionRepo = new InMemorySubscriptionRepository();
+  const slotRepo = new InMemorySlotRepository();
+  const service = new SubscriptionService(productRepo, subscriptionRepo, slotRepo);
+
+  const controller = new AbortController();
+  _shutdownHooks.push(() => controller.abort());
+
+  const generator = createSubscriptionSlotGenerator(service, {
+    intervalMs: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_INTERVAL_MS) || undefined,
+    batchSize: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_BATCH_SIZE) || undefined,
+  });
+
+  generator.start();
+  logger.info("subscription-slot-generator worker started");
+})();
+
 const _shutdownHooks: Array<() => void> = [];
 (async () => {
   if (process.env.OUTBOX_RELAY_DISABLED === "true") {

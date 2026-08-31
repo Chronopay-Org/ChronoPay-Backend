@@ -4,6 +4,7 @@ import {
   HorizonHttpError,
   HorizonInsufficientBalanceError,
   computeMinBalance,
+  _clearTokenBuckets,
 } from "../../clients/horizon-contract-client.js";
 import { ContractService } from "../../services/contract.service.js";
 import { RetryPolicy } from "../../utils/retry-policy.js";
@@ -51,6 +52,7 @@ function mockOk(body: unknown) {
   // @ts-expect-error - Auto-fixed by script
   mockFetch.mockResolvedValueOnce({
     ok: true,
+    headers: { get: () => null },
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as Response);
@@ -61,6 +63,7 @@ function mockHttpError(status: number, body = "") {
   mockFetch.mockResolvedValueOnce({
     ok: false,
     status,
+    headers: { get: () => null },
     text: async () => body,
   } as unknown as Response);
 }
@@ -74,6 +77,7 @@ function mockMalformedJson() {
   // @ts-expect-error - Auto-fixed by script
   mockFetch.mockResolvedValueOnce({
     ok: true,
+    headers: { get: () => null },
     json: async () => {
       throw new SyntaxError("Unexpected token");
     },
@@ -83,6 +87,7 @@ function mockMalformedJson() {
 
 beforeEach(() => {
   mockFetch.mockReset();
+  _clearTokenBuckets();
 });
 
 // ─── HorizonHttpError ─────────────────────────────────────────────────────────
