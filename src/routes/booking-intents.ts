@@ -16,6 +16,7 @@ import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import { validateBody } from "../middleware/validation.js";
+import { antiFraudScoring, captureRequestBody } from "../middleware/fraudScoring.js";
 import {
   CreateBookingIntentBodySchema,
   type CreateBookingIntentBody,
@@ -29,8 +30,6 @@ import { isAppError } from "../errors/AppError.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
-import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
-import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
 import { FraudScorer } from "../services/fraudScorer.js";
 import {
   FraudReasonCode,
@@ -86,62 +85,21 @@ export function createBookingIntentsRouter(
     "/",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "admin"]),
+    // Preserve the pre-validation body so the fraud wall (below) can still see
+    // client-supplied fields the body schema strips (e.g. email) without
+    // expanding the public request contract.
+    captureRequestBody,
     validateBody(CreateBookingIntentBodySchema),
     idempotencyMiddleware,
     createAuthAwareRateLimiter(),
     auditMiddleware("CREATE_BOOKING_INTENT"),
+    // Screens every new intent (idempotent replays short-circuit before this).
+    // Runs after the audit middleware so blocked requests are still audited;
+    // blocks or steps up via challenge/quarantine on high scores.
+    antiFraudScoring({ scorer: fraudScorer }),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const input = req.body as CreateBookingIntentBody;
-        const intentReference = input.slotId ?? input.rrule ?? "temp-intent-id";
-        const fraudResult = fraudScorer.evaluate(intentReference, req);
-        const threshold = fraudScorer.getThreshold();
-        // Feed the live score into the fraud drift detector. The metrics
-        // module is import-side-effect-free so a missing baseline is a no-op
-        // rather than a request blocker. `FRAUD_MODEL_VERSION` threads the
-        // histogram label through the deployment env (e.g. "2025-q1-r3").
-        recordFraudScore(`v${process.env.FRAUD_MODEL_VERSION || "default"}`, fraudResult.score);
-
-        // Medium risk -> HITL review queue
-        if (fraudResult.score === threshold - 1 && fraudResult.score > 0) {
-          fraudReviewQueue.enqueue("temp-intent-id", fraudResult.score, fraudResult.reasons);
-        }
-
-        if (fraudResult.score >= threshold) {
-          const locale = req.headers["accept-language"]?.split(",")[0].split("-")[0] || "en";
-
-          const publicCodes = Array.from(
-            new Set(fraudResult.reasons.map((r: string) => getFraudReasonCode(r))),
-          );
-          if (publicCodes.length === 0) publicCodes.push(FraudReasonCode.UNKNOWN_RISK);
-
-          const errorPayload = {
-            success: false,
-            error: "Booking intent blocked due to security policies.",
-            reasonCodes: publicCodes,
-            messages: publicCodes.map((code) => getFraudMessage(code, locale)),
-          };
-
-          if (fraudScorer.getStepUpMode() === "challenge") {
-            const challengeToken = crypto.randomUUID();
-            return res.status(403).json({
-              ...errorPayload,
-              challengeRequired: true,
-              challengeToken,
-            });
-          } else {
-            const store = new QuarantineStore();
-            const quarantineId = store.add({
-              input,
-              actorId: req.auth?.userId,
-              fraudResult,
-            });
-            return res.status(403).json({
-              ...errorPayload,
-              quarantineId,
-            });
-          }
-        }
         if (input.rrule !== undefined) {
           const report = await bookingIntentService.createRecurringIntents(input, req.auth!);
           res.status(201).json({
