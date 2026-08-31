@@ -62,6 +62,7 @@ import redactionPolicyRouter from "./routes/redactionPolicy.js";
 import { gdprExportRouter } from "./routes/gdprExport.js";
 import reputationRouter from "./routes/reputation.js";
 import partnerQuotaRouter from "./routes/partnerQuota.js";
+import subscriptionRouter from "./routes/subscriptions.js";
 import { requireAdminToken } from "./middleware/authorization.js";
 import { listReputationEvents } from "./services/reputationWriteAudit.js";
 import {
@@ -609,6 +610,9 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3d-i. Partner Quota Dashboard
   app.use("/api/v1/partner", partnerQuotaRouter);
+
+  // 3d-ii. Subscription Products & Subscriptions
+  app.use("/api/v1/subscriptions", subscriptionRouter);
 
   // 4. Booking Intents Routes
   app.use("/api/v1/booking-intents", createBookingIntentsRouter());
