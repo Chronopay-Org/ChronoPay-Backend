@@ -46,7 +46,7 @@ describe("outbox relay worker", () => {
 
   beforeEach(() => {
     store = new InMemoryOutboxStore();
-    publishMock = jest.fn<Promise<void>, [OutboxEvent]>().mockResolvedValue(undefined);
+    publishMock = jest.fn<PublishFn>().mockResolvedValue(undefined);
     register.resetMetrics();
     jest.useFakeTimers().setSystemTime(BASE_TIME);
   });
@@ -177,10 +177,10 @@ describe("outbox relay worker", () => {
     store.upsert(makeEvent("e1", "test.event", "agg-1", new Date(BASE_TIME)));
 
     // Publish succeeds but markAcked throws
-    const origMarkAcked = store.markAcked.bind(store);
+    const _origMarkAcked = store.markAcked.bind(store);
     jest.spyOn(store, "markAcked").mockRejectedValueOnce(new Error("db write failed"));
 
-    const result = await relayOutboxOnce(store, publishMock, { batchSize: 10 });
+    const _result = await relayOutboxOnce(store, publishMock, { batchSize: 10 });
 
     // The counter counts it as published since publish() succeeded
     // But the event is NOT acked — next sweep will retry

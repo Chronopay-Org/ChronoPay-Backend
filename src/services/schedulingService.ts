@@ -1,9 +1,17 @@
 // @ts-nocheck
-import type { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
-import type { SlotRepository } from "../modules/slots/slot-repository.js";
+import type {
+  BookingIntentRecord,
+  BookingIntentRepository,
+} from "../modules/booking-intents/booking-intent-repository.js";
+import type { SlotRecord, SlotRepository } from "../modules/slots/slot-repository.js";
 import { GraceWindowService, getGraceWindowService } from "./graceWindowService.js";
 import { EventEmitter } from "node:events";
 import crypto from "crypto";
+import {
+  expandRRule as defaultExpandRRule,
+  RecurrenceError,
+  MAX_OCCURRENCES,
+} from "./recurrenceService.js";
 
 export class SlotNotBookableError extends Error {
   constructor(slotId: string) {
@@ -885,5 +893,273 @@ export class SchedulingService {
       updatedLegs: candidateOption.legs,
       confirmedAtMs,
     };
+  }
+}
+
+// ─── Recurring Booking Rules Engine ─────────────────────────────────────────
+//
+// Buyer-side repeat bookings: a single intent like "every weekday at 10am for 4
+// weeks" is expressed as an iCalendar RRULE. This engine:
+//   1. Parses the RRULE strictly (rejecting empty, malformed, unbounded, and
+//      over-capacity rules) and expands it into concrete occurrence instants.
+//   2. Materializes one booking intent per occurrence against real slot
+//      inventory, reserving each slot under the same capacity guard as a
+//      single booking (SchedulingService.reserveSlot).
+//   3. Never aborts the whole batch because one occurrence conflicts: it
+//      returns a partial-success report so callers can surface which dates
+//      succeeded and which failed, and why.
+//
+// Every occurrence is a fixed absolute instant. Z-anchored RRULEs are stable
+// across DST transitions by construction; TZID-anchored RRULEs preserve the
+// local wall-clock time (see recurrenceService) — occurrence local times never
+// drift because a booking in one zone crosses a spring/fall transition.
+
+/** Standalone error thrown by the recurring booking rules engine. */
+export class RecurringBookingRulesError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RecurringBookingRulesError";
+  }
+}
+
+/** Hard cap on how many occurrences a single RRULE may expand to. */
+export const RECURRING_BOOKING_MAX_OCCURRENCES = MAX_OCCURRENCES;
+
+/** A single occurrence that could not be materialized. */
+export interface RecurringBookingFailure {
+  /** ISO-8601 instant of the failed occurrence. */
+  date: string;
+  /** Stable, human-readable reason (safe to surface to a buyer). */
+  reason: string;
+}
+
+/** Partial-success report from {@link RecurringBookingRulesEngine}. */
+export interface RecurringBookingReport {
+  /** Booking intents successfully created and their slots reserved. */
+  successes: BookingIntentRecord[];
+  /** Occurrences that could not be materialized and why. */
+  failures: RecurringBookingFailure[];
+}
+
+/** Minimal actor contract the engine needs (a subset of AuthContext). */
+export interface RecurringBookingActor {
+  userId: string;
+  role?: string;
+  [key: string]: unknown;
+}
+
+/** Policy snapshots captured at materialize time for downstream pipelines. */
+export interface RecurringBookingPolicySnapshots {
+  cancellationPolicySnapshot?: unknown;
+  holdFeePolicySnapshot?: unknown;
+}
+
+export interface RecurringBookingRulesEngineOptions {
+  slotRepository: SlotRepository;
+  bookingIntentRepository: BookingIntentRepository;
+  /** Injectable RRULE expander; defaults to recurrenceService.expandRRule. */
+  expand?: (rruleText: string) => Date[];
+  now?: () => string;
+  /** Bundle-transferability gate; throws BundleNotTransferableError on block. */
+  assertBundleTransferable?: (slot: SlotRecord, actor: RecurringBookingActor) => void;
+  /** Captures cancellation / hold-fee policy snapshots for a slot owner. */
+  capturePolicySnapshots?: (professionalId: string) => RecurringBookingPolicySnapshots;
+}
+
+/**
+ * Reusable, pure-ish engine for buyer-side recurring bookings.
+ *
+ * The engine owns RRULE parsing/validation/expansion and the per-occurrence
+ * materialization contract (match slot -> authorize -> reserve -> persist).
+ * Application layers (routes/services) inject repositories and policy gates so
+ * the engine stays storage-agnostic and testable.
+ */
+export class RecurringBookingRulesEngine {
+  private readonly expandRule: (rruleText: string) => Date[];
+  private readonly scheduling: SchedulingService;
+  private readonly now: () => string;
+
+  constructor(private readonly options: RecurringBookingRulesEngineOptions) {
+    this.expandRule = options.expand ?? defaultExpandRRule;
+    this.now = options.now ?? (() => new Date().toISOString());
+    this.scheduling = new SchedulingService(
+      options.slotRepository,
+      options.bookingIntentRepository,
+    );
+  }
+
+  /**
+   * Strictly validate an RRULE string without materializing anything.
+   *
+   * Rejects: empty/whitespace, malformed rule text, INTERVAL <= 0, and
+   * unbounded rules (no COUNT or UNTIL). The expansion itself is capped at
+   * {@link RECURRING_BOOKING_MAX_OCCURRENCES}; rules that exceed the cap fail
+   * with a diagnosable error instead of exploding downstream.
+   */
+  validateRRule(rrule: string): void {
+    this.expand(rrule);
+  }
+
+  /**
+   * Parse + expand an RRULE into concrete occurrence instants.
+   *
+   * @throws RecurringBookingRulesError for unsafe/invalid/boundary rules.
+   * @returns Occurrences sorted chronologically (never more than the cap).
+   */
+  expand(rrule: string): Date[] {
+    if (typeof rrule !== "string" || rrule.trim().length === 0) {
+      throw new RecurringBookingRulesError("rrule must be a non-empty string");
+    }
+    // A DTSTART without an explicit offset or TZID is a floating local time.
+    // Anchoring a recurring booking on a wall-clock with no zone makes the
+    // occurrence local time ambiguous across DST transitions, so reject it.
+    const normalized = rrule.trim();
+    const dtstartLine = normalized
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("DTSTART"));
+    if (dtstartLine) {
+      // Extract the value after the first ':' (params like ;TZID= are before
+      // it). Line-based parsing is linear and avoids backtracking regexes.
+      const valueStart = dtstartLine.indexOf(":");
+      const dtstartVal = valueStart >= 0 ? dtstartLine.slice(valueStart + 1) : "";
+      if (!dtstartVal.endsWith("Z") && !normalized.includes("TZID=")) {
+        throw new RecurringBookingRulesError(
+          "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)",
+        );
+      }
+    }
+    try {
+      return this.expandRule(normalized);
+    } catch (err) {
+      if (err instanceof RecurrenceError) {
+        throw new RecurringBookingRulesError(err.message);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Materialize a recurring booking into individual booking intents.
+   *
+   * Occurrences are materialized independently and a conflicting occurrence
+   * never fails the batch: it is recorded in `report.failures`. Each success
+   * reserves its slot atomically (reserve-then-persist with compensating
+   * release on persistence failure), so concurrent callers cannot double-book
+   * the same slot and a crashed write never leaks a reserved slot.
+   *
+   * @param rrule  Strictly validated RRULE (see {@link validateRRule}).
+   * @param actor  Authenticated buyer (or admin) creating the booking.
+   * @param opts   Optional `note` propagated to each created intent.
+   * @returns      Partial-success {@link RecurringBookingReport}.
+   */
+  async createRecurringBookings(
+    rrule: string,
+    actor: RecurringBookingActor,
+    opts: { note?: string } = {},
+  ): Promise<RecurringBookingReport> {
+    const occurrences = this.expand(rrule);
+
+    const report: RecurringBookingReport = { successes: [], failures: [] };
+    for (const occurrence of occurrences) {
+      const outcome = await this.materializeOccurrence(occurrence, actor, opts.note);
+      if (outcome.ok) {
+        report.successes.push(outcome.intent);
+      } else {
+        report.failures.push({ date: occurrence.toISOString(), reason: outcome.reason });
+      }
+    }
+    return report;
+  }
+
+  private async materializeOccurrence(
+    occurrence: Date,
+    actor: RecurringBookingActor,
+    note: string | undefined,
+  ): Promise<{ ok: true; intent: BookingIntentRecord } | { ok: false; reason: string }> {
+    const startEpoch = occurrence.getTime();
+    const slot = this.options.slotRepository
+      .list()
+      .find((s) => s.startTime === startEpoch && s.bookable);
+    if (!slot) {
+      return { ok: false, reason: "No available slot at this time" };
+    }
+
+    if (this.options.assertBundleTransferable) {
+      try {
+        this.options.assertBundleTransferable(slot, actor);
+      } catch (err) {
+        if (err instanceof BundleNotTransferableError) {
+          return { ok: false, reason: err.message };
+        }
+        throw err;
+      }
+    }
+
+    if (slot.professional === actor.userId) {
+      return { ok: false, reason: "Cannot book your own slot" };
+    }
+
+    const existingForCustomer = await this.options.bookingIntentRepository.findBySlotIdAndCustomer(
+      slot.id,
+      actor.userId,
+    );
+    if (existingForCustomer) {
+      return { ok: false, reason: "Customer already has an intent for this slot" };
+    }
+
+    const existingForSlot = await this.options.bookingIntentRepository.findBySlotId(slot.id);
+    if (existingForSlot) {
+      return { ok: false, reason: "Slot already has active booking intent" };
+    }
+
+    // Reserve first: this is the authoritative inventory/capacity guard. A
+    // concurrent caller that wins the reservation causes THIS occurrence to
+    // fail cleanly instead of double-booking.
+    try {
+      this.scheduling.reserveSlot(slot.id);
+    } catch (err) {
+      if (err instanceof SlotNotBookableError) {
+        return { ok: false, reason: "Slot has already been booked" };
+      }
+      if (err instanceof SlotExpiredError) {
+        return { ok: false, reason: err.message };
+      }
+      if (err instanceof SlotNotFoundError) {
+        return { ok: false, reason: "No available slot at this time" };
+      }
+      return {
+        ok: false,
+        reason: `Failed to reserve slot ${slot.id}: ${(err as Error).message}`,
+      };
+    }
+
+    // Persist the intent and, if persistence fails, compensate by releasing the
+    // reservation so the slot is never left dangling.
+    try {
+      const snapshots = this.options.capturePolicySnapshots?.(slot.professional) ?? {};
+      const intent = await this.options.bookingIntentRepository.create({
+        slotId: slot.id,
+        professional: slot.professional,
+        customerId: actor.userId,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        status: "pending",
+        note,
+        createdAt: this.now(),
+        cancellationPolicySnapshot: snapshots.cancellationPolicySnapshot,
+        holdFeePolicySnapshot: snapshots.holdFeePolicySnapshot,
+      });
+      return { ok: true, intent };
+    } catch (err) {
+      try {
+        this.scheduling.releaseSlot(slot.id);
+      } catch {
+        // Release is best-effort; a thrown error here must not mask the cause.
+      }
+      return {
+        ok: false,
+        reason: `Failed to create booking intent: ${(err as Error).message}`,
+      };
+    }
   }
 }

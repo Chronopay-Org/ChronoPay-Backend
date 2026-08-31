@@ -19,12 +19,11 @@ import { validateBody } from "../middleware/validation.js";
 import { antiFraudScoring, captureRequestBody } from "../middleware/fraudScoring.js";
 import {
   CreateBookingIntentBodySchema,
-  type CreateBookingIntentBody,
 } from "../middleware/schemas.js";
 import {
   BookingIntentService,
   BookingIntentError,
-  type CreateBookingIntentInput,
+  parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
 import { isAppError } from "../errors/AppError.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
@@ -45,6 +44,26 @@ export function createBookingIntentsRouter(
     slotRepository?: InMemorySlotRepository;
   } = {},
 ) {
+  /**
+   * Recurring booking requests are identified by an `rrule` field and are
+   * mutually exclusive with a single-`slotId` booking. Rejecting payloads that
+   * carry both removes a silently-ambiguous contract (previously `rrule` won
+   * and `slotId` was ignored) before any downstream work happens.
+   *
+   * @throws BookingIntentError(400) when both `slotId` and `rrule` are present.
+   */
+  function assertNotAmbiguousBookingPayload(body: unknown): void {
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      const candidate = body as Record<string, unknown>;
+      if (candidate.slotId !== undefined && candidate.rrule !== undefined) {
+        throw new BookingIntentError(
+          400,
+          "slotId and rrule are mutually exclusive: provide either a single slotId or a recurring rrule.",
+        );
+      }
+    }
+  }
+
   const router = Router();
 
   // ─── Repositories (replace with DB layer in production) ────────────────────
@@ -107,11 +126,7 @@ export function createBookingIntentsRouter(
             report,
           });
         } else {
-          const singleInput: CreateBookingIntentInput = {
-            ...input,
-            slotId: input.slotId!, // guaranteed by CreateBookingIntentBodySchema
-          };
-          const intent = await bookingIntentService.createIntent(singleInput, req.auth!);
+          const intent = await bookingIntentService.createIntent(input, req.auth!);
           res.status(201).json({
             success: true,
             intent,

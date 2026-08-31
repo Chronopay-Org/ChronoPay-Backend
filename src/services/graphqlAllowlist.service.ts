@@ -25,7 +25,7 @@ export class GraphqlAllowlistService {
       const parsed = JSON.parse(data);
       this.allowlist = parsed.queries || {};
     } catch (err) {
-      logger.error("Failed to load GraphQL allowlist", err);
+      logger.error({ err }, "Failed to load GraphQL allowlist");
       // Retain the old allowlist if parsing fails or clear it? 
       // Safe to not mutate on failure. But tests might want us to handle this gracefully.
     }

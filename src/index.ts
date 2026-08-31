@@ -141,7 +141,6 @@ const _shutdownHooks: Array<() => void> = [];
     "./services/outboxRelay.js"
   );
   const { getPool } = await import("./db/connection.js");
-  const { logger } = await import("./utils/logger.js");
 
   const pool = getPool();
   const store = new SqlOutboxStore(pool);

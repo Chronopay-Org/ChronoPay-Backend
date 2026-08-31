@@ -7,7 +7,12 @@ import type {
   PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
-import { SchedulingService, BundleNotTransferableError } from "../../services/schedulingService.js";
+import {
+  SchedulingService,
+  BundleNotTransferableError,
+  RecurringBookingRulesEngine,
+  RecurringBookingRulesError,
+} from "../../services/schedulingService.js";
 import { BundleTransferabilityService } from "../../services/bundleTransferabilityService.js";
 import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
@@ -279,13 +284,25 @@ export class BookingIntentService {
     input: CreateRecurringBookingInput,
     actor: AuthContext,
   ): Promise<{ successes: BookingIntentRecord[]; failures: { date: string; reason: string }[] }> {
-    const { expandRRule, RecurrenceError } = await import("../../services/recurrenceService.js");
+    const engine = new RecurringBookingRulesEngine({
+      slotRepository: this.slotRepository,
+      bookingIntentRepository: this.bookingIntentRepository,
+      now: this.now,
+      assertBundleTransferable: (slot, act) =>
+        this.bundleTransferabilityService.assertBundleTransferable(slot, act as AuthContext),
+      capturePolicySnapshots: (professionalId) => ({
+        cancellationPolicySnapshot: this.captureCancellationPolicySnapshot(),
+        holdFeePolicySnapshot: this.captureHoldFeePolicySnapshot(professionalId),
+      }),
+    });
 
-    let occurrences: Date[];
     try {
-      occurrences = expandRRule(input.rrule);
+      const report = await engine.createRecurringBookings(input.rrule, actor as never, {
+        note: input.note,
+      });
+      return report;
     } catch (err) {
-      if (err instanceof RecurrenceError) {
+      if (err instanceof RecurringBookingRulesError) {
         throw new BookingIntentError(400, err.message);
       }
       throw err;
@@ -649,20 +666,19 @@ export function parseCreateBookingIntentBody(
       throw new BookingIntentError(400, "rrule must be a non-empty string.");
     }
     const normalizedRRule = rrule.trim();
-
-    // Assert error for ambiguous inputs without explicit offset
-    if (normalizedRRule.includes("DTSTART")) {
-      const dtstartMatch = normalizedRRule.match(/DTSTART(?:;[^:]*)?:(.*)(?:\n|$)/);
-      if (dtstartMatch) {
-        const dtstartVal = dtstartMatch[1];
-        const hasZ = dtstartVal.endsWith("Z");
-        const hasTzid = normalizedRRule.includes("TZID=");
-        if (!hasZ && !hasTzid) {
-          throw new BookingIntentError(
-            400,
-            "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)",
-          );
-        }
+    // Assert error for ambiguous inputs without explicit offset. Line-based
+    // parsing is linear (avoids a backtracking regex on attacker-controlled
+    // rrule text).
+    const dtstartLine = normalizedRRule
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("DTSTART"));
+    if (dtstartLine) {
+      const valueStart = dtstartLine.indexOf(":");
+      const dtstartVal = valueStart >= 0 ? dtstartLine.slice(valueStart + 1) : "";
+      const hasZ = dtstartVal.endsWith("Z");
+      const hasTzid = normalizedRRule.includes("TZID=");
+      if (!hasZ && !hasTzid) {
+        throw new BookingIntentError(400, "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)");
       }
     }
 
