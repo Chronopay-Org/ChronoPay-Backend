@@ -97,6 +97,21 @@ const handleSettlementWebhook = async (req: Request, res: Response) => {
         attempts: 0,
       });
     }
+  } else if (eventType === "settlement_failed") {
+    // Provider-reported terminal failure. Recorded so the reconciler channel,
+    // admin replay flow, and audits can observe deterministically-failed
+    // settlements; on-chain finality is still re-verified before any payout.
+    if (!_settlements.has(idempotencyKey)) {
+      _settlements.set(idempotencyKey, {
+        transactionId: idempotencyKey,
+        eventType: String(eventType),
+        amount: Number(amount),
+        timestamp: Number(timestamp),
+        status: "failed",
+        confirmations: 0,
+        attempts: 0,
+      });
+    }
   }
 
   return res.status(200).json(responseBody);

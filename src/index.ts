@@ -165,6 +165,41 @@ const _shutdownHooks: Array<() => void> = [];
   logger.info("outbox-relay worker started");
 })();
 
+// ─── Settlement Finality Reconciler (#804) ─────────────────────────────────
+// Polls Horizon to verify on-chain finality for provider settlements before
+// any payout is marked ready, and flags forks/reorgs. Enabled when Horizon
+// URLs are configured; set SETTLEMENT_RECONCILER_DISABLED=true to skip.
+(async () => {
+  if (process.env.SETTLEMENT_RECONCILER_DISABLED === "true") {
+    logger.info("settlement-reconciler disabled via SETTLEMENT_RECONCILER_DISABLED");
+    return;
+  }
+  if (!config.horizonUrls || config.horizonUrls.length === 0) {
+    logger.info("settlement-reconciler skipped: no HORIZON_URLS configured");
+    return;
+  }
+
+  const { ContractService } = await import("./services/contract.service.js");
+  const { HorizonContractClient } = await import("./clients/horizon-contract-client.js");
+  const { startSettlementReconciler } = await import("./services/settlementReconciler.js");
+
+  const contractService = new ContractService();
+  const horizonClient = new HorizonContractClient(
+    config.horizonUrls,
+    config.networkPassphrase ?? "Test SDF Network ; September 2015",
+    contractService,
+  );
+
+  const reconciler = startSettlementReconciler({
+    horizonClient,
+    pollIntervalMs: Number(process.env.SETTLEMENT_RECONCILER_POLL_INTERVAL_MS) || undefined,
+    minConfirmations: Number(process.env.MIN_LEDGER_CONFIRMATIONS) || undefined,
+  });
+  _shutdownHooks.push(() => reconciler.stop());
+
+  logger.info("settlement-reconciler started");
+})();
+
 const PORT = config.port || 3001;
 const server = app.listen(PORT, () => {
   logger.info({ port: PORT }, `ChronoPay API listening on http://localhost:${PORT}`);
