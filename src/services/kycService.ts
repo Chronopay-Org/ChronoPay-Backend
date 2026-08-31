@@ -1,5 +1,5 @@
 import { query } from "../db/pool.js";
-import { KycWebhookPayload } from "./kycProvider.js";
+import { KycWebhookPayload, KycSupplierNotFoundError } from "./kycProvider.js";
 import { reputationBootstrapService } from "./reputationBootstrapService.js";
 
 export interface SupplierKycInfo {
@@ -20,7 +20,7 @@ export class KycService {
   async getSupplierKyc(supplierId: string): Promise<SupplierKycInfo | null> {
     const result = await query(
       "SELECT id, email, kyc_status, kyc_ref, region FROM users WHERE id = $1",
-      [supplierId]
+      [supplierId],
     );
     if (!result || (result.rowCount ?? 0) === 0) return null;
     const row = result.rows[0];
@@ -36,19 +36,19 @@ export class KycService {
   async updateKycStatus(
     supplierId: string,
     status: KycWebhookPayload["status"],
-    kycRef: string | null
+    kycRef: string | null,
   ): Promise<boolean> {
     const result = await query(
       "UPDATE users SET kyc_status = $1, kyc_ref = $2, updated_at = NOW() WHERE id = $3",
-      [status, kycRef, supplierId]
+      [status, kycRef, supplierId],
     );
-    return ((result?.rowCount ?? 0) > 0);
+    return (result?.rowCount ?? 0) > 0;
   }
 
   async processWebhook(payload: KycWebhookPayload): Promise<boolean> {
     const supplier = await this.getSupplierKyc(payload.supplierId);
     if (!supplier) {
-      throw new Error(`Supplier with ID ${payload.supplierId} not found.`);
+      throw new KycSupplierNotFoundError(`Supplier with ID ${payload.supplierId} not found.`);
     }
 
     const prevStatus = supplier.kycStatus;

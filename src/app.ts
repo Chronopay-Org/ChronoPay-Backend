@@ -281,7 +281,16 @@ export function createApp(options: AppFactoryOptions = {}) {
     );
   }
 
-  app.use(express.json({ limit: "100kb" }));
+  app.use(
+    express.json({
+      limit: "100kb",
+      // Preserve the raw request body so HMAC-based webhook signature
+      // verification can be performed over the exact bytes that were sent.
+      verify: (req: express.Request, _res, buf) => {
+        (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+      },
+    }),
+  );
   app.use(express.urlencoded({ extended: true, limit: "100kb" }));
   app.use(parseCookies);
   app.use(metricsMiddleware);
