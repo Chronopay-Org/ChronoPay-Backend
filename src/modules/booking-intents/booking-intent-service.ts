@@ -25,6 +25,7 @@ import {
   createEmptyHoldFeeRegistry,
   HoldFeePolicyRegistry,
 } from "../../services/holdFeePolicy.js";
+import { writeReputationScore } from "../../services/reputationWriteAudit.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -504,6 +505,88 @@ export class BookingIntentService {
     });
     this.schedulingService.releaseSlot(intent.slotId);
     return updated;
+  }
+
+  async markNoShow(
+    intentId: string,
+    actor: AuthContext,
+    input: { reason?: string; forfeitRatio?: number } = {},
+  ): Promise<{
+    intent: BookingIntentRecord;
+    status: BookingIntentStatus;
+    buyerId: string;
+    supplierId: string;
+    forfeitAmountCents: number;
+    reputationDelta: number;
+    reason: string;
+  }> {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (actor.role !== "admin" && intent.professional !== actor.userId) {
+      throw new BookingIntentError(
+        403,
+        "Only the supplier can mark this booking intent as a no-show.",
+      );
+    }
+
+    if (
+      intent.status !== "confirmed" &&
+      intent.status !== "pending" &&
+      intent.status !== "hold_placed"
+    ) {
+      throw new BookingIntentError(
+        409,
+        `Cannot mark intent with status "${intent.status}" as a no-show.`,
+      );
+    }
+
+    const ratio = input.forfeitRatio ?? 0.2;
+    if (!Number.isFinite(ratio) || ratio <= 0 || ratio > 1) {
+      throw new BookingIntentError(400, "forfeitRatio must be a number between 0 and 1.");
+    }
+
+    const baseAmount = this.resolveIntentPrice(intent);
+    const forfeitAmountCents = Math.round(baseAmount * ratio);
+    const reason = (input.reason ?? "Buyer no-show").trim();
+    const normalizedReason = reason.length > 0 ? reason : "Buyer no-show";
+
+    const updated = this.bookingIntentRepository.update(intentId, {
+      status: "no_show",
+    });
+
+    this.schedulingService.releaseSlot(intent.slotId);
+
+    const scoreBefore = 0;
+    const scoreAfter = -1;
+    await writeReputationScore({
+      supplierId: intent.customerId,
+      actorId: actor.userId,
+      cause: "no_show",
+      causeId: intent.id,
+      scoreBefore,
+      scoreAfter,
+      metadata: {
+        buyerId: intent.customerId,
+        supplierId: intent.professional,
+        bookingIntentId: intent.id,
+        forfeitRatio: ratio,
+        forfeitAmountCents,
+        reason: normalizedReason,
+      },
+    });
+
+    return {
+      intent: updated,
+      status: updated.status,
+      buyerId: intent.customerId,
+      supplierId: intent.professional,
+      forfeitAmountCents,
+      reputationDelta: scoreAfter - scoreBefore,
+      reason: normalizedReason,
+    };
   }
 
   createIntentTraced(

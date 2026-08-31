@@ -239,6 +239,33 @@ export function createBookingIntentsRouter(
     },
   );
 
+  router.post(
+    "/:id/no-show",
+    requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    requireAuthenticatedActor(["professional", "admin"]),
+    createAuthAwareRateLimiter(),
+    auditMiddleware("NO_SHOW_BOOKING_INTENT"),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const forfeitRatio =
+          typeof req.body?.forfeitRatio === "number" ? req.body.forfeitRatio : undefined;
+        const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+
+        const result = await bookingIntentService.markNoShow(req.params.id, req.auth!, {
+          reason,
+          forfeitRatio,
+        });
+
+        res.status(200).json({
+          success: true,
+          result,
+        });
+      } catch (error) {
+        handleServiceError(error, res);
+      }
+    },
+  );
+
   router.get(
     "/:id/cancel-preview",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
