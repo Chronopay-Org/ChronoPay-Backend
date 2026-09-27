@@ -18,11 +18,13 @@ import { Migration } from "../migrationRunner.js";
  *     never updated or deleted — they form the immutable policy-change
  *     trail required by the spec.
  *
- *   slots.category (TEXT nullable)
- *     Links an individual slot to a slot category so that the
- *     scheduling service can look up the correct grace window at
- *     reservation time.  Nullable so existing slots remain valid
- *     without a backfill (they fall through to the default).
+ *   slots.category
+ *     Already provided by migration 009 (add_marketplace_search_fields)
+ *     as VARCHAR(100) NOT NULL DEFAULT 'general', so this migration must
+ *     not re-add it.  The scheduling service reads that column to look
+ *     up the correct grace window at reservation time; categories
+ *     without a row in slot_category_grace_windows fall through to the
+ *     default window.
  *
  * Design decisions:
  *  - grace_window_seconds is INTEGER (not BIGINT / FLOAT) — seconds are
@@ -88,34 +90,16 @@ export const migration: Migration = {
         ON slot_category_grace_window_history (changed_at DESC)
     `);
 
-    // 3. Add nullable category column to the slots table.
-    await client.query(`
-      ALTER TABLE slots
-        ADD COLUMN category TEXT
-    `);
-
-    await client.query(`
-      ALTER TABLE slots
-        ADD CONSTRAINT chk_slots_category_len
-        CHECK (category IS NULL OR char_length(category) <= 100)
-    `);
-
-    await client.query(`
-      CREATE INDEX idx_slots_category
-        ON slots (category)
-        WHERE category IS NOT NULL
-    `);
+    // NOTE: slots.category and idx_slots_category already exist — migration
+    // 009 (add_marketplace_search_fields) created them.  Re-adding them here
+    // would make `migrate up` fail with "column \"category\" of relation
+    // \"slots\" already exists".
   },
 
   async down(client: PoolClient): Promise<void> {
     // Reverse in exact opposite order of up().
-
-    // 3. Remove column from slots.
-    await client.query(`DROP INDEX IF EXISTS idx_slots_category`);
-    await client.query(`
-      ALTER TABLE slots DROP CONSTRAINT IF EXISTS chk_slots_category_len
-    `);
-    await client.query(`ALTER TABLE slots DROP COLUMN IF EXISTS category`);
+    // (slots.category / idx_slots_category belong to migration 009 and are
+    // deliberately NOT dropped here.)
 
     // 2. Drop history table.
     await client.query(`DROP INDEX IF EXISTS idx_grace_window_history_changed_at`);
