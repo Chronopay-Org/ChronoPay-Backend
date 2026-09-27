@@ -89,7 +89,9 @@ function makeMigration(id: string, name = `migration_${id}`): Migration & {
 function makeRunner(
   migrations: Migration[],
   applied: AppliedMigration[] = [],
-  transact: typeof passthroughTransact = passthroughTransact,
+  // Typed as `unknown` because jest.fn() collapses the generic signature of
+  // passthroughTransact to Promise<unknown>. The runner force-casts anyway.
+  transact: unknown = passthroughTransact,
 ) {
   const { repo, calls, applied: appliedMap } = makeRepo(applied);
   const runner = new MigrationRunner({} as never, repo, migrations, transact as never);
@@ -118,10 +120,10 @@ describe("MigrationRunner.up()", () => {
 
     const result = await runner.up();
 
-    expect(result).toEqual<MigrationResult>({
+    expect(result).toEqual({
       success: true,
       applied: ["001", "002"],
-    });
+    } as MigrationResult);
     // Order preserved and each migration got the transaction client
     expect(m1.upCalls).toEqual([FAKE_CLIENT]);
     expect(m2.upCalls).toEqual([FAKE_CLIENT]);
@@ -197,12 +199,12 @@ describe("MigrationRunner.up()", () => {
 
     const result = await runner.up();
 
-    expect(result).toEqual<MigrationResult>({
+    expect(result).toEqual({
       success: false,
       applied: ["001"],
       failed: "002",
       error: boom,
-    });
+    } as MigrationResult);
     expect(m3.upCalls).toHaveLength(0); // stop-on-first-failure
     // Tracking record for the failed migration must not exist
     expect(appliedMap.has("002")).toBe(false);
@@ -252,12 +254,12 @@ describe("MigrationRunner.up()", () => {
 
     const result = await runner.up();
 
-    expect(result).toEqual<MigrationResult>({
+    expect(result).toEqual({
       success: false,
       applied: [],
       failed: "001",
       error: recordBoom,
-    });
+    } as MigrationResult);
     expect(m1.upCalls).toHaveLength(1); // up ran, but record failed
   });
 
@@ -359,12 +361,12 @@ describe("MigrationRunner.down()", () => {
 
     const result = await runner.down(2);
 
-    expect(result).toEqual<MigrationResult>({
+    expect(result).toEqual({
       success: false,
       applied: [],
       failed: "002",
       error: new Error("cannot drop table"),
-    });
+    } as MigrationResult);
     expect(result.error).toBeInstanceOf(Error);
     expect(result.error?.message).toBe("cannot drop table");
     // Stop-on-first-failure: 001 untouched
