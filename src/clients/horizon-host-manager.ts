@@ -1,6 +1,5 @@
 import { horizonHostHealth, horizonFailoverTotal } from "../metrics.js";
-import { HorizonUnavailableError } from "../errors/contractErrors.js";
-import { shouldRetryContractError } from "../errors/contractErrors.js";
+import { HorizonUnavailableError, shouldRetryContractError } from "../errors/contractErrors.js";
 
 const QUARANTINE_COOLDOWN_MS = 15000;
 const ERROR_WINDOW_MS = 10000;
@@ -24,7 +23,7 @@ export class HorizonHostManager {
     if (!urls || urls.length === 0) {
       throw new Error("HorizonHostManager requires at least one URL");
     }
-    
+
     this.hosts = urls.map((u, i) => ({
       url: u.replace(/\/$/, ""),
       isPrimary: i === 0,
@@ -33,7 +32,7 @@ export class HorizonHostManager {
       errorTimestamps: [],
       lastSuccessAt: 0,
     }));
-    
+
     this.updateHealthMetrics();
   }
 
@@ -45,7 +44,7 @@ export class HorizonHostManager {
 
   public async getHealthyHost(): Promise<string> {
     const now = Date.now();
-    
+
     // Recovery probes
     for (const host of this.hosts) {
       if (host.isQuarantined && now - host.quarantinedAt >= QUARANTINE_COOLDOWN_MS) {
@@ -55,8 +54,8 @@ export class HorizonHostManager {
           host.errorTimestamps = [];
           host.lastSuccessAt = now;
           if (host.isPrimary) {
-             // Sticky primary recovery
-             this.currentHostIndex = 0;
+            // Sticky primary recovery
+            this.currentHostIndex = 0;
           }
           this.updateHealthMetrics();
         } else {
@@ -90,7 +89,7 @@ export class HorizonHostManager {
   }
 
   public recordSuccess(url: string) {
-    const host = this.hosts.find(h => h.url === url);
+    const host = this.hosts.find((h) => h.url === url);
     if (host) {
       host.lastSuccessAt = Date.now();
       if (host.isQuarantined) {
@@ -103,23 +102,23 @@ export class HorizonHostManager {
 
   public recordError(url: string, error: unknown) {
     if (!shouldRetryContractError(error)) {
-       return; // don't quarantine for 4xx errors
+      return; // don't quarantine for 4xx errors
     }
 
-    const host = this.hosts.find(h => h.url === url);
+    const host = this.hosts.find((h) => h.url === url);
     if (!host || host.isQuarantined) return;
 
     const now = Date.now();
     host.errorTimestamps.push(now);
-    
+
     // Clean old errors
-    host.errorTimestamps = host.errorTimestamps.filter(t => now - t <= ERROR_WINDOW_MS);
+    host.errorTimestamps = host.errorTimestamps.filter((t) => now - t <= ERROR_WINDOW_MS);
 
     if (host.errorTimestamps.length >= MAX_ERRORS) {
       host.isQuarantined = true;
       host.quarantinedAt = now;
       this.updateHealthMetrics();
-      
+
       // If primary was quarantined, failover might happen next call
     }
   }
