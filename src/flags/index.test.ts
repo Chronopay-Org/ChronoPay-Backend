@@ -1,4 +1,3 @@
-import { jest } from "@jest/globals";
 
 describe("src/flags/index barrel exports", () => {
   let barrel: typeof import("./index.js");
