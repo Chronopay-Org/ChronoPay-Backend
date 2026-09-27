@@ -31,6 +31,7 @@ import {
   HoldFeePolicyRegistry,
 } from "../../services/holdFeePolicy.js";
 import { CheckoutSessionService } from "../../services/checkout.js";
+import { writeReputationScore } from "../../services/reputationWriteAudit.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
