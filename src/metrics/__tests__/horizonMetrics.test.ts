@@ -59,12 +59,17 @@ describe("horizonMetrics", () => {
       expect(getRateLimitRemaining(HOST)).toBe(10);
     });
 
-    it("ignores NaN values without throwing", () => {
-      expect(() => recordRateLimitRemaining(HOST, NaN)).not.toThrow();
+    it("ignores NaN and Infinity values without mutating the last known value", () => {
+      recordRateLimitRemaining(HOST, 7);
+      recordRateLimitRemaining(HOST, Number.NaN);
+      recordRateLimitRemaining(HOST, Number.POSITIVE_INFINITY);
+      recordRateLimitRemaining(HOST, Number.NEGATIVE_INFINITY);
+      expect(getRateLimitRemaining(HOST)).toBe(7);
     });
 
-    it("ignores empty host string without throwing", () => {
+    it("ignores empty host strings without throwing", () => {
       expect(() => recordRateLimitRemaining("", 10)).not.toThrow();
+      expect(getRateLimitRemaining("")).toBe(0);
     });
 
     it("handles very large remaining values", () => {
@@ -72,12 +77,23 @@ describe("horizonMetrics", () => {
       expect(getRateLimitRemaining(HOST)).toBe(Number.MAX_SAFE_INTEGER);
     });
 
-    it("sets gauge independently for multiple hosts", () => {
+    it("maintains independent values across multiple hosts", () => {
       const HOST2 = "https://horizon.stellar.org";
       recordRateLimitRemaining(HOST, 100);
       recordRateLimitRemaining(HOST2, 200);
       expect(getRateLimitRemaining(HOST)).toBe(100);
       expect(getRateLimitRemaining(HOST2)).toBe(200);
+    });
+
+    it("tracks primary state transitions for the same host", () => {
+      recordRateLimitRemaining(HOST, 100);
+      expect(horizonRateLimitRemaining.labels(HOST).get()).toBe(100);
+
+      resetHorizonMetricsForHost(HOST);
+      expect(horizonRateLimitRemaining.labels(HOST).get()).toBe(0);
+
+      recordRateLimitRemaining(HOST, 25);
+      expect(horizonRateLimitRemaining.labels(HOST).get()).toBe(25);
     });
   });
 
@@ -98,12 +114,28 @@ describe("horizonMetrics", () => {
       expect(getQueueDepth(HOST)).toBe(3);
     });
 
-    it("ignores NaN without throwing", () => {
-      expect(() => recordQueueDepth(HOST, NaN)).not.toThrow();
+    it("ignores NaN and Infinity values without mutating the last known value", () => {
+      recordQueueDepth(HOST, 4);
+      recordQueueDepth(HOST, NaN);
+      recordQueueDepth(HOST, Number.POSITIVE_INFINITY);
+      recordQueueDepth(HOST, Number.NEGATIVE_INFINITY);
+      expect(getQueueDepth(HOST)).toBe(4);
     });
 
     it("ignores empty host without throwing", () => {
       expect(() => recordQueueDepth("", 5)).not.toThrow();
+      expect(getQueueDepth("")).toBe(0);
+    });
+
+    it("tracks queue-depth transitions for a single host", () => {
+      recordQueueDepth(HOST, 1);
+      expect(horizonRequestQueueDepth.labels(HOST).get()).toBe(1);
+
+      recordQueueDepth(HOST, 7);
+      expect(horizonRequestQueueDepth.labels(HOST).get()).toBe(7);
+
+      resetHorizonMetricsForHost(HOST);
+      expect(horizonRequestQueueDepth.labels(HOST).get()).toBe(0);
     });
   });
 
