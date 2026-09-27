@@ -35,6 +35,11 @@ export interface SecondaryListingRecord {
   updatedAt: string;
 }
 
+/**
+ * Legacy seeded catalogue retained for the paginated list contract consumed by
+ * `SlotService` (`getSlotsCount` / `getSlotsPage`). `Slot._internalNote` is
+ * stripped by `SlotService.list()` before results reach the API layer.
+ */
 const slots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
   id: idx + 1,
   professional: `Professional ${idx + 1}`,
@@ -150,11 +155,9 @@ export const __test__clearSlots = (): void => {
   secondaryListings.clear();
 };
 
-// @ts-expect-error - Auto-fixed by script
-export const getSlotsCount = async (): Promise<number> => _legacySlots.length;
+export const getSlotsCount = async (): Promise<number> => slots.length;
 
 export const getSlotsPage = async (offset: number, limit: number): Promise<Slot[]> => {
   if (offset < 0 || limit < 0) throw new Error("Invalid pagination parameters");
-  // @ts-expect-error - Auto-fixed by script
-  return _legacySlots.slice(offset, offset + limit);
+  return slots.slice(offset, offset + limit);
 };

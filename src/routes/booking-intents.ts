@@ -19,24 +19,17 @@ import { validateBody } from "../middleware/validation.js";
 import { antiFraudScoring, captureRequestBody } from "../middleware/fraudScoring.js";
 import {
   CreateBookingIntentBodySchema,
+  type CreateBookingIntentBody,
 } from "../middleware/schemas.js";
 import {
   BookingIntentService,
   BookingIntentError,
-  parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
 import { isAppError } from "../errors/AppError.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { FraudScorer } from "../services/fraudScorer.js";
-import {
-  FraudReasonCode,
-  getFraudReasonCode,
-  getFraudMessage,
-} from "../services/fraudReasonCodes.js";
-import { QuarantineStore } from "../services/quarantineStore.js";
-import { InMemoryFxRateProvider } from "../services/fxRateProvider.js";
 
 export function createBookingIntentsRouter(
   options: {
@@ -65,7 +58,6 @@ export function createBookingIntentsRouter(
   }
 
   const router = Router();
-
   // ─── Repositories (replace with DB layer in production) ────────────────────
   const bookingIntentRepository =
     options.bookingIntentRepository ?? new InMemoryBookingIntentRepository();
@@ -119,6 +111,7 @@ export function createBookingIntentsRouter(
     async (req: Request, res: Response): Promise<void> => {
       try {
         const input = req.body as CreateBookingIntentBody;
+        assertNotAmbiguousBookingPayload(input);
         if (input.rrule !== undefined) {
           const report = await bookingIntentService.createRecurringIntents(input, req.auth!);
           res.status(201).json({
