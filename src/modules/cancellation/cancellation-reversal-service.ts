@@ -286,7 +286,11 @@ export class CancellationReversalService {
   constructor(deps: CancellationReversalServiceDeps) {
     this.repo = deps.repo;
     this.checkoutSessionLookup = deps.checkoutSessionLookup;
-    this.isTenantPaused = deps.isTenantPaused ?? (() => false);
+    // Fall back to the module-level resolver wired at bootstrap via
+    // `setTenantPausedResolver` (the canonical source of truth). An explicit
+    // per-service dependency still takes precedence.
+    this.isTenantPaused =
+      deps.isTenantPaused ?? ((tenantId: string) => _tenantPausedResolver(tenantId));
     this.netRefundLookup = deps.netRefundLookup;
     this.now = deps.now ?? (() => new Date());
     this.releaseEscrow =
@@ -793,7 +797,22 @@ let _tenantPausedResolver: TenantPausedFunction = () => false;
  * of the incoming reversal insert.
  */
 export function setTenantPausedResolver(fn: TenantPausedFunction): void {
+  if (typeof fn !== "function") {
+    throw new TypeError(
+      "setTenantPausedResolver expects a function (tenantId: string) => boolean",
+    );
+  }
   _tenantPausedResolver = fn;
+}
+
+/**
+ * Restore the documented default resolver ("no tenant is paused").
+ *
+ * Intended for bootstrap teardown and test isolation so a previously wired
+ * resolver cannot leak across suites or restarts.
+ */
+export function resetTenantPausedResolver(): void {
+  _tenantPausedResolver = () => false;
 }
 
 /**
