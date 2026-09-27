@@ -54,7 +54,11 @@
     "ethers": {
       "ws": "^8.21.0"
     },
-    "fast-xml-parser": "^5.0.9"
+    "fast-xml-parser": "^5.0.9",
+    "fast-uri": "^3.1.6",
+    "js-yaml": "^4.3.2",
+    "qs": "^6.15.4",
+    "body-parser": "^1.20.7"
   },
   "devDependencies": {
     "@cyclonedx/cyclonedx-npm": "^1.19.3",
