@@ -59,9 +59,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history on PRs so git diff can compute the merge-base.
-          # Pushes to main always run the full suite so depth=1 is fine.
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          # Full history on PRs so `git diff origin/main...HEAD` can compute
+          # the merge-base (with depth=1 the origin/main ref does not exist
+          # and that step fails). Pushes to main always run the full suite
+          # so depth=1 is fine there.
+          # NB: the 0/1 must be quoted — unquoted, `true && 0 || 1`
+          # evaluates to 1 because 0 is falsy in the GitHub expression
+          # language (so PRs would get a shallow clone too).
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
