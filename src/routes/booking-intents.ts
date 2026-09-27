@@ -23,20 +23,12 @@ import {
 import {
   BookingIntentService,
   BookingIntentError,
-  parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
 import { isAppError } from "../errors/AppError.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { FraudScorer } from "../services/fraudScorer.js";
-import {
-  FraudReasonCode,
-  getFraudReasonCode,
-  getFraudMessage,
-} from "../services/fraudReasonCodes.js";
-import { QuarantineStore } from "../services/quarantineStore.js";
-import { InMemoryFxRateProvider } from "../services/fxRateProvider.js";
 
 export function createBookingIntentsRouter(
   options: {
@@ -44,26 +36,6 @@ export function createBookingIntentsRouter(
     slotRepository?: InMemorySlotRepository;
   } = {},
 ) {
-  /**
-   * Recurring booking requests are identified by an `rrule` field and are
-   * mutually exclusive with a single-`slotId` booking. Rejecting payloads that
-   * carry both removes a silently-ambiguous contract (previously `rrule` won
-   * and `slotId` was ignored) before any downstream work happens.
-   *
-   * @throws BookingIntentError(400) when both `slotId` and `rrule` are present.
-   */
-  function assertNotAmbiguousBookingPayload(body: unknown): void {
-    if (body && typeof body === "object" && !Array.isArray(body)) {
-      const candidate = body as Record<string, unknown>;
-      if (candidate.slotId !== undefined && candidate.rrule !== undefined) {
-        throw new BookingIntentError(
-          400,
-          "slotId and rrule are mutually exclusive: provide either a single slotId or a recurring rrule.",
-        );
-      }
-    }
-  }
-
   const router = Router();
 
   // ─── Repositories (replace with DB layer in production) ────────────────────

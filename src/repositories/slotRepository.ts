@@ -35,7 +35,7 @@ export interface SecondaryListingRecord {
   updatedAt: string;
 }
 
-const slots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
+const _legacySlots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
   id: idx + 1,
   professional: `Professional ${idx + 1}`,
   startTime: new Date(Date.UTC(2026, 0, 1, 8, 0, 0) + idx * 60 * 60 * 1000).toISOString(),
@@ -150,11 +150,9 @@ export const __test__clearSlots = (): void => {
   secondaryListings.clear();
 };
 
-// @ts-expect-error - Auto-fixed by script
 export const getSlotsCount = async (): Promise<number> => _legacySlots.length;
 
 export const getSlotsPage = async (offset: number, limit: number): Promise<Slot[]> => {
   if (offset < 0 || limit < 0) throw new Error("Invalid pagination parameters");
-  // @ts-expect-error - Auto-fixed by script
   return _legacySlots.slice(offset, offset + limit);
 };
