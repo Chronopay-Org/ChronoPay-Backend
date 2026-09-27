@@ -114,12 +114,20 @@ jobs:
         id: select_tests
         if: github.event_name == 'pull_request'
         run: |
+          set -euo pipefail
           mapfile -t changed < /tmp/changed_files.txt
           npx tsx scripts/select-tests.ts \
             --changed-files "${changed[@]}" \
             --graph scripts/test-graph.json \
             --output /tmp/selected-tests.txt \
             --verbose
+          # Fail fast if the selector produced no output — an empty/missing
+          # file would otherwise make the next step run
+          # `npm test -- --testPathPattern=""` (matching nothing).
+          if [ ! -s /tmp/selected-tests.txt ]; then
+            echo "::error::select-tests produced no output — expected a test list or __full_run__"
+            exit 1
+          fi
           echo "Selected tests:"
           cat /tmp/selected-tests.txt
 

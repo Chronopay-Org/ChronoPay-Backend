@@ -26,6 +26,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { pathToFileURL } from "url";
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -180,9 +181,14 @@ function main() {
     }
 }
 // Only run when invoked directly (not when imported in tests).
+//
+// NB: comparing normalized `file://` URLs (via pathToFileURL) is the correct
+// cross-platform check. Stripping the scheme by hand breaks on POSIX because
+// it also removes the leading path slash, making the comparison always fail
+// and main() never run (silent exit 0 — the CI "Select tests" step bug).
 /* istanbul ignore next */
-const isMain = process.argv[1] &&
-    path.resolve(process.argv[1]) === path.resolve(import.meta.url.replace(/^file:\/\/\/?/, "").replace(/^([A-Za-z]:)/, (m) => m.toUpperCase()));
+const isMain = !!process.argv[1] &&
+    pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
 if (isMain) {
     main();
 }
