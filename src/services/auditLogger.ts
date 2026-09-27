@@ -201,4 +201,7 @@ Object.defineProperty(globalAuditState, "defaultAuditLogger", {
   enumerable: false,
 });
 
-export const defaultAuditLogger = globalAuditState.defaultAuditLogger;
+// `defineProperty` above guarantees the global is set, but TypeScript only sees the
+// optional property type, so fall back to the shared singleton to keep this
+// non-nullable for every consumer that injects it as a required AuditLogger.
+export const defaultAuditLogger: AuditLogger = globalAuditState.defaultAuditLogger ?? sharedLogger;

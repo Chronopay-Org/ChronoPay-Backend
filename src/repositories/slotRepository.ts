@@ -43,7 +43,23 @@ const _legacySlots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
   _internalNote: "do not expose",
 }));
 
-const seededSlotCatalog: Slot[] = [
+/**
+ * A slot from the bundled demo catalog. Unlike the legacy `Slot` shape it is
+ * keyed by an opaque string id and carries the ownership/transferability
+ * fields the secondary-marketplace routes read off the record.
+ */
+export interface SeededSlotRecord {
+  id: string;
+  professional: string;
+  ownerId: string;
+  buyerId: string;
+  transferable: boolean;
+  startTime: number;
+  endTime: number;
+  bookable: boolean;
+}
+
+const seededSlotCatalog: SeededSlotRecord[] = [
   {
     id: "slot-11111111-1111-4111-8111-111111111111",
     professional: "supplier-1",
@@ -78,7 +94,7 @@ const seededSlotCatalog: Slot[] = [
 
 const secondaryListings = new Map<string, SecondaryListingRecord>();
 
-export function getSlotRecordById(slotId: string): Slot | undefined {
+export function getSlotRecordById(slotId: string): SeededSlotRecord | undefined {
   const fixedSlotId = String(slotId);
   return seededSlotCatalog.find((slot) => String(slot.id) === fixedSlotId)
     ? { ...seededSlotCatalog.find((slot) => String(slot.id) === fixedSlotId)! }

@@ -90,6 +90,7 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
 // ─── Subscription Slot Generator Worker ────────────────────────────────────
 // Idempotent background worker that auto-mints recurring slots for active
 // subscriptions. Set SUBSCRIPTION_SLOT_GENERATOR_DISABLED=true to skip.
+const _shutdownHooks: Array<() => void> = [];
 (async () => {
   if (process.env.SUBSCRIPTION_SLOT_GENERATOR_DISABLED === "true") {
     logger.info("subscription-slot-generator disabled via SUBSCRIPTION_SLOT_GENERATOR_DISABLED");
@@ -130,7 +131,6 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   logger.info("subscription-slot-generator worker started");
 })();
 
-const _shutdownHooks: Array<() => void> = [];
 (async () => {
   if (process.env.OUTBOX_RELAY_DISABLED === "true") {
     logger.info("outbox-relay disabled via OUTBOX_RELAY_DISABLED");

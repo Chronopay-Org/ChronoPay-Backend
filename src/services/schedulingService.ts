@@ -358,6 +358,13 @@ export class SchedulingService {
   }
 
   releaseSlot(slotId: string): void {
+    // Best-effort: callers are cancellation/refund/no-show paths, which must not
+    // fail because the slot row is absent (an intent seeded directly in a test,
+    // or a slot already purged). PgSlotRepository UPDATEs zero rows silently, so
+    // this keeps the in-memory implementation consistent with it.
+    if (!this.slotRepository.findById(slotId)) {
+      return;
+    }
     this.slotRepository.updateBookable(slotId, true);
   }
 

@@ -19,6 +19,7 @@ import { validateBody } from "../middleware/validation.js";
 import { antiFraudScoring, captureRequestBody } from "../middleware/fraudScoring.js";
 import {
   CreateBookingIntentBodySchema,
+  type CreateBookingIntentBody,
 } from "../middleware/schemas.js";
 import {
   BookingIntentService,
@@ -92,17 +93,37 @@ export function createBookingIntentsRouter(
       try {
         const input = req.body as CreateBookingIntentBody;
         if (input.rrule !== undefined) {
-          const report = await bookingIntentService.createRecurringIntents(input, req.auth!);
+          const report = await bookingIntentService.createRecurringIntents(
+            {
+              rrule: input.rrule,
+              note: input.note,
+              bookingType: input.bookingType,
+              holdDeadlineMs: input.holdDeadlineMs,
+            },
+            req.auth!,
+          );
           res.status(201).json({
             success: true,
             report,
           });
-        } else {
-          const intent = await bookingIntentService.createIntent(input, req.auth!);
+        } else if (input.slotId !== undefined) {
+          const intent = await bookingIntentService.createIntent(
+            {
+              slotId: input.slotId,
+              note: input.note,
+              bookingType: input.bookingType,
+              holdDeadlineMs: input.holdDeadlineMs,
+            },
+            req.auth!,
+          );
           res.status(201).json({
             success: true,
             intent,
           });
+        } else {
+          // The schema requires one of slotId/rrule; keep the contract explicit
+          // for callers that bypass body validation.
+          throw new BookingIntentError(400, "slotId is required when rrule is not provided.");
         }
       } catch (error) {
         handleServiceError(error, res);
@@ -212,6 +233,33 @@ export function createBookingIntentsRouter(
         res.status(200).json({
           success: true,
           refund,
+        });
+      } catch (error) {
+        handleServiceError(error, res);
+      }
+    },
+  );
+
+  router.post(
+    "/:id/no-show",
+    requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    requireAuthenticatedActor(["professional", "admin"]),
+    createAuthAwareRateLimiter(),
+    auditMiddleware("MARK_NO_SHOW"),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+        const forfeitRatio =
+          typeof req.body?.forfeitRatio === "number" ? req.body.forfeitRatio : undefined;
+
+        const result = await bookingIntentService.markNoShow(req.params.id, req.auth!, {
+          reason,
+          forfeitRatio,
+        });
+
+        res.status(200).json({
+          success: true,
+          result,
         });
       } catch (error) {
         handleServiceError(error, res);

@@ -31,6 +31,7 @@ import {
   HoldFeePolicyRegistry,
 } from "../../services/holdFeePolicy.js";
 import { CheckoutSessionService } from "../../services/checkout.js";
+import { writeReputationScore } from "../../services/reputationWriteAudit.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -384,6 +385,47 @@ export class BookingIntentService {
 
     const policy = new CancellationPolicyService();
     return policy.calculateRefund(intent);
+  }
+
+  /**
+   * Read-only hold state for a single intent, backing GET /:id/hold-status so
+   * clients can poll a refundable hold without refetching the whole intent.
+   *
+   * Applies the same ownership rule as cancelIntent: only the intent owner or
+   * an admin may read it.
+   */
+  getHoldStatus(intentId: string, actor: AuthContext): {
+    intentId: string;
+    bookingType: BookingIntentRecord["bookingType"];
+    status: BookingIntentRecord["status"];
+    isRefundableHold: boolean;
+    holdUntilMs: number | undefined;
+    holdPlacedAt: string | undefined;
+    refundableNow: boolean;
+    refundAmountCents: number;
+  } {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+      throw new BookingIntentError(403, "You are not authorized to view this booking intent.");
+    }
+
+    const isRefundableHold = intent.bookingType === "refundable_hold";
+    const refundableNow = isRefundableHold && intent.status === "hold_placed";
+
+    return {
+      intentId: intent.id,
+      bookingType: intent.bookingType,
+      status: intent.status,
+      isRefundableHold,
+      holdUntilMs: intent.holdUntilMs,
+      holdPlacedAt: intent.holdPlacedAt,
+      refundableNow,
+      refundAmountCents: refundableNow ? this.resolveIntentPrice(intent) : 0,
+    };
   }
 
   refundIntent(
