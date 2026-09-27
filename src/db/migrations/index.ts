@@ -21,6 +21,7 @@ import { migration as migration011 } from "./011_create_refund_entries_table.js"
 import { migration as migration011 } from "./011_add_slot_valid_until.js";
 import { migration as migration011 } from "./011_create_outbox_table.js";
 import { migration as migration012 } from "./012_create_redemption_ledger.js";
+import { migration as migration020 } from "./020_create_escrow_holdings_table.js";
 
 export const migrations: Migration[] = [
   migration001,
@@ -41,6 +42,7 @@ export const migrations: Migration[] = [
   migration016,
   migration017,
   migration018,
+  migration020,
 ];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────
