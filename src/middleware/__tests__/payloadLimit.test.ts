@@ -32,13 +32,19 @@ describe("payload limit middleware", () => {
   describe("size string validation", () => {
     it("validates size string format at middleware load time", () => {
       expect(() => payloadLimit("invalid")).toThrow(
-        "payloadLimit: invalid size string \"invalid\""
+        "payloadLimit: invalid size string \"invalid\"",
       );
       expect(() => payloadLimit("123")).toThrow(
-        "payloadLimit: invalid size string"
+        "payloadLimit: invalid size string",
       );
       expect(() => payloadLimit("kb")).toThrow(
-        "payloadLimit: invalid size string"
+        "payloadLimit: invalid size string",
+      );
+      expect(() => payloadLimit("   ")).toThrow(
+        "payloadLimit: invalid size string",
+      );
+      expect(() => payloadLimit("")).toThrow(
+        "payloadLimit: invalid size string",
       );
     });
 
@@ -46,6 +52,7 @@ describe("payload limit middleware", () => {
       expect(() => payloadLimit("16kb")).not.toThrow();
       expect(() => payloadLimit("1mb")).not.toThrow();
       expect(() => payloadLimit("100b")).not.toThrow();
+      expect(() => payloadLimit(" 16kb ")).not.toThrow();
     });
   });
 
@@ -178,7 +185,7 @@ describe("payload limit middleware", () => {
   });
 
   describe("payload size limits", () => {
-    it("rejects payloads exceeding per-route limit with 413", async () => {
+    it("rejects payloads exceeding per-route limit with the normalized 413 envelope", async () => {
       const app = express();
       app.use("/limited", ...payloadLimit("1kb"));
       app.use(
@@ -214,14 +221,14 @@ describe("payload limit middleware", () => {
         .send(largePayload);
 
       expect(res.status).toBe(413);
-      expect(res.body).toMatchObject({
+      expect(res.body).toEqual({
         success: false,
         code: "PAYLOAD_TOO_LARGE",
-        error: expect.stringContaining("exceeds the 1kb limit"),
+        error: "Request body exceeds the 1kb limit for this endpoint.",
       });
     });
 
-    it("accepts payloads within the per-route limit", async () => {
+    it("accepts payloads within the per-route limit and exact boundary is deterministic", async () => {
       const app = express();
       app.use("/limited", ...payloadLimit("1kb"));
       app.use(
