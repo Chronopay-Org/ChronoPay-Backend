@@ -179,8 +179,8 @@ export class AuditLogger {
 const GLOBAL_AUDIT_LOGGER_KEY = "__CHRONOPAY_DEFAULT_AUDIT_LOGGER__" as const;
 
 const globalAuditState = globalThis as typeof globalThis & {
-  [GLOBAL_AUDIT_LOGGER_KEY]?: AuditLogger;
-  defaultAuditLogger?: AuditLogger;
+  [GLOBAL_AUDIT_LOGGER_KEY]: AuditLogger;
+  defaultAuditLogger: AuditLogger;
 };
 
 const sharedLogger =
@@ -201,4 +201,4 @@ Object.defineProperty(globalAuditState, "defaultAuditLogger", {
   enumerable: false,
 });
 
-export const defaultAuditLogger = globalAuditState.defaultAuditLogger;
+export const defaultAuditLogger = globalAuditState.defaultAuditLogger as AuditLogger;

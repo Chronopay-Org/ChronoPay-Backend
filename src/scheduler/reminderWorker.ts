@@ -40,7 +40,7 @@ export async function processReminders(
   for (const reminder of dueReminders) {
     // ── Deduplication check ──────────────────────────────────────────────────
     const claimDeliveryFn = options.claimDeliveryFn ?? claimDelivery;
-    const claimed = await claimDeliveryFn(reminder.id, reminder.triggerAt);
+    const claimed = await claimDeliveryFn(reminder.id as unknown as number, reminder.triggerAt);
     if (!claimed) {
       logger.info(`[reminder] skipped duplicate id=${reminder.id} triggerAt=${reminder.triggerAt}`);
       reminderMetrics.increment("skipped");

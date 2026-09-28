@@ -285,6 +285,17 @@ function parseStringList(rawValue: string | undefined): string[] {
   return rawValue.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
+function parseUrlList(rawValue: string | undefined, key: string, issues: string[]): string[] {
+  if (rawValue === undefined) return [];
+  return rawValue.split(",").map((s) => s.trim()).filter((s) => s.length > 0).map((s) => {
+    if (!/^https?:\/\//.test(s)) {
+      issues.push(`${key} must use http or https scheme.`);
+      return "";
+    }
+    return s;
+  }).filter((s) => s.length > 0);
+}
+
 function parseOptionalUrl(rawValue: string | undefined, key: string, issues: string[]): string | undefined {
   if (rawValue === undefined) return undefined;
   const value = rawValue.trim();

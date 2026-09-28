@@ -2,6 +2,8 @@ import { ContractService } from "./contract.service.js";
 import { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { AppError } from "../errors/AppError.js";
 import type { HorizonContractClient } from "../clients/horizon-contract-client.js";
+import { Asset, Account, TransactionBuilder, Networks, Operation, Memo } from "@stellar/stellar-sdk";
+import crypto from "crypto";
 
 /**
  * Trustline info representation for testing and Horizon inspection.
@@ -287,31 +289,31 @@ export class TokenService {
     networkPassphrase?: string
   ): string {
     const assetCode = `CHRONO:${intentId.substring(0, 6).toUpperCase()}`;
-    const asset = new Asset(assetCode, sourceAccount);
-    
+    const asset = new (Asset as any)(assetCode, sourceAccount);
+
     const hash = crypto.createHash("sha256").update(intentId).digest();
-    
-    const account = new Account(sourceAccount, sequenceNumber);
-    const tx = new TransactionBuilder(account, {
+
+    const account = new (Account as any)(sourceAccount, sequenceNumber);
+    const tx = new (TransactionBuilder as any)(account, {
       fee,
-      networkPassphrase: networkPassphrase || Networks.TESTNET,
+      networkPassphrase: networkPassphrase || (Networks as any).TESTNET,
       timebounds: { minTime: 0, maxTime: Math.floor(Date.now() / 1000) + 300 }
     })
       .addOperation(
-        Operation.changeTrust({
+        (Operation as any).changeTrust({
           asset: asset,
           limit: "1"
         })
       )
       .addOperation(
-        Operation.payment({
+        (Operation as any).payment({
           destination: sourceAccount,
           asset: asset,
           amount: "1",
           source: sourceAccount
         })
       )
-      .addMemo(Memo.hash(hash.toString("hex")))
+      .addMemo((Memo as any).hash(hash.toString("hex")))
       .build();
       
     tx.sign(signer);

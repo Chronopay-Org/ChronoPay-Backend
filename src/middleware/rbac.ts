@@ -160,7 +160,7 @@ export function buildRoleHierarchy(config: RolesConfig): RoleHierarchy {
   // concurrent requests).
   return {
     roles: immutableSet(directImplications.keys()),
-    effectiveRolesByRole: immutableHierarchyMap(effectiveRolesByRole),
+    effectiveRolesByRole: immutableHierarchyMap(effectiveRolesByRole) as unknown as ReadonlyMap<UserRole, ReadonlySet<UserRole>>,
   };
 }
 

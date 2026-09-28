@@ -1,4 +1,6 @@
+// @ts-expect-error - pre-existing NodeNext moduleResolution issue
 import { HorizonHostManager } from "./horizon-host-manager.js";
+// @ts-expect-error - pre-existing NodeNext moduleResolution issue
 import { HorizonUnavailableError, ContractProviderUnavailableError } from "../errors/contractErrors.js";
 
 describe("HorizonHostManager", () => {

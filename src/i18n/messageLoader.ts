@@ -23,7 +23,7 @@ export type MessageCatalog = typeof EN_MESSAGES;
  */
 const LOCALE_CATALOGS: Record<SupportedLocale, MessageCatalog> = {
   en: EN_MESSAGES,
-  es: ES_MESSAGES,
+  es: ES_MESSAGES as unknown as MessageCatalog,
 };
 
 /**

@@ -104,14 +104,14 @@ describe("BookingIntentService", () => {
     });
 
     it("captures fxRateSnapshot when slot has currency and buyerCurrency is provided", async () => {
-      const mockFxProvider = { getRate: jest.fn().mockResolvedValue(1.5) } as any;
+      const mockFxProvider = { getRate: (jest.fn<() => Promise<any>>() as any).mockResolvedValue(1.5) };
       const serviceWithFx = new BookingIntentService(mockRepo, mockSlotRepo, () => "2026-01-01T00:00:00.000Z", () => 1234567890, undefined, undefined, mockFxProvider);
       
       const slotWithCurrency = { ...slot, currency: "USD" as any, amount_minor: 1000 };
       mockSlotRepo.findById.mockReturnValue(slotWithCurrency);
       mockRepo.findBySlotIdAndCustomer.mockReturnValue(undefined);
       mockRepo.findBySlotId.mockReturnValue(undefined);
-      mockRepo.create.mockResolvedValue({ id: "intent-1" } as any);
+      (mockRepo.create as any).mockResolvedValue({ id: "intent-1" });
 
       await serviceWithFx.createIntent({ ...input, buyerCurrency: "EUR" as any }, actor);
 

@@ -10,9 +10,9 @@ import {
 } from "../utils/totp.js";
 import { encryptTotpSecret, decryptTotpSecret } from "./mfaCrypto.js";
 import {
-  getMfaRepository,
-  type MfaRepository,
-} from "../repositories/mfaRepository.js";
+  MfaRepository,
+} from "../models/mfaEnrollment.js";
+import { getMfaRepository } from "../repositories/mfaRepository.js";
 import { signJwt, verifyJwtWithKey } from "../utils/jwt.js";
 import {
   MfaAlreadyEnrolledError,
