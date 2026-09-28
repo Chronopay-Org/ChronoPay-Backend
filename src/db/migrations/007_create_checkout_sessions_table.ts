@@ -12,7 +12,7 @@ import { Migration } from "../migrationRunner.js";
  *  - Index on `expires_at` supports efficient TTL-based cleanup queries.
  */
 export const migration: Migration = {
-  id: "008",
+  id: "007b",
   name: "create_checkout_sessions_table",
 
   async up(client: PoolClient): Promise<void> {

@@ -24,7 +24,7 @@ import { Migration } from "../migrationRunner.js";
  * and would reject valid creates for slots whose previous intent is done.
  */
 export const migration: Migration = {
-  id: "019",
+  id: "020",
   name: "add_active_booking_intent_unique_idx",
 
   async up(client: PoolClient): Promise<void> {

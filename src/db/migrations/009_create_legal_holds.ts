@@ -2,7 +2,7 @@ import { PoolClient } from "pg";
 import { Migration } from "../migrationRunner.js";
 
 export const migration: Migration = {
-  id: "011",
+  id: "009",
   name: "create_legal_holds",
 
   async up(client: PoolClient): Promise<void> {
