@@ -9,9 +9,13 @@
  * Coverage map:
  *  - Migration contract: order-preserving up/down execution, id/name recorded.
  *  - MigrationStatus: applied vs pending projection with applied_at.
- *  - MigrationResult: success/applied/failed/error on both up() and down().
+ *  - MigrationResult: success/applied/failed/error on both up() and down(),
+ *    plus the exact success-result key shape (error/failed omitted on success).
  *  - validate(): invalid inputs (duplicate IDs, empty id/name, missing up/down).
- *  - State transitions: pending → applied → rolled back; stop-on-first-failure.
+ *  - State transitions: pending → applied → rolled back; stop-on-first-failure;
+ *    count boundaries (0, partial, remainder on retry) for both directions.
+ *  - Transaction atomicity: schema change and tracking record commit or roll
+ *    back together; rollback events observed via an injected spy helper.
  */
 
 import { describe, it, expect, jest, beforeEach } from "@jest/globals";
@@ -275,6 +279,131 @@ describe("MigrationRunner.up()", () => {
     await expect(runner.up()).rejects.toThrow("cannot reach db");
     expect(m1.upCalls).toHaveLength(0);
   });
+
+  it("applies nothing when count is 0 (no transactions opened)", async () => {
+    const m1 = makeMigration("001");
+    const transact = jest.fn(passthroughTransact);
+    const { runner } = makeRunner([m1], [], transact);
+
+    const result = await runner.up(0);
+
+    expect(result).toEqual({ success: true, applied: [] });
+    expect(m1.upCalls).toHaveLength(0);
+    expect(transact).not.toHaveBeenCalled();
+  });
+
+  it("omits failed/error keys from the result on success", async () => {
+    const { runner } = makeRunner([makeMigration("001")]);
+
+    const result = await runner.up();
+
+    expect(result.success).toBe(true);
+    expect(result).not.toHaveProperty("failed");
+    expect(result).not.toHaveProperty("error");
+  });
+});
+
+// ─── Transaction atomicity (via injected spying transact) ───────────────────
+
+describe("MigrationRunner transaction behavior", () => {
+  /** Minimal begin/commit/rollback recording transact with a sentinel client. */
+  function makeTransactionalHarness() {
+    const events: string[] = [];
+    const txClient = { query: jest.fn() } as unknown as PoolClient;
+    const transact = jest.fn(
+      async (fn: (client: PoolClient) => Promise<unknown>): Promise<unknown> => {
+        events.push("begin");
+        try {
+          const out = await fn(txClient);
+          events.push("commit");
+          return out;
+        } catch (err) {
+          events.push("rollback");
+          throw err;
+        }
+      },
+    );
+    return { events, transact, txClient };
+  }
+
+  it("wraps each up() in begin/commit and rolls back when up() throws", async () => {
+    const { events, transact, txClient } = makeTransactionalHarness();
+    const upCalls: PoolClient[] = [];
+    const m1: Migration = {
+      ...makeMigration("001"),
+      up: async (client: PoolClient) => {
+        upCalls.push(client);
+      },
+    };
+    const m2: Migration = {
+      ...makeMigration("002"),
+      up: async () => {
+        events.push("up:002");
+        throw new Error("boom 002");
+      },
+    };
+    const { repo } = makeRepo();
+    const runner = new MigrationRunner({} as never, repo, [m1, m2], transact as never);
+
+    const result = await runner.up();
+
+    expect(result.success).toBe(false);
+    expect(result.failed).toBe("002");
+    expect(events).toEqual([
+      "begin", "commit",
+      "begin", "up:002", "rollback",
+    ]);
+    // The migration body received the transaction client.
+    expect(upCalls).toEqual([txClient]);
+  });
+
+  it("rolls back the tracking-record write together with the schema change on failure", async () => {
+    const { events, transact } = makeTransactionalHarness();
+    const m1 = makeMigration("001");
+    const { repo } = makeRepo();
+    // Fail only the in-transaction tracking insert; up() itself succeeded.
+    // Overriding the repo-level method (not the calls mock) matters here: the
+    // runner awaits this function, so the rejection is routed through the
+    // transaction instead of escaping as an unhandled rejection.
+    repo.recordMigration = async () => {
+      events.push("record:001");
+      throw new Error("duplicate key");
+    };
+    const runner = new MigrationRunner({} as never, repo, [m1], transact as never);
+
+    const result = await runner.up();
+
+    expect(result.success).toBe(false);
+    expect(result.failed).toBe("001");
+    // recordMigration ran inside the transaction and its failure forced a rollback.
+    expect(events).toEqual(["begin", "record:001", "rollback"]);
+    expect(m1.upCalls).toHaveLength(1);
+  });
+
+  it("rolls back when down() fails, keeping the tracking record intact", async () => {
+    const { events, transact } = makeTransactionalHarness();
+    const m1 = makeMigration("001");
+    const { repo } = makeRepo([appliedRecord("001", "migration_001")]);
+    const m1WithFailingDown: Migration = {
+      ...m1,
+      down: async () => {
+        events.push("down:001");
+        throw new Error("cannot drop table");
+      },
+    };
+    const runner = new MigrationRunner(
+      {} as never,
+      repo,
+      [m1WithFailingDown],
+      transact as never,
+    );
+
+    const result = await runner.down();
+
+    expect(result.success).toBe(false);
+    expect(result.failed).toBe("001");
+    expect(events).toEqual(["begin", "down:001", "rollback"]);
+  });
 });
 
 describe("MigrationRunner.down()", () => {
@@ -389,6 +518,48 @@ describe("MigrationRunner.down()", () => {
     expect(result.failed).toBe("001");
     expect(m1.downCalls).toHaveLength(1);
   });
+
+  it("wraps non-Error thrown values into an Error for the result", async () => {
+    const m1: Migration = {
+      ...makeMigration("001"),
+      down: async () => {
+        throw 42;
+      },
+    };
+    const { runner } = makeRunner([m1], [appliedRecord("001", "migration_001")]);
+
+    const result = await runner.down();
+
+    expect(result.success).toBe(false);
+    expect(result.failed).toBe("001");
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error?.message).toBe("42");
+  });
+
+  it("opens no transaction when nothing is applied (no-op down)", async () => {
+    const m1 = makeMigration("001");
+    const transact = jest.fn(passthroughTransact);
+    const { runner } = makeRunner([m1], [], transact);
+
+    const result = await runner.down();
+
+    expect(result).toEqual({ success: true, applied: [] });
+    expect(m1.downCalls).toHaveLength(0);
+    expect(transact).not.toHaveBeenCalled();
+  });
+
+  it("rolls back nothing when count is 0", async () => {
+    const m1 = makeMigration("001");
+    const { repo } = makeRepo([appliedRecord("001", "migration_001")]);
+    const transact = jest.fn(passthroughTransact);
+    const runner = new MigrationRunner({} as never, repo, [m1], transact as never);
+
+    const result = await runner.down(0);
+
+    expect(result).toEqual({ success: true, applied: [] });
+    expect(m1.downCalls).toHaveLength(0);
+    expect(transact).not.toHaveBeenCalled();
+  });
 });
 
 // ─── MigrationStatus projection ──────────────────────────────────────────────
@@ -444,6 +615,18 @@ describe("MigrationRunner.status()", () => {
     await runner.status();
 
     expect(calls.ensureMigrationsTable).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores tracking rows for migration ids that are no longer registered", async () => {
+    const m1 = makeMigration("001");
+    const { runner } = makeRunner(
+      [m1],
+      [appliedRecord("001", "migration_001"), appliedRecord("999", "legacy_row")],
+    );
+
+    const statuses = await runner.status();
+
+    expect(statuses.map((s) => s.id)).toEqual(["001"]);
   });
 });
 
