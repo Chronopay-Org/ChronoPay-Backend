@@ -289,7 +289,7 @@ describe("RBAC role hierarchy", () => {
     };
     const result = middleware(req as any, res as any, () => {
       throw new Error("next should not be called");
-    });
+    }) as any;
     expect(result.s).toBe(500);
   });
 

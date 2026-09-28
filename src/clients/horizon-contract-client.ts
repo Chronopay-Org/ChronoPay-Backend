@@ -13,8 +13,6 @@ import { timeoutConfig } from "../config/timeouts.js";
 import { validateFeeBumpTransaction } from "./fee-bump-validator.js";
 import { CursorStore, InMemoryCursorStore } from "./cursor-store.js";
 import {
-  computeRateLimitDelay,
-  isRateLimitError,
   DEFAULT_RATE_LIMIT_RETRY_CONFIG,
   RateLimitRetryConfig,
 } from "../utils/retry-policy.js";

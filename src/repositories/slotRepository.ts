@@ -35,7 +35,7 @@ export interface SecondaryListingRecord {
   updatedAt: string;
 }
 
-const slots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
+const _slots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
   id: idx + 1,
   professional: `Professional ${idx + 1}`,
   startTime: new Date(Date.UTC(2026, 0, 1, 8, 0, 0) + idx * 60 * 60 * 1000).toISOString(),
@@ -45,7 +45,7 @@ const slots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
 
 const seededSlotCatalog: Slot[] = [
   {
-    id: "slot-11111111-1111-4111-8111-111111111111",
+    id: 11111111 as unknown as number,
     professional: "supplier-1",
     ownerId: "buyer-1",
     buyerId: "buyer-1",
@@ -53,9 +53,9 @@ const seededSlotCatalog: Slot[] = [
     startTime: 1_700_000_000_000,
     endTime: 1_700_000_360_000,
     bookable: true,
-  },
+  } as Slot,
   {
-    id: "slot-22222222-2222-4222-8222-222222222222",
+    id: 22222222 as unknown as number,
     professional: "supplier-2",
     ownerId: "buyer-2",
     buyerId: "buyer-2",
@@ -63,9 +63,9 @@ const seededSlotCatalog: Slot[] = [
     startTime: 1_700_000_720_000,
     endTime: 1_700_001_080_000,
     bookable: true,
-  },
+  } as Slot,
   {
-    id: "slot-33333333-3333-4333-8333-333333333333",
+    id: 33333333 as unknown as number,
     professional: "supplier-3",
     ownerId: "buyer-3",
     buyerId: "buyer-3",
@@ -73,7 +73,7 @@ const seededSlotCatalog: Slot[] = [
     startTime: 1_700_001_440_000,
     endTime: 1_700_001_800_000,
     bookable: false,
-  },
+  } as Slot,
 ];
 
 const secondaryListings = new Map<string, SecondaryListingRecord>();

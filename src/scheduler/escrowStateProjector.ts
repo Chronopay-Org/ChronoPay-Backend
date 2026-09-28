@@ -142,6 +142,11 @@ const STATUS_TRANSITIONS: Record<
   hold_refunded: [],
   cancelled: [],
   expired: [],
+  escrow_held: [],
+  escrow_released: [],
+  escrow_refunded: [],
+  escrow_disputed: [],
+  no_show: [],
 };
 
 export class EscrowStateProjector {

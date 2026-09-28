@@ -231,7 +231,7 @@ export class SubscriptionService {
   }
 
   deactivateProduct(productId: string): SubscriptionProductRecord {
-    const product = this.getProduct(productId);
+    const _product = this.getProduct(productId);
     return this.productRepo.update(productId, { active: false });
   }
 

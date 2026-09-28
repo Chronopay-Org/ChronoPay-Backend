@@ -4,6 +4,7 @@ import { getFraudDriftDetector } from "./services/fraudDriftDetector.js";
 import { escrowMigrationState } from "./services/escrowMigrationState.js";
 import { logger } from "./utils/logger.js";
 
+const _shutdownHooks: Array<() => void> = [];
 const config = loadEnvConfig();
 
 // Validate pinned escrow contract hash on startup
@@ -130,7 +131,6 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   logger.info("subscription-slot-generator worker started");
 })();
 
-const _shutdownHooks: Array<() => void> = [];
 (async () => {
   if (process.env.OUTBOX_RELAY_DISABLED === "true") {
     logger.info("outbox-relay disabled via OUTBOX_RELAY_DISABLED");

@@ -171,7 +171,7 @@ describe("RetryPolicy.executeWithRateLimit", () => {
 
     const rlError = Object.assign(new Error("rate limit exceeded"), { statusCode: 429 });
     const fn = jest.fn<() => Promise<string>>();
-    (fn as jest.Mock)
+    (fn as any)
       .mockRejectedValueOnce(rlError)
       .mockRejectedValueOnce(rlError)
       .mockResolvedValueOnce("ok");
@@ -192,7 +192,7 @@ describe("RetryPolicy.executeWithRateLimit", () => {
 
     const rlError = Object.assign(new Error("rate limit exceeded"), { statusCode: 429 });
     const fn = jest.fn<() => Promise<string>>();
-    (fn as jest.Mock)
+    (fn as any)
       .mockRejectedValueOnce(rlError)
       .mockResolvedValueOnce("ok");
 
@@ -216,7 +216,7 @@ describe("RetryPolicy.executeWithRateLimit", () => {
 
     const rlError = Object.assign(new Error("rate limit exceeded"), { statusCode: 429 });
     const fn = jest.fn<() => Promise<string>>();
-    (fn as jest.Mock)
+    (fn as any)
       .mockRejectedValueOnce(rlError)
       .mockResolvedValueOnce("ok");
 
@@ -237,7 +237,7 @@ describe("RetryPolicy.executeWithRateLimit", () => {
     const policy = new RetryPolicy({ maxRetries: 0, useJitter: false, initialDelay: 0 });
 
     const rlError = Object.assign(new Error("rate limit exceeded"), { statusCode: 429 });
-    const fn = jest.fn<() => Promise<never>>().mockRejectedValue(rlError);
+    const fn = jest.fn<() => Promise<never>>().mockRejectedValue(rlError as any);
 
     await expect(
       policy.executeWithRateLimit(fn as () => Promise<never>, {
@@ -263,7 +263,7 @@ describe("RetryPolicy.executeWithRateLimit", () => {
 
     const networkError = new Error("network reset");
     const fn = jest.fn<() => Promise<string>>();
-    (fn as jest.Mock)
+    (fn as any)
       .mockRejectedValueOnce(networkError)
       .mockResolvedValueOnce("ok");
 

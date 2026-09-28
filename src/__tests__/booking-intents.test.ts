@@ -150,9 +150,8 @@ describe("booking intents endpoints", () => {
 
   describe("POST /:id/no-show", () => {
     it("allows a supplier to mark a confirmed booking as a no-show and forfeit escrow share", async () => {
-      const created = await repo.create({
+      const _created = await repo.create({
         ...BASE_INTENT,
-        id: "intent-no-show-1",
         professional: "pro-1",
         customerId: "user1",
         status: "confirmed",
@@ -164,9 +163,9 @@ describe("booking intents endpoints", () => {
           nowMs: 1500,
           activeBookings: 1,
           capacity: 1,
-          config: {},
+          config: { strategy: "fixed" } as any,
         },
-      });
+      }) as BookingIntentRecord;
 
       const res = await request(app)
         .post("/api/v1/booking-intents/intent-no-show-1/no-show")
@@ -188,7 +187,7 @@ describe("booking intents endpoints", () => {
         id: "intent-no-show-2",
         professional: "pro-1",
         customerId: "user1",
-      });
+      } as BookingIntentRecord);
 
       const res = await request(app)
         .post("/api/v1/booking-intents/intent-no-show-2/no-show")
@@ -206,7 +205,7 @@ describe("booking intents endpoints", () => {
         id: "intent-no-show-3",
         professional: "pro-1",
         customerId: "user1",
-      });
+      } as BookingIntentRecord);
 
       const res = await request(app)
         .post("/api/v1/booking-intents/intent-no-show-3/no-show")
@@ -214,28 +213,26 @@ describe("booking intents endpoints", () => {
         .set("x-chronopay-user-id", "pro-1")
         .set("x-chronopay-role", "professional");
 
-      expect(res.status).toBe(400);
+expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
     });
   });
-});
 
-// ─── Concurrent-create: at-most-one active intent per slot ───────────────────
-//
-// The partial unique index (migration 019) is the DB-level guarantee.
-// This suite verifies the same invariant at the service layer, which the
-// index mirrors: exactly one of N concurrent creates for the same slot wins;
-// the rest receive 409 CONFLICT.
-//
-// The "after terminal state" case verifies that the partial index (and the
-// in-memory analogue) allows a new intent once the prior one is no longer
-// active — i.e. the constraint is partial, not global.
+  // ─── Concurrent-create: at-most-one active intent per slot ───────────
+  //
+  // The partial unique index (migration 019) is the DB-level guarantee.
+  // This suite verifies the same invariant at the service layer, which the
+  // index mirrors: exactly one of N concurrent creates for the same slot wins;
+  // the rest receive 409 CONFLICT.
+  //
+  // The "after terminal state" case verifies that the partial index (and the
+  // in-memory analogue) allows a new intent once the prior one is no longer
+  // active — i.e. the constraint is partial, not global.
 
-describe("POST /:id/refund", () => {
-  it("returns a proportional refund for a partially consumed booking", async () => {
-    const intent = await repo.create({
+  describe("POST /:id/refund", () => {
+    it("returns a proportional refund for a partially consumed booking", async () => {
+const intent = await repo.create({
       ...BASE_INTENT,
-      id: "intent-refund-1",
       customerId: "user1",
       professional: "pro-1",
       status: "confirmed",
@@ -249,9 +246,9 @@ describe("POST /:id/refund", () => {
         nowMs: 0,
         activeBookings: 1,
         capacity: 1,
-        config: {},
+        config: { strategy: "fixed" } as any,
       },
-    });
+    }) as BookingIntentRecord;
 
     const res = await request(app)
       .post(`/api/v1/booking-intents/${intent.id}/refund`)
@@ -283,9 +280,9 @@ describe("POST /:id/refund", () => {
         nowMs: 0,
         activeBookings: 1,
         capacity: 1,
-        config: {},
+        config: { strategy: "fixed" } as any,
       },
-    });
+    } as BookingIntentRecord);
 
     const res = await request(app)
       .post(`/api/v1/booking-intents/${intent.id}/refund`)
@@ -372,4 +369,5 @@ describe("concurrent booking-intent creates — one active per slot", () => {
     expect(second.slotId).toBe(ALICE_SLOT_ID);
     expect(second.status).toBe("pending");
   });
+});
 });

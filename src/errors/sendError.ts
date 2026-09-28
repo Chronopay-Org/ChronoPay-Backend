@@ -172,9 +172,9 @@ export function sendError(
     throw new Error(`Unknown error code: ${String(code)}`);
   }
   if (isPublicError(entry)) {
-    return sendPublicError(res, code, message, options);
+    return sendPublicError(res, code as PublicErrorCode, message, options);
   }
-  return sendInternalError(res, code, message, options);
+  return sendInternalError(res, code as InternalErrorCode, message, options);
 }
 
 /**
@@ -193,7 +193,7 @@ export function sendErrorResponse(res: Response, err: AppError, req?: Request): 
   if (req) {
     const requestId = req.requestId ?? req.id;
     if (requestId !== undefined) {
-      envelope.requestId = requestId;
+      envelope.requestId = requestId as string;
     }
   }
   return res.status(err.statusCode).json(envelope);

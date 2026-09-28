@@ -27,7 +27,6 @@ import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-ses
 import { query } from "../db/pool.js";
 import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
 import {
-  addSeniorArbiter,
   appendFinalityLink,
   canTransition,
   decideByMajority,
