@@ -1,4 +1,3 @@
-import { jest } from "@jest/globals";
 import {
   SubscriptionService,
   SubscriptionProductNotFoundError,
@@ -333,7 +332,7 @@ describe("SubscriptionService", () => {
 
     it("is idempotent across multiple runs", () => {
       const product = createTestProduct({ recurrenceRule: "FREQ=DAILY" });
-      const sub = service.subscribe({ productId: product.id, subscriberId: "user-1" });
+      const _sub = service.subscribe({ productId: product.id, subscriberId: "user-1" });
 
       // Run twice at the same time
       const result1 = service.generateSlotsForDueSubscriptions(Date.now() + 100_000);

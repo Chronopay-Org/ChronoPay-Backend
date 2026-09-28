@@ -35,7 +35,7 @@ export interface SecondaryListingRecord {
   updatedAt: string;
 }
 
-const slots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
+const _slots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
   id: idx + 1,
   professional: `Professional ${idx + 1}`,
   startTime: new Date(Date.UTC(2026, 0, 1, 8, 0, 0) + idx * 60 * 60 * 1000).toISOString(),
