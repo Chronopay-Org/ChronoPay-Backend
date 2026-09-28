@@ -14,7 +14,7 @@ describe("SubscriptionProductRepository", () => {
     repo = new InMemorySubscriptionProductRepository();
   });
 
-  function makeProduct(overrides: Partial<SubscriptionProductRecord> = {}): SubscriptionProductRecord {
+  function _makeProduct(overrides: Partial<SubscriptionProductRecord> = {}): SubscriptionProductRecord {
     return {
       id: "sp-test",
       name: "Weekly Yoga",

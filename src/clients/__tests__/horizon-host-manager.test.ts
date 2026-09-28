@@ -1,6 +1,5 @@
 import { HorizonHostManager } from "./horizon-host-manager.js";
-import { HorizonUnavailableError, ContractRateLimitError, ContractProviderUnavailableError } from "../errors/contractErrors.js";
-import { horizonHostHealth, horizonFailoverTotal } from "../metrics.js";
+import { HorizonUnavailableError } from "../errors/contractErrors.js";
 
 describe("HorizonHostManager", () => {
   beforeEach(() => {

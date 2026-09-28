@@ -1,6 +1,5 @@
+import { HorizonUnavailableError, shouldRetryContractError } from "../errors/contractErrors.js";
 import { horizonHostHealth, horizonFailoverTotal } from "../metrics.js";
-import { HorizonUnavailableError } from "../errors/contractErrors.js";
-import { shouldRetryContractError } from "../errors/contractErrors.js";
 
 const QUARANTINE_COOLDOWN_MS = 15000;
 const ERROR_WINDOW_MS = 10000;

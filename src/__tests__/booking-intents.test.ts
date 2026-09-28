@@ -150,7 +150,7 @@ describe("booking intents endpoints", () => {
 
   describe("POST /:id/no-show", () => {
     it("allows a supplier to mark a confirmed booking as a no-show and forfeit escrow share", async () => {
-      const created = await repo.create({
+      const _created = await repo.create({
         ...BASE_INTENT,
         id: "intent-no-show-1",
         professional: "pro-1",
