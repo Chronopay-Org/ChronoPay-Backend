@@ -404,10 +404,11 @@ export class CheckoutSessionService {
       );
 
       // Update session metadata with audit quote
-      const updatedMetadata: Record<string, string | number | boolean> = {
+      const updatedMetadata: Record<string, any> = {
         ...(session.metadata ?? {}),
         lastPartialRefundQuoteId: quote.quoteId,
         lastPartialRefundDestinationAmount: quote.destinationAmount,
+        lastPartialRefundQuote: quote,
       };
 
       const updatedSession = await _repo.updateSession(request.sessionId, {
