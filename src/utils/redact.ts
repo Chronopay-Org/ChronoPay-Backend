@@ -1,4 +1,6 @@
 // @ts-nocheck
+import { isFieldRedacted, getPolicyFields } from "./redactionPolicy.js";
+
 /**
  * Redaction Utility for Secure Logging
  *
@@ -99,7 +101,7 @@ const DEFAULT_MASK_PATTERN = (value: string): string => {
  * Reads from the current hot-reloadable policy.
  */
 const isSensitiveField = (fieldName: string): boolean => {
-  return policyIsFieldRedacted(fieldName);
+  return isFieldRedacted(fieldName);
 };
 
 /**
@@ -192,7 +194,7 @@ export const wouldBeRedacted = (fieldName: string): boolean => {
  * from the current hot-reloadable policy.
  */
 export const getSensitiveFields = (): string[] => {
-  return policyGetPolicyFields();
+  return getPolicyFields();
 };
 
 /**

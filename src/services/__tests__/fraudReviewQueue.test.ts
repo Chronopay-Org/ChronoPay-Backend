@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { jest } from '@jest/globals';
 import { fraudReviewQueue } from "../fraudReviewQueue";
 import { logger } from "../../utils/logger";
 

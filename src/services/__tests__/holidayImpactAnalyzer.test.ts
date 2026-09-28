@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import {
   expandRRule,
   HolidayImpactAnalyzer,
@@ -57,7 +58,7 @@ const HOLIDAYS: RegionalHoliday[] = [
 
 function makeAuditLogger() {
   return {
-    log: jest.fn().mockResolvedValue(undefined),
+    log: jest.fn(() => Promise.resolve()),
   } as unknown as AuditLogger;
 }
 
