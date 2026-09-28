@@ -1,5 +1,5 @@
 import { jest } from "@jest/globals";
-import express from "express";
+import express, { type Request } from "express";
 import request from "supertest";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
@@ -14,7 +14,7 @@ function appWithAdminTokenRoute() {
   return app;
 }
 
-function makeReq(overrides: Record<string, any> = {}) {
+function makeReq(overrides: Record<string, any> = {}): Request {
   return {
     header: (name: string) => overrides.header?.[name] ?? undefined,
     ip: overrides.ip ?? undefined,
@@ -23,14 +23,14 @@ function makeReq(overrides: Record<string, any> = {}) {
     method: overrides.method ?? "GET",
     requestId: overrides.requestId ?? undefined,
     id: overrides.id ?? undefined,
-  };
+  } as Request;
 }
 
 function makeRes(): any {
   const statuses: Record<number, { json: (j: unknown) => unknown }> = {};
   return {
     status: (s: number) => {
-      if (!statuses[s]) statuses[s] = { json: (j: unknown) => ({ ...j, _status: s }) };
+      if (!statuses[s]) statuses[s] = { json: (j: unknown) => ({ ...(j as object), _status: s }) };
       return statuses[s];
     },
     _statuses: statuses,
@@ -38,10 +38,10 @@ function makeRes(): any {
 }
 
 describe("requireAdminToken", () => {
-  let auditSpy: jest.SpiedFunction<typeof defaultAuditLogger.log>;
+  let auditSpy: ReturnType<typeof jest.spyOn>;
 
   beforeEach(() => {
-    auditSpy = jest.spyOn(defaultAuditLogger, "log").mockResolvedValue(undefined);
+    auditSpy = jest.spyOn(defaultAuditLogger!, "log").mockResolvedValue(undefined);
   });
 
   afterEach(() => {

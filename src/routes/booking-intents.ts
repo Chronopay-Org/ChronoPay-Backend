@@ -107,15 +107,15 @@ export function createBookingIntentsRouter(
     antiFraudScoring({ scorer: fraudScorer }),
     async (req: Request, res: Response): Promise<void> => {
       try {
-        const input = req.body as CreateBookingIntentBody;
-        if (input.rrule !== undefined) {
-          const report = await bookingIntentService.createRecurringIntents(input, req.auth!);
+        const input = req.body as unknown;
+        if (input && typeof input === "object" && "rrule" in input) {
+          const report = await bookingIntentService.createRecurringIntents(input as any, req.auth!);
           res.status(201).json({
             success: true,
             report,
           });
         } else {
-          const intent = await bookingIntentService.createIntent(input, req.auth!);
+          const intent = await bookingIntentService.createIntent(input as any, req.auth!);
           res.status(201).json({
             success: true,
             intent,
@@ -261,7 +261,7 @@ export function createBookingIntentsRouter(
     createAuthAwareRateLimiter(),
     (req: Request, res: Response): void => {
       try {
-        const status = bookingIntentService.getHoldStatus(req.params.id, req.auth!);
+        const status = (bookingIntentService as any).getHoldStatus(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           holdStatus: status,

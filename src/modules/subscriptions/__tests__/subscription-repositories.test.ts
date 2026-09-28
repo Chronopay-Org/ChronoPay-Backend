@@ -63,6 +63,7 @@ describe("SubscriptionProductRepository", () => {
   it("lists products by professional", () => {
     repo.create({
       name: "Product A",
+      description: "Desc A",
       professional: "alice",
       slotDurationMs: 3_600_000,
       recurrenceRule: "FREQ=DAILY",
@@ -74,6 +75,7 @@ describe("SubscriptionProductRepository", () => {
     });
     repo.create({
       name: "Product B",
+      description: "Desc B",
       professional: "bob",
       slotDurationMs: 3_600_000,
       recurrenceRule: "FREQ=DAILY",
@@ -92,6 +94,7 @@ describe("SubscriptionProductRepository", () => {
   it("lists only active products", () => {
     repo.create({
       name: "Active",
+      description: "Desc Active",
       professional: "alice",
       slotDurationMs: 3_600_000,
       recurrenceRule: "FREQ=DAILY",
@@ -103,6 +106,7 @@ describe("SubscriptionProductRepository", () => {
     });
     repo.create({
       name: "Inactive",
+      description: "Desc Inactive",
       professional: "alice",
       slotDurationMs: 3_600_000,
       recurrenceRule: "FREQ=DAILY",
@@ -121,6 +125,7 @@ describe("SubscriptionProductRepository", () => {
     it("updates a product", () => {
       const created = repo.create({
         name: "Original",
+        description: "Desc Original",
         professional: "alice",
         slotDurationMs: 3_600_000,
         recurrenceRule: "FREQ=DAILY",
@@ -145,6 +150,7 @@ describe("SubscriptionProductRepository", () => {
   it("deletes a product", () => {
     const created = repo.create({
       name: "ToDelete",
+      description: "Desc ToDelete",
       professional: "alice",
       slotDurationMs: 3_600_000,
       recurrenceRule: "FREQ=DAILY",
