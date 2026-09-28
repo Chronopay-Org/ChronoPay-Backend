@@ -47,20 +47,14 @@ export function createBookingIntentsRouter(
 
   function handleServiceError(error: unknown, res: Response): void {
     if (error instanceof BookingIntentError) {
-      res.status(error.status).json({
-        success: false,
-        error: error.message,
-        code: error.code,
-      });
+      // Emit the shared AppError envelope so every route answers with the
+      // same shape (success/code/message/error/timestamp).
+      res.status(error.status).json(error.toJSON());
       return;
     }
 
     if (isAppError(error)) {
-      res.status(error.statusCode).json({
-        success: false,
-        error: error.message,
-        code: error.code,
-      });
+      res.status(error.statusCode).json(error.toJSON());
       return;
     }
 

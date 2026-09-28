@@ -4,6 +4,8 @@ import type { SlotRepository } from "../slots/slot-repository.js";
 import type {
   BookingIntentRecord,
   BookingIntentRepository,
+  BookingIntentStatus,
+  BookingType,
   PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
@@ -18,7 +20,7 @@ import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
-import { resolvePrice } from "../../services/pricingStrategy.js";
+import { resolvePrice, type StrategyId } from "../../services/pricingStrategy.js";
 import {
   CancellationPolicyService,
   RefundBreakdown,
@@ -29,6 +31,7 @@ import {
   HoldFeePolicyService,
   createEmptyHoldFeeRegistry,
   HoldFeePolicyRegistry,
+  type HoldFeePolicy,
 } from "../../services/holdFeePolicy.js";
 import { CheckoutSessionService } from "../../services/checkout.js";
 import { writeReputationScore } from "../../services/reputationWriteAudit.js";
@@ -59,7 +62,7 @@ export interface AutoRefundResult {
 }
 
 export interface SupplierPolicies {
-  getHoldPolicy(professionalId: string): SupplierHoldPolicy;
+  getHoldPolicy(professionalId: string): HoldFeePolicy;
 }
 
 export class BookingIntentError extends AppError {
@@ -129,6 +132,24 @@ export class BookingIntentService {
 
   private captureHoldFeePolicySnapshot(professionalId: string) {
     return this.holdFeePolicyService.snapshotForSupplier(professionalId);
+  }
+
+  /**
+   * Frees a slot after a terminal intent transition (cancel, refund, no-show,
+   * expiry).
+   *
+   * `SchedulingService.releaseSlot` throws when the slot row is absent, which
+   * is the right contract for its direct callers. These transitions must not
+   * fail for that reason: the intent may have been seeded directly, or the
+   * slot already purged. Releasing an already-absent slot is a no-op, so the
+   * failure is swallowed and the transition still succeeds.
+   */
+  private releaseSlotBestEffort(slotId: string): void {
+    try {
+      this.schedulingService.releaseSlot(slotId);
+    } catch {
+      // Slot row already gone — nothing left to release.
+    }
   }
 
   async createIntent(
@@ -365,7 +386,7 @@ export class BookingIntentService {
 
     const updated = this.bookingIntentRepository.update(intentId, updates);
 
-    this.schedulingService.releaseSlot(intent.slotId);
+    this.releaseSlotBestEffort(intent.slotId);
 
     return updated;
   }
@@ -481,7 +502,7 @@ export class BookingIntentService {
       },
     });
 
-    this.schedulingService.releaseSlot(intent.slotId);
+    this.releaseSlotBestEffort(intent.slotId);
 
     return {
       intent: updated,
@@ -505,7 +526,7 @@ export class BookingIntentService {
 
     const updated = this.bookingIntentRepository.updateStatus(intentId, "expired");
 
-    this.schedulingService.releaseSlot(intent.slotId);
+    this.releaseSlotBestEffort(intent.slotId);
 
     return updated;
   }
@@ -532,7 +553,7 @@ export class BookingIntentService {
         refundReason: "hold_auto_refund",
       },
     });
-    this.schedulingService.releaseSlot(intent.slotId);
+    this.releaseSlotBestEffort(intent.slotId);
     return updated;
   }
 
@@ -586,7 +607,7 @@ export class BookingIntentService {
       status: "no_show",
     });
 
-    this.schedulingService.releaseSlot(intent.slotId);
+    this.releaseSlotBestEffort(intent.slotId);
 
     const scoreBefore = 0;
     const scoreAfter = -1;

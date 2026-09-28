@@ -17,54 +17,17 @@ import { isFieldRedacted, getPolicyFields } from "./redactionPolicy.js";
  */
 
 /**
- * Sensitive field names that should be redacted
- * Includes common variations and case-insensitive matches
+ * PII field names that are always redacted, on top of whatever the
+ * hot-reloadable policy in redactionPolicy.ts currently contains.
+ *
+ * Secret/credential field names (passwords, tokens, API keys) come from the
+ * policy alone, so an admin reload can add or drop them. PII is deliberately
+ * not part of that contract: an admin policy reload must never be able to
+ * un-redact personal data, so these names are applied as a fixed overlay.
+ *
+ * Includes common variations; matching is case-insensitive.
  */
-const _SENSITIVE_FIELDS = new Set([
-  "password",
-  "secret",
-  "token",
-  "apikey",
-  "api_key",
-  "authorization",
-  "cookie",
-  "session",
-  "privatekey",
-  "private_key",
-  "accesstoken",
-  "access_token",
-  "refreshtoken",
-  "refresh_token",
-  "bearer",
-  "x-api-key",
-  "api-key",
-  "app_secret",
-  "appsecret",
-  "client_secret",
-  "clientsecret",
-  "signing_key",
-  "signingkey",
-  "hmac",
-  "jwt",
-  "aws_secret",
-  "awssecret",
-  "database_url",
-  "databaseurl",
-  "db_password",
-  "dbpassword",
-  "encryption_key",
-  "encryptionkey",
-  "webhook_secret",
-  "webhooksecret",
-  "oauth_token",
-  "oauthtoken",
-  "auth_code",
-  "authcode",
-  "cardtoken",
-  "card_token",
-  "tracking_token",
-  "trackingtoken",
-  // PII fields
+const _PII_FIELDS = new Set([
   "email",
   "phone",
   "ssn",
@@ -101,7 +64,8 @@ const DEFAULT_MASK_PATTERN = (value: string): string => {
  * Reads from the current hot-reloadable policy.
  */
 const isSensitiveField = (fieldName: string): boolean => {
-  return isFieldRedacted(fieldName);
+  const normalized = fieldName.toLowerCase();
+  return _PII_FIELDS.has(normalized) || isFieldRedacted(normalized);
 };
 
 /**
@@ -190,8 +154,8 @@ export const wouldBeRedacted = (fieldName: string): boolean => {
 };
 
 /**
- * Gets the list of all recognized sensitive field names
- * from the current hot-reloadable policy.
+ * Gets the list of field names redacted by the current hot-reloadable policy.
+ * PII is applied on top of this list and is therefore not reported here.
  */
 export const getSensitiveFields = (): string[] => {
   return getPolicyFields();
@@ -225,11 +189,15 @@ export const sanitizeNote = (note: string): string | null => {
 };
 
 /**
- * Redacts a phone number for secure logging
- * Shows country code and last 4 digits, masks the rest
+ * Redacts a phone number for secure logging.
+ *
+ * Keeps at most the first character (the `+` of E.164 numbers, or the first
+ * digit) and, for international numbers, the last two digits. Every other
+ * character is replaced with `*` so the masked output has the same length as
+ * the input, which keeps its width from leaking the number's real formatting.
  *
  * @param phone - The phone number to redact (E.164 format expected)
- * @returns Redacted phone number (e.g., "+1***50123")
+ * @returns Redacted phone number (e.g., "+*********23")
  */
 export const redactPhone = (phone: string): string => {
   if (!phone || typeof phone !== "string") {
@@ -238,12 +206,17 @@ export const redactPhone = (phone: string): string => {
 
   const trimmed = phone.trim();
 
-  if (trimmed.length < 8) {
+  if (trimmed.length <= 1) {
     return "***";
   }
 
-  // Show country code (e.g., +1) and last 4 digits
-  const countryCode = trimmed.substring(0, 2);
-  const lastDigits = trimmed.substring(trimmed.length - 4);
-  return `${countryCode}***${lastDigits}`;
+  const isInternational = trimmed.startsWith("+");
+  const body = trimmed.substring(1);
+
+  // Only reveal trailing digits for international numbers, and only when
+  // there is something left to mask in front of them.
+  const visibleTail = isInternational && body.length > 2 ? body.slice(-2) : "";
+  const maskedLength = body.length - visibleTail.length;
+
+  return `${trimmed[0]}${"*".repeat(maskedLength)}${visibleTail}`;
 };
