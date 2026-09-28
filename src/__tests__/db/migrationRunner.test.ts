@@ -536,9 +536,109 @@ describe("MigrationRunner.validate()", () => {
     expect(m1.downCalls).toHaveLength(0);
   });
 
+  it("flags migrations whose name is only whitespace", async () => {
+    const bad = { ...makeMigration("001"), name: "   " };
+    const { runner } = makeRunner([bad]);
+
+    const result = await runner.validate();
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('Migration "001" has empty name');
+  });
+
   it("returns valid for an empty migration list", async () => {
     const { runner } = makeRunner([]);
 
     await expect(runner.validate()).resolves.toEqual({ valid: true, errors: [] });
+  });
+});
+
+// ─── Round-trip state transitions ───────────────────────────────────────────
+
+describe("MigrationRunner state transitions", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("moves a migration pending → applied → pending across status/up/down", async () => {
+    const m1 = makeMigration("001");
+    const { runner, appliedMap } = makeRunner([m1]);
+
+    expect((await runner.status())[0]).toEqual({
+      id: "001",
+      name: "migration_001",
+      status: "pending",
+    });
+
+    await runner.up();
+    expect(appliedMap.has("001")).toBe(true);
+    expect((await runner.status())[0]).toMatchObject({ id: "001", status: "applied" });
+
+    await runner.down();
+    expect(appliedMap.has("001")).toBe(false);
+    expect((await runner.status())[0]).toEqual({
+      id: "001",
+      name: "migration_001",
+      status: "pending",
+    });
+  });
+
+  it("applies nothing when up() runs a second time", async () => {
+    const m1 = makeMigration("001");
+    const { runner } = makeRunner([m1]);
+
+    await runner.up();
+    const second = await runner.up();
+
+    expect(second).toEqual({ success: true, applied: [] });
+    expect(m1.upCalls).toHaveLength(1);
+  });
+
+  it("completes the remainder when up() follows a partial up(count)", async () => {
+    const m1 = makeMigration("001");
+    const m2 = makeMigration("002");
+    const { runner } = makeRunner([m1, m2]);
+
+    await runner.up(1);
+    expect(m2.upCalls).toHaveLength(0);
+
+    const result = await runner.up();
+
+    expect(result).toEqual({ success: true, applied: ["002"] });
+    expect(m1.upCalls).toHaveLength(1);
+    expect(m2.upCalls).toHaveLength(1);
+  });
+
+  it("applies only the failed migration when a failed up() is retried", async () => {
+    const m1 = makeMigration("001");
+    const m2 = makeMigration("002");
+    // Fail the first attempt only, so the retry exercises the real path.
+    const flaky: Migration = {
+      id: "002",
+      name: "migration_002",
+      up: async (client: PoolClient) => {
+        if (m2.upCalls.length === 0) {
+          m2.upCalls.push(client);
+          throw new Error("boom");
+        }
+        m2.upCalls.push(client);
+      },
+      down: async (client: PoolClient) => {
+        m2.downCalls.push(client);
+      },
+    };
+    const { runner } = makeRunner([m1, flaky]);
+
+    const failed = await runner.up();
+
+    expect(failed).toMatchObject({ success: false, failed: "002" });
+    expect(failed.error).toBeInstanceOf(Error);
+
+    const retried = await runner.up();
+
+    expect(retried).toEqual({ success: true, applied: ["002"] });
+    // The already-applied migration must not be re-run.
+    expect(m1.upCalls).toHaveLength(1);
+    expect(m2.upCalls).toHaveLength(2);
   });
 });
