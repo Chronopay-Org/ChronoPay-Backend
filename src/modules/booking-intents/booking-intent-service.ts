@@ -266,11 +266,31 @@ export class BookingIntentService {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
 
-    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+    if (intent.customerId !== actor.userId && intent.professional !== actor.userId && actor.role !== "admin") {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
 
     return intent;
+  }
+
+  getHoldStatus(
+    intentId: string,
+    actor: AuthContext,
+  ): {
+    intentId: string;
+    status: BookingIntentStatus;
+    bookingType?: BookingType;
+    holdUntilMs?: number;
+    holdPlacedAt?: string;
+  } {
+    const intent = this.getIntent(intentId, actor);
+    return {
+      intentId: intent.id,
+      status: intent.status,
+      bookingType: intent.bookingType,
+      holdUntilMs: intent.holdUntilMs,
+      holdPlacedAt: intent.holdPlacedAt,
+    };
   }
 
   listIntents(actor: AuthContext): BookingIntentRecord[] {

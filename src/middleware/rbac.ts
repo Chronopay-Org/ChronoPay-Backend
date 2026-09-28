@@ -72,11 +72,11 @@ function immutableSet<T>(values: Iterable<T>): ReadonlySet<T> {
  * immutable set, so the resolved role hierarchy cannot be altered at runtime.
  */
 function immutableHierarchyMap<K, V>(
-  entries: Iterable<readonly [K, V]>,
+  entries: Iterable<readonly [K, Iterable<V>]>,
 ): ReadonlyMap<K, ReadonlySet<V>> {
   const map = new Map<K, ReadonlySet<V>>();
   for (const [key, value] of entries) {
-    map.set(key, immutableSet(value as Iterable<V>));
+    map.set(key, immutableSet(value));
   }
   return new Proxy(map, {
     get(target, prop, _receiver) {

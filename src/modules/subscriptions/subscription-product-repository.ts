@@ -1,7 +1,7 @@
 export interface SubscriptionProductRecord {
   id: string;
   name: string;
-  description: string | null;
+  description?: string | null;
   professional: string;
   slotDurationMs: number;
   recurrenceRule: string;
@@ -32,6 +32,7 @@ export class InMemorySubscriptionProductRepository implements SubscriptionProduc
     const product: SubscriptionProductRecord = {
       id: `sp-${this.sequence++}`,
       ...input,
+      description: input.description ?? null,
       createdAt: now,
       updatedAt: now,
     };

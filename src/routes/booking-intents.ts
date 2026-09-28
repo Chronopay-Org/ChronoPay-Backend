@@ -19,6 +19,7 @@ import { validateBody } from "../middleware/validation.js";
 import { antiFraudScoring, captureRequestBody } from "../middleware/fraudScoring.js";
 import {
   CreateBookingIntentBodySchema,
+  type CreateBookingIntentBody,
 } from "../middleware/schemas.js";
 import {
   BookingIntentService,
@@ -112,13 +113,13 @@ export function createBookingIntentsRouter(
       try {
         const input = req.body as CreateBookingIntentBody;
         if (input.rrule !== undefined) {
-          const report = await bookingIntentService.createRecurringIntents(input, req.auth!);
+          const report = await bookingIntentService.createRecurringIntents(input as any, req.auth!);
           res.status(201).json({
             success: true,
             report,
           });
         } else {
-          const intent = await bookingIntentService.createIntent(input, req.auth!);
+          const intent = await bookingIntentService.createIntent(input as any, req.auth!);
           res.status(201).json({
             success: true,
             intent,

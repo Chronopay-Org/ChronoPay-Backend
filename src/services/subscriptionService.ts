@@ -67,7 +67,8 @@ export interface CreateProductInput {
   timezone?: string;
   priceCents?: number;
   currency?: string;
-  maxSubscribers?: number;
+  maxSubscribers?: number | null;
+  active?: boolean;
 }
 
 export interface SubscribeInput {
@@ -213,7 +214,7 @@ export class SubscriptionService {
       priceCents: input.priceCents ?? 0,
       currency: input.currency ?? "USD",
       maxSubscribers: input.maxSubscribers ?? null,
-      active: true,
+      active: input.active ?? true,
     });
   }
 

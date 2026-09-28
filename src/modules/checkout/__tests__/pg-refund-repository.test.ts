@@ -179,7 +179,7 @@ describe("PgRefundRepository", () => {
     });
 
     it("returns an empty array when no refund entries match the paymentId", async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 } as QueryResult);
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 } as unknown as QueryResult);
 
       const result = await repo.findByPaymentId("pay-missing");
 
@@ -263,7 +263,7 @@ describe("PgRefundRepository", () => {
     });
 
     it("returns null when no record is found", async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 } as QueryResult);
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 } as unknown as QueryResult);
 
       const result = await repo.findById("non-existent-id");
 

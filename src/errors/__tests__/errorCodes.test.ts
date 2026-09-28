@@ -58,11 +58,11 @@ describe("Error Code Taxonomy", () => {
     });
 
     it("declares runtime arrays covering every taxonomy key exactly once", () => {
-      const publicSet = new Set(PUBLIC_ERROR_CODES);
-      const internalSet = new Set(INTERNAL_ERROR_CODES);
+      const publicSet = new Set<string>(PUBLIC_ERROR_CODES);
+      const internalSet = new Set<string>(INTERNAL_ERROR_CODES);
       Object.keys(ERROR_TAXONOMY).forEach((code) => {
-        expect(publicSet.has(code as ErrorCode) || internalSet.has(code as ErrorCode)).toBe(true);
-        expect(publicSet.has(code as ErrorCode) && internalSet.has(code as ErrorCode)).toBe(false);
+        expect(publicSet.has(code) || internalSet.has(code)).toBe(true);
+        expect(publicSet.has(code) && internalSet.has(code)).toBe(false);
       });
       expect(publicSet.size + internalSet.size).toBe(Object.keys(ERROR_TAXONOMY).length);
     });

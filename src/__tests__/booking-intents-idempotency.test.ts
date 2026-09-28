@@ -91,7 +91,7 @@ describe("POST /api/v1/booking-intents idempotency", () => {
   beforeEach(() => {
     setFeatureFlagsFromEnv({ ...process.env, FF_CREATE_BOOKING_INTENT: "true" });
     app = createApp({ enableDocs: false });
-    auditSpy = jest.spyOn(defaultAuditLogger, "log").mockResolvedValue();
+    auditSpy = jest.spyOn(defaultAuditLogger, "log").mockResolvedValue(undefined);
   });
 
   afterEach(() => {

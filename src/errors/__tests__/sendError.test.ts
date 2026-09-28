@@ -22,8 +22,8 @@ import { ValidationError, NotFoundError, InternalServerError, DatabaseError } fr
 
 const createMockResponse = (): Response => {
   const response: Partial<Response> = {
-    status: jest.fn().mockReturnThis() as unknown,
-    json: jest.fn().mockReturnThis() as unknown,
+    status: jest.fn().mockReturnThis() as unknown as Response["status"],
+    json: jest.fn().mockReturnThis() as unknown as Response["json"],
   };
   return response as Response;
 };
@@ -271,7 +271,7 @@ describe("Type-Safe Error Sender", () => {
       sendPublicError(mockRes, "VALIDATION_ERROR", "Test", { locale: "es" });
 
       expect(typeof lastJson().message).toBe("string");
-      expect(lastJson().message.length).toBeGreaterThan(0);
+      expect((lastJson().message as string).length).toBeGreaterThan(0);
       expect(lastJson().message).not.toBe("errors.validation.validation_error");
     });
 

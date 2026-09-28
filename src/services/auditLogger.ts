@@ -201,4 +201,4 @@ Object.defineProperty(globalAuditState, "defaultAuditLogger", {
   enumerable: false,
 });
 
-export const defaultAuditLogger = globalAuditState.defaultAuditLogger;
+export const defaultAuditLogger: AuditLogger = sharedLogger;

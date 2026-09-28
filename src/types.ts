@@ -1,6 +1,10 @@
 export interface Slot {
-  id: number;
+  id: number | string;
   professional: string;
+  ownerId?: string;
+  buyerId?: string;
+  transferable?: boolean;
+  bookable?: boolean;
   startTime: number | string;
   endTime: number | string;
   category?: string;

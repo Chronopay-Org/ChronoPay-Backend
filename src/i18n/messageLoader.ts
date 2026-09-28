@@ -13,10 +13,14 @@ import { ES_MESSAGES } from "./locales.es.js";
 
 export type SupportedLocale = "en" | "es";
 
+type DeepString<T> = {
+  [K in keyof T]: T[K] extends string ? string : DeepString<T[K]>;
+};
+
 /**
  * Message catalog type: nested object matching the locale file structure.
  */
-export type MessageCatalog = typeof EN_MESSAGES;
+export type MessageCatalog = DeepString<typeof EN_MESSAGES>;
 
 /**
  * Locale-indexed catalog of messages.

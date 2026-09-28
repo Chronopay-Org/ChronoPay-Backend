@@ -6,6 +6,8 @@ import type {
   NewMfaEnrollment,
 } from "../models/mfaEnrollment.js";
 
+export type { MfaRepository };
+
 type DbQuery = (text: string, params?: unknown[]) => Promise<QueryResult>;
 
 const defaultDbQuery: DbQuery = async (text, params) => {

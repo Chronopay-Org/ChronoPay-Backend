@@ -83,7 +83,7 @@ export function isMfaError(error: unknown): error is Error & MfaErrorShape {
   return (
     error instanceof Error &&
     "statusCode" in error &&
-    typeof (error as MfaErrorShape).statusCode === "number" &&
+    typeof (error as { statusCode?: unknown }).statusCode === "number" &&
     "errorCode" in error
   );
 }

@@ -302,6 +302,20 @@ function parseOptionalUrl(rawValue: string | undefined, key: string, issues: str
   }
 }
 
+function parseUrlList(rawValue: string | undefined, key: string, issues: string[]): string[] | undefined {
+  if (rawValue === undefined) return undefined;
+  const list = parseStringList(rawValue);
+  if (list.length === 0) return undefined;
+  const urls: string[] = [];
+  for (const item of list) {
+    const validUrl = parseOptionalUrl(item, key, issues);
+    if (validUrl) {
+      urls.push(validUrl);
+    }
+  }
+  return urls.length > 0 ? urls : undefined;
+}
+
 function _parseReplicaId(rawValue: string | undefined): string {
   if (rawValue === undefined || rawValue.trim().length === 0) {
     // Fall back to the OS hostname so each pod/container gets a distinct ID

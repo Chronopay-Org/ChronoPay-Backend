@@ -227,7 +227,7 @@ describe("RBAC Permission Middleware", () => {
 
     it("should fall back to socket address in audit metadata when req.ip is absent", async () => {
       mockRequest.header = jest.fn<any>().mockReturnValue("customer");
-      mockRequest.ip = undefined;
+      (mockRequest as any).ip = undefined;
       mockRequest.socket = { remoteAddress: "10.0.0.9" } as any;
 
       const middleware = requirePermission("users:delete");
@@ -239,7 +239,7 @@ describe("RBAC Permission Middleware", () => {
 
     it("should tolerate audit logger failures on a denied permission", async () => {
       mockRequest.header = jest.fn<any>().mockReturnValue("customer");
-      mockRequest.ip = "192.168.1.1";
+      (mockRequest as any).ip = "192.168.1.1";
 
       const auditLogger = await import("../services/auditLogger.js");
       const auditSpy = jest

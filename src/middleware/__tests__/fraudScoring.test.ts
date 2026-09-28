@@ -44,7 +44,7 @@ function makeScorer(): FraudScorer {
 }
 
 function mockAuditLogger(): AuditLogger {
-  return { log: jest.fn().mockResolvedValue(undefined) } as unknown as AuditLogger;
+  return { log: jest.fn().mockImplementation(() => Promise.resolve()) } as unknown as AuditLogger;
 }
 
 describe("antiFraudScoring middleware", () => {
@@ -79,7 +79,7 @@ describe("antiFraudScoring middleware", () => {
     expect(snapshot.liveTotals["vdefault"]).toBe(1);
 
     expect(auditLogger.log).toHaveBeenCalledTimes(1);
-    const [action, data, options] = (auditLogger.log as jest.Mock).mock.calls[0];
+    const [action, data, options] = (auditLogger.log as jest.Mock).mock.calls[0] as [string, any, any];
     expect(action).toBe("fraud_score");
     expect(data.body).toMatchObject({
       actorId: "user-1",

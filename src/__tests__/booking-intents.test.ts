@@ -164,7 +164,7 @@ describe("booking intents endpoints", () => {
           nowMs: 1500,
           activeBookings: 1,
           capacity: 1,
-          config: {},
+          config: {} as any,
         },
       });
 
@@ -218,83 +218,83 @@ describe("booking intents endpoints", () => {
       expect(res.body.success).toBe(false);
     });
   });
-});
 
-// ─── Concurrent-create: at-most-one active intent per slot ───────────────────
-//
-// The partial unique index (migration 019) is the DB-level guarantee.
-// This suite verifies the same invariant at the service layer, which the
-// index mirrors: exactly one of N concurrent creates for the same slot wins;
-// the rest receive 409 CONFLICT.
-//
-// The "after terminal state" case verifies that the partial index (and the
-// in-memory analogue) allows a new intent once the prior one is no longer
-// active — i.e. the constraint is partial, not global.
+  // ─── Concurrent-create: at-most-one active intent per slot ───────────────────
+  //
+  // The partial unique index (migration 019) is the DB-level guarantee.
+  // This suite verifies the same invariant at the service layer, which the
+  // index mirrors: exactly one of N concurrent creates for the same slot wins;
+  // the rest receive 409 CONFLICT.
+  //
+  // The "after terminal state" case verifies that the partial index (and the
+  // in-memory analogue) allows a new intent once the prior one is no longer
+  // active — i.e. the constraint is partial, not global.
 
-describe("POST /:id/refund", () => {
-  it("returns a proportional refund for a partially consumed booking", async () => {
-    const intent = await repo.create({
-      ...BASE_INTENT,
-      id: "intent-refund-1",
-      customerId: "user1",
-      professional: "pro-1",
-      status: "confirmed",
-      startTime: 0,
-      endTime: 1000,
-      pricingSnapshot: {
-        strategyId: "fixed",
-        resolvedPrice: 1000,
-        basePrice: 1000,
-        slotStartMs: 0,
-        nowMs: 0,
-        activeBookings: 1,
-        capacity: 1,
-        config: {},
-      },
+  describe("POST /:id/refund", () => {
+    it("returns a proportional refund for a partially consumed booking", async () => {
+      const intent = await repo.create({
+        ...BASE_INTENT,
+        id: "intent-refund-1",
+        customerId: "user1",
+        professional: "pro-1",
+        status: "confirmed",
+        startTime: 0,
+        endTime: 1000,
+        pricingSnapshot: {
+          strategyId: "fixed",
+          resolvedPrice: 1000,
+          basePrice: 1000,
+          slotStartMs: 0,
+          nowMs: 0,
+          activeBookings: 1,
+          capacity: 1,
+          config: {} as any,
+        },
+      });
+
+      const res = await request(app)
+        .post(`/api/v1/booking-intents/${intent.id}/refund`)
+        .send({ cancelledAtMs: 400, reason: "customer_cancel" })
+        .set("x-chronopay-user-id", "user1")
+        .set("x-chronopay-role", "customer");
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.refund.refundAmountCents).toBe(600);
+      expect(res.body.refund.refundRatio).toBeCloseTo(0.6, 5);
+      expect(res.body.refund.reason).toBe("customer_cancel");
     });
 
-    const res = await request(app)
-      .post(`/api/v1/booking-intents/${intent.id}/refund`)
-      .send({ cancelledAtMs: 400, reason: "customer_cancel" })
-      .set("x-chronopay-user-id", "user1")
-      .set("x-chronopay-role", "customer");
+    it("rejects invalid cancellation timestamps on refund requests", async () => {
+      const intent = await repo.create({
+        ...BASE_INTENT,
+        id: "intent-refund-2",
+        customerId: "user1",
+        professional: "pro-1",
+        status: "confirmed",
+        startTime: 0,
+        endTime: 1000,
+        pricingSnapshot: {
+          strategyId: "fixed",
+          resolvedPrice: 1000,
+          basePrice: 1000,
+          slotStartMs: 0,
+          nowMs: 0,
+          activeBookings: 1,
+          capacity: 1,
+          config: {} as any,
+        },
+      });
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.refund.refundAmountCents).toBe(600);
-    expect(res.body.refund.refundRatio).toBeCloseTo(0.6, 5);
-    expect(res.body.refund.reason).toBe("customer_cancel");
-  });
+      const res = await request(app)
+        .post(`/api/v1/booking-intents/${intent.id}/refund`)
+        .send({ cancelledAtMs: "bad" })
+        .set("x-chronopay-user-id", "user1")
+        .set("x-chronopay-role", "customer");
 
-  it("rejects invalid cancellation timestamps on refund requests", async () => {
-    const intent = await repo.create({
-      ...BASE_INTENT,
-      id: "intent-refund-2",
-      customerId: "user1",
-      professional: "pro-1",
-      status: "confirmed",
-      startTime: 0,
-      endTime: 1000,
-      pricingSnapshot: {
-        strategyId: "fixed",
-        resolvedPrice: 1000,
-        basePrice: 1000,
-        slotStartMs: 0,
-        nowMs: 0,
-        activeBookings: 1,
-        capacity: 1,
-        config: {},
-      },
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
     });
-
-    const res = await request(app)
-      .post(`/api/v1/booking-intents/${intent.id}/refund`)
-      .send({ cancelledAtMs: "bad" })
-      .set("x-chronopay-user-id", "user1")
-      .set("x-chronopay-role", "customer");
-
-    expect(res.status).toBe(400);
-    expect(res.body.success).toBe(false);
   });
 });
 

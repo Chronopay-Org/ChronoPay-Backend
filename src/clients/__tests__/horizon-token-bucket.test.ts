@@ -1,4 +1,5 @@
 import { jest } from "@jest/globals";
+import type { ContractRateLimitError as IContractRateLimitError } from "../../errors/contractErrors.js";
 
 // ─── Stubs ────────────────────────────────────────────────────────────────────
 // Track metric calls without hitting the real Prometheus registry.
@@ -434,14 +435,14 @@ describe("HorizonTokenBucket concurrency — burst scenario", () => {
   it("rejects exactly the overflow acquires beyond maxQueueDepth", async () => {
     const bucket = new HorizonTokenBucket(HOST, { initialCapacity: 0, maxQueueDepth: 5 });
 
-    const results: Array<"ok" | ContractRateLimitError> = [];
+    const results: Array<"ok" | IContractRateLimitError> = [];
 
     // Start 8 acquires; 5 should queue, 3 should reject immediately
     const promises = Array.from({ length: 8 }, () =>
       bucket
         .acquire()
         .then(() => results.push("ok" as const))
-        .catch((e: unknown) => results.push(e as ContractRateLimitError)),
+        .catch((e: unknown) => results.push(e as IContractRateLimitError)),
     );
 
     // All rejections are synchronous (no timer needed)
