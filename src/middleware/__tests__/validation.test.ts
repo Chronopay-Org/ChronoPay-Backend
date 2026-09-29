@@ -100,6 +100,28 @@ function appWithRawBody(value: unknown, requiredFields: string[] = ["email"]) {
 }
 
 /**
+ * Mount `validateRequiredFields` with a target whose property access throws,
+ * forcing the middleware's defensive catch instead of a validation failure.
+ */
+function appWithHostileBody(requiredFields: string[] = ["email"]) {
+  const app = express();
+  const handler = terminalHandler();
+  app.use((req, _res, next) => {
+    (req as Request & { body: unknown }).body = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("kaboom: secret internals");
+        },
+      },
+    );
+    next();
+  });
+  app.post("/test", validateRequiredFields(requiredFields), handler);
+  return { app, handler };
+}
+
+/**
  * Assert the wire shape of the `details` array: a non-empty list of exactly
  * `{ path, rule, message }` records (no raw field values, no extra keys).
  */
@@ -333,6 +355,43 @@ describe("validateRequiredFields", () => {
       expect(res.body.details).toEqual({ field: "email" });
     });
   });
+
+  describe("internal failures", () => {
+    it("returns a generic 500 when reading the target throws", async () => {
+      const { app, handler } = appWithHostileBody();
+      const res = await request(app).post("/test");
+
+      expect(res.status).toBe(500);
+      expect(handler).not.toHaveBeenCalled();
+      expect(res.body.success).toBe(false);
+      expect(res.body.code).toBe("INTERNAL_ERROR");
+      expect(res.body.error).toBe("Validation middleware error");
+      expect(JSON.stringify(res.body)).not.toContain("kaboom");
+    });
+
+    it("returns a generic 500 when a query target access throws", async () => {
+      const app = express();
+      const handler = terminalHandler();
+      app.use((req, _res, next) => {
+        (req as Request & { query: unknown }).query = new Proxy(
+          {},
+          {
+            get() {
+              throw new Error("kaboom: secret internals");
+            },
+          },
+        );
+        next();
+      });
+      app.get("/test", validateRequiredFields(["page"], "query"), handler);
+
+      const res = await request(app).get("/test");
+
+      expect(res.status).toBe(500);
+      expect(handler).not.toHaveBeenCalled();
+      expect(res.body.code).toBe("INTERNAL_ERROR");
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -455,6 +514,34 @@ describe("validateBody", () => {
       expect(JSON.stringify(withoutTimestamp(second.body))).toBe(
         JSON.stringify(withoutTimestamp(first.body)),
       );
+    });
+
+    it("sorts rules that reach the comparator in descending order", async () => {
+      // Zod reports the issues in declaration order (email before min), so the
+      // comparator is handed (too_small, invalid_string) — the `a.rule > b.rule`
+      // arm — and must still emit ascending output.
+      const { app } = appWithBody(z.object({ email: z.string().email().min(20) }));
+      const res = await request(app).post("/test").send({ email: "abc" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.details.map((d: ValidationDetail) => d.rule)).toEqual([
+        "invalid_string",
+        "too_small",
+      ]);
+      // The headline still names the first issue in request order.
+      expect(res.body.error).toBe("Invalid email");
+    });
+
+    it("treats two issues with the same path and rule as interchangeable", async () => {
+      const { app } = appWithBody(z.object({ email: z.string().email().regex(/^x/) }));
+      const res = await request(app).post("/test").send({ email: "abc" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.details.map((d: ValidationDetail) => d.path)).toEqual(["email", "email"]);
+      expect(res.body.details.map((d: ValidationDetail) => d.rule)).toEqual([
+        "invalid_string",
+        "invalid_string",
+      ]);
     });
   });
 
