@@ -1,4 +1,5 @@
 // src/middleware/__tests__/queryBudgetOptions.test.ts
+// Additional test coverage for edge cases
 import request from "supertest";
 import express, { Request, Response, NextFunction } from "express";
 import { createQueryBudgetMiddleware } from "../queryBudget.js";
