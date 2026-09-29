@@ -640,6 +640,13 @@
     "src/__tests__/marketplaceSearch.test.ts"
   ],
 
+  "src/buyer-profile/dto/buyer-profile.dto.ts": [
+    "src/buyer-profile/__tests__/buyer-profile.dto.test.ts",
+    "src/buyer-profile/__tests__/buyer-profile.types.test.ts",
+    "src/buyer-profile/__tests__/index.test.ts",
+    "src/buyer-profile/__tests__/buyer-profile.routes.test.ts"
+  ],
+
   "src/metrics/slotMetrics.ts": [
     "src/__tests__/metrics-cardinality.test.ts",
     "src/__tests__/appMetrics.test.ts"
