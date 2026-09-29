@@ -169,16 +169,48 @@ describe("validateCORSConfig", () => {
     expect(validateCORSConfig(baseConfig)).toBe(true);
   });
 
+  it("throws for missing allowedOrigins", () => {
+    const config = { ...baseConfig } as any;
+    delete config.allowedOrigins;
+    expect(() => validateCORSConfig(config)).toThrow("Invalid CORS configuration: missing or invalid fields");
+  });
+
+  it("throws for non-array allowedOrigins", () => {
+    const config = { ...baseConfig, allowedOrigins: "https://example.com" } as any;
+    expect(() => validateCORSConfig(config)).toThrow("Invalid CORS configuration: missing or invalid fields");
+  });
+
+  it("throws for missing allowedMethods", () => {
+    const config = { ...baseConfig } as any;
+    delete config.allowedMethods;
+    expect(() => validateCORSConfig(config)).toThrow("Invalid CORS configuration: missing or invalid fields");
+  });
+
+  it("throws for non-array allowedMethods", () => {
+    const config = { ...baseConfig, allowedMethods: "GET" } as any;
+    expect(() => validateCORSConfig(config)).toThrow("Invalid CORS configuration: missing or invalid fields");
+  });
+
+  it("throws for non-string origin in allowedOrigins", () => {
+    const config = { ...baseConfig, allowedOrigins: [123] } as any;
+    expect(() => validateCORSConfig(config)).toThrow("Invalid origin: 123 is not a string");
+  });
+
   it("throws for wildcard-only origin", () => {
-    expect(() => validateCORSConfig({ ...baseConfig, allowedOrigins: ["*"] })).toThrow();
+    expect(() => validateCORSConfig({ ...baseConfig, allowedOrigins: ["*"] })).toThrow("Invalid origin pattern: wildcard-only patterns are not allowed for security");
   });
 
   it("throws for an invalid origin URL", () => {
-    expect(() => validateCORSConfig({ ...baseConfig, allowedOrigins: ["not-a-url"] })).toThrow();
+    expect(() => validateCORSConfig({ ...baseConfig, allowedOrigins: ["not-a-url"] })).toThrow("Invalid origin URL: not-a-url");
   });
 
   it("throws for negative maxAge", () => {
-    expect(() => validateCORSConfig({ ...baseConfig, maxAge: -1 })).toThrow();
+    expect(() => validateCORSConfig({ ...baseConfig, maxAge: -1 })).toThrow("Invalid maxAge: must be a non-negative number");
+  });
+
+  it("throws for non-number maxAge", () => {
+    const config = { ...baseConfig, maxAge: "3600" } as any;
+    expect(() => validateCORSConfig(config)).toThrow("Invalid maxAge: must be a non-negative number");
   });
 
   it("accepts an empty allowedOrigins array", () => {

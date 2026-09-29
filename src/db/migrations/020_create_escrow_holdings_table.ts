@@ -9,7 +9,7 @@ import { Migration } from "../migrationRunner.js";
  * narrow and explicit: held -> released | refunded | disputed.
  */
 export const migration: Migration = {
-  id: "020",
+  id: "025",
   name: "create_escrow_holdings_table",
 
   async up(client: PoolClient): Promise<void> {

@@ -7,7 +7,7 @@ const DEDUP_TTL_SECONDS = 25 * 60 * 60;
  * Builds a dedup key from reminder id and triggerAt timestamp.
  * Contains no PII — only opaque numeric identifiers.
  */
-export function dedupKey(reminderId: number, triggerAt: number): string {
+export function dedupKey(reminderId: string | number, triggerAt: number): string {
   return `reminder:dedup:${reminderId}:${triggerAt}`;
 }
 
@@ -16,7 +16,7 @@ export function dedupKey(reminderId: number, triggerAt: number): string {
  * Returns true  → this worker owns the delivery (proceed).
  * Returns false → another worker already claimed it (skip).
  */
-export async function claimDelivery(reminderId: number, triggerAt: number): Promise<boolean> {
+export async function claimDelivery(reminderId: string | number, triggerAt: number): Promise<boolean> {
   const redis = getRedisClient();
   const key = dedupKey(reminderId, triggerAt);
   // SET key "1" EX <ttl> NX — returns "OK" on success, null if key exists

@@ -1,9 +1,11 @@
 import { jest } from "@jest/globals";
 import {
   HorizonContractClient,
+  _clearTokenBuckets,
 } from "../horizon-contract-client.js";
 import { ContractService } from "../../services/contract.service.js";
 import { RetryPolicy } from "../../utils/retry-policy.js";
+import { timeoutConfig } from "../../config/timeouts.js";
 import {
   ContractSequenceCollisionError,
   ContractInvalidRequestError,
@@ -19,10 +21,21 @@ const XDR = "AAAAAQAAAA==";
 const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
+/**
+ * Rate-limit headers as a real Horizon response would send them. The client's
+ * shared token bucket refills from `X-RateLimit-Remaining`; without it the
+ * bucket drains after its default capacity of 10 requests and every further
+ * call queues forever.
+ */
+function mockHeaders(): { get: (name: string) => string | null } {
+  return { get: (name: string) => (name === "X-RateLimit-Remaining" ? "100" : null) };
+}
+
 function mockOk(body: unknown) {
   // @ts-expect-error - Auto-fixed by script
   mockFetch.mockResolvedValueOnce({
     ok: true,
+    headers: mockHeaders(),
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as Response);
@@ -33,8 +46,39 @@ function mockJsonRpcError(status: number, body: string) {
   mockFetch.mockResolvedValueOnce({
     ok: false,
     status,
+    headers: mockHeaders(),
     text: async () => body,
   } as unknown as Response);
+}
+
+/**
+ * Stubs `setTimeout` so recovery backoff delays can be observed without
+ * waiting. Every delay is recorded except the `withTimeout` request deadline
+ * (`timeoutConfig.http.contractMs`), which is infrastructure rather than a
+ * recovery backoff — filtering by magnitude instead would silently depend on
+ * the ambient `TIMEOUT_HTTP_CONTRACT_MS` value.
+ */
+function captureDelays(): { delays: number[]; restore: () => void } {
+  const delays: number[] = [];
+  const origSetTimeout = global.setTimeout.bind(global);
+
+  const spy = (jest.spyOn(global, "setTimeout") as unknown as {
+    mockImplementation: (impl: (...args: any[]) => unknown) => { mockRestore: () => void };
+  }).mockImplementation((fn: () => void, delay?: number) => {
+    if (delay === timeoutConfig.http.contractMs) {
+      // Keep the deadline as a real timer so `clearTimeout` stays valid.
+      return origSetTimeout(fn, 1);
+    }
+    if (typeof delay === "number" && delay > 0) {
+      delays.push(delay);
+    }
+    if (typeof fn === "function") {
+      fn();
+    }
+    return 1 as unknown as NodeJS.Timeout;
+  }) as { mockRestore: () => void };
+
+  return { delays, restore: () => spy.mockRestore() };
 }
 
 function makeClient(): HorizonContractClient {
@@ -44,8 +88,18 @@ function makeClient(): HorizonContractClient {
   return new HorizonContractClient(BASE_URL, PASSPHRASE, service);
 }
 
+afterEach(() => {
+  // Safety net: a failing delay-capture test never reaches its own restore(),
+  // and a leaked setTimeout spy would corrupt every later test in the file.
+  jest.restoreAllMocks();
+});
+
 beforeEach(() => {
   mockFetch.mockReset();
+  // The token-bucket registry is module-level and shared across every client
+  // for a given host. Reset it per test so each case starts with a full bucket
+  // instead of inheriting the previous test's spend.
+  _clearTokenBuckets();
 });
 
 // ─── Error Classification ─────────────────────────────────────────────────────
@@ -264,24 +318,7 @@ describe("sendTransactionWithSequenceRecovery", () => {
   });
 
   it("uses backoff delay between retries", async () => {
-    const delays: number[] = [];
-
-    // Only capture setTimeout calls that look like recovery delays (not withTimeout abort timers)
-    // withTimeout uses a large timeout value (30s+), recovery delays are small (< 1000)
-    const origSetTimeout = global.setTimeout.bind(global);
-    // withTimeout uses 7000ms; recovery backoff delays are small (< 1000)
-    const spy = (jest.spyOn(global, "setTimeout") as any).mockImplementation((fn: any, delay?: number, ...args: any[]) => {
-      if (delay !== undefined && delay > 0 && delay < 5000) {
-        delays.push(delay);
-      }
-      if (delay !== undefined && delay >= 5000) {
-        return origSetTimeout(fn, 1, ...args);
-      }
-      if (typeof fn === "function") {
-        fn(...args);
-      }
-      return 1 as unknown as NodeJS.Timeout;
-    });
+    const { delays, restore } = captureDelays();
 
     mockJsonRpcError(400, JSON.stringify({ detail: "tx_bad_seq" }));
     mockOk({ id: ACCOUNT_ID, sequence: "1" });
@@ -307,25 +344,11 @@ describe("sendTransactionWithSequenceRecovery", () => {
     expect(delays[1]).toBe(20);
     expect(delays[2]).toBe(40);
 
-    spy.mockRestore();
+    restore();
   });
 
   it("caps delay at 10 seconds", async () => {
-    const delays: number[] = [];
-
-    const origSetTimeout = global.setTimeout.bind(global);
-    const spy = (jest.spyOn(global, "setTimeout") as any).mockImplementation((fn: any, delay?: number, ...args: any[]) => {
-      if (delay !== undefined && delay > 0 && delay < 50000) {
-        delays.push(delay);
-      }
-      if (delay !== undefined && delay >= 50000) {
-        return origSetTimeout(fn, 1, ...args);
-      }
-      if (typeof fn === "function") {
-        fn(...args);
-      }
-      return 1 as unknown as NodeJS.Timeout;
-    });
+    const { delays, restore } = captureDelays();
 
     for (let i = 0; i < 9; i++) {
       mockJsonRpcError(400, JSON.stringify({ detail: "tx_bad_seq" }));
@@ -343,35 +366,17 @@ describe("sendTransactionWithSequenceRecovery", () => {
       ),
     ).rejects.toBeInstanceOf(ContractSequenceCollisionError);
 
-    // Filter recovery delays (these are < 50000, unlike withTimeout's 7000ms which is also < 50000)
-    // Backoff: 100, 200, 400, 800, 1600, 3200, 6400, 10000, 10000
-    // withTimeout: 7000 x 19 calls = many 7000 entries
-    // Just check that no recovery delay exceeds 10000
-    const recoveryDelays = delays.filter((d) => d !== 7000);
-    for (const d of recoveryDelays) {
+    // Backoff: 100, 200, 400, 800, 1600, 3200, 6400, 10000, 10000 — never above the 10s cap.
+    expect(delays).toHaveLength(9);
+    for (const d of delays) {
       expect(d).toBeLessThanOrEqual(10000);
     }
 
-    spy.mockRestore();
+    restore();
   });
 
   it("applies jitter when useJitter is true", async () => {
-    const delays: number[] = [];
-
-    const origSetTimeout = global.setTimeout.bind(global);
-    // Jitter values are < 200 for initialDelayMs:100; withTimeout is 7000ms
-    const spy = (jest.spyOn(global, "setTimeout") as any).mockImplementation((fn: any, delay?: number, ...args: any[]) => {
-      if (delay !== undefined && delay > 0 && delay < 5000) {
-        delays.push(delay);
-      }
-      if (delay !== undefined && delay >= 5000) {
-        return origSetTimeout(fn, 1, ...args);
-      }
-      if (typeof fn === "function") {
-        fn(...args);
-      }
-      return 1 as unknown as NodeJS.Timeout;
-    });
+    const { delays, restore } = captureDelays();
 
     mockJsonRpcError(400, JSON.stringify({ detail: "tx_bad_seq" }));
     mockOk({ id: ACCOUNT_ID, sequence: "5" });
@@ -395,7 +400,7 @@ describe("sendTransactionWithSequenceRecovery", () => {
     expect(delays[1]).toBeGreaterThanOrEqual(0);
     expect(delays[1]).toBeLessThan(200);
 
-    spy.mockRestore();
+    restore();
   });
 });
 
@@ -434,6 +439,7 @@ describe("concurrent submitters race simulation", () => {
       if (urlStr.includes("/accounts/")) {
         return {
           ok: true,
+          headers: mockHeaders(),
           json: async () => ({ id: ACCOUNT_ID, sequence: "50" }),
           text: async () => "",
         } as unknown as Response;
@@ -444,12 +450,14 @@ describe("concurrent submitters race simulation", () => {
         return {
           ok: false,
           status: 400,
+          headers: mockHeaders(),
           text: async () => JSON.stringify({ detail: "tx_bad_seq" }),
         } as unknown as Response;
       }
 
       return {
         ok: true,
+        headers: mockHeaders(),
         json: async () => ({ hash: `hash_${submissionCount}` }),
         text: async () => "",
       } as unknown as Response;
@@ -484,6 +492,7 @@ describe("concurrent submitters race simulation", () => {
       if (urlStr.includes("/accounts/")) {
         return {
           ok: true,
+          headers: mockHeaders(),
           json: async () => ({ id: ACCOUNT_ID, sequence: "1" }),
           text: async () => "",
         } as unknown as Response;
@@ -492,6 +501,7 @@ describe("concurrent submitters race simulation", () => {
       return {
         ok: false,
         status: 400,
+        headers: mockHeaders(),
         text: async () => JSON.stringify({ detail: "tx_bad_seq" }),
       } as unknown as Response;
     });
@@ -534,6 +544,7 @@ describe("concurrent submitters race simulation", () => {
       if (urlStr.includes("/accounts/")) {
         return {
           ok: true,
+          headers: mockHeaders(),
           json: async () => ({ id: ACCOUNT_ID, sequence: "100" }),
           text: async () => "",
         } as unknown as Response;
@@ -547,12 +558,14 @@ describe("concurrent submitters race simulation", () => {
         return {
           ok: false,
           status: 400,
+          headers: mockHeaders(),
           text: async () => JSON.stringify({ detail: "tx_bad_seq" }),
         } as unknown as Response;
       }
 
       return {
         ok: true,
+        headers: mockHeaders(),
         json: async () => ({ hash: "final_hash" }),
         text: async () => "",
       } as unknown as Response;
@@ -737,21 +750,7 @@ describe("edge cases", () => {
   });
 
   it("selects non-jittered delay when useJitter is false", async () => {
-    const delays: number[] = [];
-
-    const origSetTimeout = global.setTimeout.bind(global);
-    const spy = (jest.spyOn(global, "setTimeout") as any).mockImplementation((fn: any, delay?: number, ...args: any[]) => {
-      if (delay !== undefined && delay > 0 && delay < 5000) {
-        delays.push(delay);
-      }
-      if (delay !== undefined && delay >= 5000) {
-        return origSetTimeout(fn, 1, ...args);
-      }
-      if (typeof fn === "function") {
-        fn(...args);
-      }
-      return 1 as unknown as NodeJS.Timeout;
-    });
+    const { delays, restore } = captureDelays();
 
     mockJsonRpcError(400, JSON.stringify({ detail: "tx_bad_seq" }));
     mockOk({ id: ACCOUNT_ID, sequence: "1" });
@@ -768,7 +767,7 @@ describe("edge cases", () => {
     expect(delays.length).toBe(1);
     expect(delays[0]).toBe(50);
 
-    spy.mockRestore();
+    restore();
   });
 
   it("onRetry callback is not invoked when submission succeeds first try", async () => {

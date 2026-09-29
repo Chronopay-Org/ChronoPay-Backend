@@ -315,10 +315,10 @@ describe("Header Validation Express Middleware", () => {
       }) as any,
     };
     mockResponse = {
-      status: jest.fn().mockReturnThis() as any,
-      json: jest.fn().mockReturnThis() as any,
-    };
-    nextFunction = jest.fn();
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockReturnThis(),
+    } as unknown as Partial<Response>;
+    nextFunction = jest.fn() as unknown as NextFunction;
   });
 
   describe("validateIdempotencyKeyHeader", () => {
