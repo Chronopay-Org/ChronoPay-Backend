@@ -75,7 +75,6 @@ export class EthersContractClient implements IContractClient {
    */
   async sendTransaction(args: ContractInteractionArgs): Promise<TransactionResult> {
     if (!this.signer) {
-      // @ts-expect-error - Auto-fixed by script
       throw new ContractInvalidRequestError("Signer is required for sending transactions");
     }
 
