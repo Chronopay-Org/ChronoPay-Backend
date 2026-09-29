@@ -236,7 +236,8 @@
 
   "src/middleware/validation.ts": [
     "src/__tests__/validation.test.ts",
-    "src/__tests__/zod-validation.test.ts"
+    "src/__tests__/zod-validation.test.ts",
+    "src/middleware/__tests__/validation.test.ts"
   ],
 
   "src/middleware/checkout-validation.ts": [
