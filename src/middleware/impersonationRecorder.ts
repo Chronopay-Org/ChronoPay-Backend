@@ -113,6 +113,18 @@ export function computeDiff(
 ): ResourceDiffEntry[] {
   if (before === null && after === null) return [];
 
+  if (!before || typeof before !== "object" || Array.isArray(before)) {
+    return Object.is(before, after)
+      ? []
+      : [{ field: "value", before: before ?? undefined, after: after ?? undefined }];
+  }
+
+  if (!after || typeof after !== "object" || Array.isArray(after)) {
+    return Object.is(before, after)
+      ? []
+      : [{ field: "value", before: before ?? undefined, after: after ?? undefined }];
+  }
+
   const entries: ResourceDiffEntry[] = [];
   const beforeObj = before ?? {};
   const afterObj = after ?? {};
@@ -164,8 +176,17 @@ export function computeDiff(
 /**
  * Compute SHA-256 hex digest of a string.
  */
-export function hashBody(body: string): string {
-  return crypto.createHash("sha256").update(body, "utf8").digest("hex");
+export function hashBody(body: string | null | undefined | Record<string, unknown> | number | boolean): string {
+  const normalized =
+    body === null || body === undefined
+      ? ""
+      : typeof body === "string"
+        ? body
+        : typeof body === "object"
+          ? JSON.stringify(body)
+          : String(body);
+
+  return crypto.createHash("sha256").update(normalized, "utf8").digest("hex");
 }
 
 // ─── Response body interception ───────────────────────────────────────────────

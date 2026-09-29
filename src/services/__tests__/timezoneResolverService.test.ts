@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import {
   TimezoneResolverService,
   createInMemoryTimezoneResolverDeps,
@@ -174,11 +175,11 @@ describe("TimezoneResolverService.resolveTimezone fallback chain", () => {
       actorId: ACTOR_ID,
     });
     expect(logger.log).toHaveBeenCalled();
-    const call = (logger.log as jest.Mock).mock.calls.find(
-      (c: any[]) => c[0] === "timezone.resolved",
-    );
+    const call = (logger.log as unknown as jest.Mock).mock.calls.find(
+      (c: unknown[]) => c[0] === "timezone.resolved",
+    ) as unknown[] | undefined;
     expect(call).toBeTruthy();
-    const payload = call[1];
+    const payload = call![1] as any;
     expect(payload.context.resolvedTimezone).toBe("America/Los_Angeles");
     expect(payload.context.source).toBe("store");
     expect(payload.context.candidates.storeTimezone).toBe("America/Los_Angeles");

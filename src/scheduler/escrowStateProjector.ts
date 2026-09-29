@@ -109,7 +109,7 @@ const TARGET_BY_KIND: Record<EscrowEvent["kind"], BookingIntentStatus> = {
 
 /**
  * Legal (status, kind) → next-status transitions from a non-terminal state.
- * Terminal states are intentionally absent — they have no outgoing edges.
+ * Terminal states map to an empty edge list — they have no outgoing edges.
  */
 const STATUS_TRANSITIONS: Record<
   BookingIntentStatus,
@@ -142,6 +142,14 @@ const STATUS_TRANSITIONS: Record<
   hold_refunded: [],
   cancelled: [],
   expired: [],
+  // Escrow-mirrored and post-delivery states are recorded by the escrow event
+  // stream itself and accept no further projection edges here. They must be
+  // listed explicitly so lookups never fall through to `undefined`.
+  escrow_held: [],
+  escrow_released: [],
+  escrow_refunded: [],
+  escrow_disputed: [],
+  no_show: [],
 };
 
 export class EscrowStateProjector {

@@ -19,12 +19,23 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { beforeEach, describe, expect, it } from "@jest/globals";
 
 // ESM-safe __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Path to the local tsx binary used to spawn the CLI under test.
+const tsxBin = path.join(
+  __dirname,
+  "..",
+  "..",
+  "node_modules",
+  ".bin",
+  process.platform === "win32" ? "tsx.CMD" : "tsx",
+);
 
 import {
   FULL_RUN_SENTINEL,
@@ -527,4 +538,78 @@ describe("edge cases", () => {
   it("FULL_RUN_SENTINEL constant has the expected value", () => {
     expect(FULL_RUN_SENTINEL).toBe("__full_run__");
   });
+});
+
+// ---------------------------------------------------------------------------
+// CLI entry point (spawn the script so the isMain guard is exercised)
+// ---------------------------------------------------------------------------
+// Regression: the isMain guard used a hand-rolled `import.meta.url` strip
+// that broke on POSIX, so `npx tsx scripts/select-tests.ts` silently exited 0
+// without writing its --output file, failing the CI "Select tests" step.
+
+describe("select-tests CLI (isMain guard)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = tmpDir();
+  });
+
+  it(
+    "runs when executed directly and writes the --output file",
+    async () => {
+      const outPath = path.join(dir, "selected.txt");
+      const result = spawnSync(
+        process.execPath,
+        [
+          tsxBin,
+          path.join(__dirname, "..", "..", "scripts", "select-tests.ts"),
+          "--changed-files",
+          "src/services/checkout.ts",
+          "--graph",
+          path.join(__dirname, "..", "..", "scripts", "test-graph.json"),
+          "--output",
+          outPath,
+        ],
+        { encoding: "utf-8" },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toContain("Cannot find module");
+      expect(fs.existsSync(outPath)).toBe(true);
+      const text = fs.readFileSync(outPath, "utf-8");
+      const lines = text
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line).not.toBe(FULL_RUN_SENTINEL);
+      }
+    },
+    60_000,
+  );
+
+  it(
+    "emits __full_run__ for a changed file missing from the graph",
+    async () => {
+      const outPath = path.join(dir, "selected-full.txt");
+      const result = spawnSync(
+        process.execPath,
+        [
+          tsxBin,
+          path.join(__dirname, "..", "..", "scripts", "select-tests.ts"),
+          "--changed-files",
+          "src/definitely-not-in-graph.ts",
+          "--graph",
+          path.join(__dirname, "..", "..", "scripts", "test-graph.json"),
+          "--output",
+          outPath,
+        ],
+        { encoding: "utf-8" },
+      );
+      expect(result.status).toBe(0);
+      expect(fs.existsSync(outPath)).toBe(true);
+      expect(fs.readFileSync(outPath, "utf-8")).toContain(FULL_RUN_SENTINEL);
+    },
+    60_000,
+  );
 });

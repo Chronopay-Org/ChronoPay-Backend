@@ -19,24 +19,17 @@ import { validateBody } from "../middleware/validation.js";
 import { antiFraudScoring, captureRequestBody } from "../middleware/fraudScoring.js";
 import {
   CreateBookingIntentBodySchema,
+  type CreateBookingIntentBody,
 } from "../middleware/schemas.js";
 import {
   BookingIntentService,
   BookingIntentError,
-  parseCreateBookingIntentBody,
 } from "../modules/booking-intents/booking-intent-service.js";
 import { isAppError } from "../errors/AppError.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { FraudScorer } from "../services/fraudScorer.js";
-import {
-  FraudReasonCode,
-  getFraudReasonCode,
-  getFraudMessage,
-} from "../services/fraudReasonCodes.js";
-import { QuarantineStore } from "../services/quarantineStore.js";
-import { InMemoryFxRateProvider } from "../services/fxRateProvider.js";
 
 export function createBookingIntentsRouter(
   options: {
@@ -44,28 +37,7 @@ export function createBookingIntentsRouter(
     slotRepository?: InMemorySlotRepository;
   } = {},
 ) {
-  /**
-   * Recurring booking requests are identified by an `rrule` field and are
-   * mutually exclusive with a single-`slotId` booking. Rejecting payloads that
-   * carry both removes a silently-ambiguous contract (previously `rrule` won
-   * and `slotId` was ignored) before any downstream work happens.
-   *
-   * @throws BookingIntentError(400) when both `slotId` and `rrule` are present.
-   */
-  function assertNotAmbiguousBookingPayload(body: unknown): void {
-    if (body && typeof body === "object" && !Array.isArray(body)) {
-      const candidate = body as Record<string, unknown>;
-      if (candidate.slotId !== undefined && candidate.rrule !== undefined) {
-        throw new BookingIntentError(
-          400,
-          "slotId and rrule are mutually exclusive: provide either a single slotId or a recurring rrule.",
-        );
-      }
-    }
-  }
-
   const router = Router();
-
   // ─── Repositories (replace with DB layer in production) ────────────────────
   const bookingIntentRepository =
     options.bookingIntentRepository ?? new InMemoryBookingIntentRepository();
@@ -74,20 +46,14 @@ export function createBookingIntentsRouter(
 
   function handleServiceError(error: unknown, res: Response): void {
     if (error instanceof BookingIntentError) {
-      res.status(error.status).json({
-        success: false,
-        error: error.message,
-        code: error.code,
-      });
+      // Emit the shared AppError envelope so every route answers with the
+      // same shape (success/code/message/error/timestamp).
+      res.status(error.status).json(error.toJSON());
       return;
     }
 
     if (isAppError(error)) {
-      res.status(error.statusCode).json({
-        success: false,
-        error: error.message,
-        code: error.code,
-      });
+      res.status(error.statusCode).json(error.toJSON());
       return;
     }
 
@@ -119,18 +85,39 @@ export function createBookingIntentsRouter(
     async (req: Request, res: Response): Promise<void> => {
       try {
         const input = req.body as CreateBookingIntentBody;
+        assertNotAmbiguousBookingPayload(input);
         if (input.rrule !== undefined) {
-          const report = await bookingIntentService.createRecurringIntents(input, req.auth!);
+          const report = await bookingIntentService.createRecurringIntents(
+            {
+              rrule: input.rrule,
+              note: input.note,
+              bookingType: input.bookingType,
+              holdDeadlineMs: input.holdDeadlineMs,
+            },
+            req.auth!,
+          );
           res.status(201).json({
             success: true,
             report,
           });
-        } else {
-          const intent = await bookingIntentService.createIntent(input, req.auth!);
+        } else if (input.slotId !== undefined) {
+          const intent = await bookingIntentService.createIntent(
+            {
+              slotId: input.slotId,
+              note: input.note,
+              bookingType: input.bookingType,
+              holdDeadlineMs: input.holdDeadlineMs,
+            },
+            req.auth!,
+          );
           res.status(201).json({
             success: true,
             intent,
           });
+        } else {
+          // The schema requires one of slotId/rrule; keep the contract explicit
+          // for callers that bypass body validation.
+          throw new BookingIntentError(400, "slotId is required when rrule is not provided.");
         }
       } catch (error) {
         handleServiceError(error, res);
@@ -240,6 +227,33 @@ export function createBookingIntentsRouter(
         res.status(200).json({
           success: true,
           refund,
+        });
+      } catch (error) {
+        handleServiceError(error, res);
+      }
+    },
+  );
+
+  router.post(
+    "/:id/no-show",
+    requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    requireAuthenticatedActor(["professional", "admin"]),
+    createAuthAwareRateLimiter(),
+    auditMiddleware("MARK_NO_SHOW"),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+        const forfeitRatio =
+          typeof req.body?.forfeitRatio === "number" ? req.body.forfeitRatio : undefined;
+
+        const result = await bookingIntentService.markNoShow(req.params.id, req.auth!, {
+          reason,
+          forfeitRatio,
+        });
+
+        res.status(200).json({
+          success: true,
+          result,
         });
       } catch (error) {
         handleServiceError(error, res);

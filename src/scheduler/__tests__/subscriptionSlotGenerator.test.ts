@@ -1,4 +1,3 @@
-import { jest } from "@jest/globals";
 import {
   SubscriptionSlotGenerator,
   createSubscriptionSlotGenerator,
@@ -33,8 +32,6 @@ describe("SubscriptionSlotGenerator", () => {
         timezone: "UTC",
         priceCents: 0,
         currency: "USD",
-        maxSubscribers: null,
-        active: true,
       });
 
       // Create subscription due now
@@ -66,8 +63,6 @@ describe("SubscriptionSlotGenerator", () => {
         timezone: "UTC",
         priceCents: 0,
         currency: "USD",
-        maxSubscribers: null,
-        active: true,
       });
 
       subscriptionRepo.create({
@@ -97,8 +92,6 @@ describe("SubscriptionSlotGenerator", () => {
         timezone: "UTC",
         priceCents: 0,
         currency: "USD",
-        maxSubscribers: null,
-        active: true,
       });
 
       subscriptionRepo.create({
