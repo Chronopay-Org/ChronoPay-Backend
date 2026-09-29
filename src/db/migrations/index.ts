@@ -75,13 +75,38 @@ export const migrations: Migration[] = [
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────
 // This runs once when the module is first imported. Fail-fast here is safer
 // than discovering the error mid-migration run in production.
-const ids = migrations.map((m) => m.id);
-const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
 
-if (duplicates.length > 0) {
-  throw new Error(
-    `Duplicate migration IDs detected: ${[...new Set(duplicates)].join(", ")}. ` +
-      "Each migration must have a unique ID. " +
-      "Fix the registry in src/db/migrations/index.ts before continuing.",
-  );
+/**
+ * Return the IDs that appear more than once, preserving the order in which each
+ * duplicated ID is first re-encountered.
+ */
+export function findDuplicateMigrationIds(list: Pick<Migration, "id">[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const migration of list) {
+    if (seen.has(migration.id)) {
+      duplicates.add(migration.id);
+    } else {
+      seen.add(migration.id);
+    }
+  }
+  return [...duplicates];
 }
+
+/**
+ * Throw a descriptive error when the registry contains duplicate IDs. Kept as a
+ * named export so the failure path can be tested deterministically without
+ * importing a malformed registry into the process.
+ */
+export function assertUniqueMigrationIds(list: Pick<Migration, "id">[]): void {
+  const duplicates = findDuplicateMigrationIds(list);
+  if (duplicates.length > 0) {
+    throw new Error(
+      `Duplicate migration IDs detected: ${duplicates.join(", ")}. ` +
+        "Each migration must have a unique ID. " +
+        "Fix the registry in src/db/migrations/index.ts before continuing.",
+    );
+  }
+}
+
+assertUniqueMigrationIds(migrations);
