@@ -4,6 +4,7 @@ import { ContractInteractionArgs, ContractCallResult, TransactionResult } from "
 import { ContractService } from "../services/contract.service.js";
 import { withTimeout, withRetry } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
+import { ContractInvalidRequestError } from "../errors/contractErrors.js";
 
 /**
  * Ethers.js implementation of the IContractClient.
