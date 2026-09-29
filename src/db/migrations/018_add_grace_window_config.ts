@@ -42,7 +42,7 @@ export const migration: Migration = {
   async up(client: PoolClient): Promise<void> {
     // 1. Current effective config per category.
     await client.query(`
-      CREATE TABLE slot_category_grace_windows (
+      CREATE TABLE IF NOT EXISTS slot_category_grace_windows (
         id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
         category             TEXT        NOT NULL,
         grace_window_seconds INTEGER     NOT NULL,
@@ -56,13 +56,13 @@ export const migration: Migration = {
     `);
 
     await client.query(`
-      CREATE INDEX idx_grace_windows_category
+      CREATE INDEX IF NOT EXISTS idx_grace_windows_category
         ON slot_category_grace_windows (category)
     `);
 
     // 2. Immutable history table.
     await client.query(`
-      CREATE TABLE slot_category_grace_window_history (
+      CREATE TABLE IF NOT EXISTS slot_category_grace_window_history (
         id                            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
         category                      TEXT        NOT NULL,
         previous_grace_window_seconds INTEGER,
@@ -79,29 +79,36 @@ export const migration: Migration = {
     `);
 
     await client.query(`
-      CREATE INDEX idx_grace_window_history_category
+      CREATE INDEX IF NOT EXISTS idx_grace_window_history_category
         ON slot_category_grace_window_history (category)
     `);
 
     await client.query(`
-      CREATE INDEX idx_grace_window_history_changed_at
+      CREATE INDEX IF NOT EXISTS idx_grace_window_history_changed_at
         ON slot_category_grace_window_history (changed_at DESC)
     `);
 
-    // 3. Add nullable category column to the slots table.
+    // 3. Add nullable category column to the slots table safely if not already present.
     await client.query(`
       ALTER TABLE slots
-        ADD COLUMN category TEXT
+        ADD COLUMN IF NOT EXISTS category TEXT
     `);
 
     await client.query(`
-      ALTER TABLE slots
-        ADD CONSTRAINT chk_slots_category_len
-        CHECK (category IS NULL OR char_length(category) <= 100)
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'chk_slots_category_len'
+        ) THEN
+          ALTER TABLE slots
+            ADD CONSTRAINT chk_slots_category_len
+            CHECK (category IS NULL OR char_length(category) <= 100);
+        END IF;
+      END $$;
     `);
 
     await client.query(`
-      CREATE INDEX idx_slots_category
+      CREATE INDEX IF NOT EXISTS idx_slots_category
         ON slots (category)
         WHERE category IS NOT NULL
     `);
