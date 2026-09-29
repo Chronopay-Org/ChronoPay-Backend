@@ -378,6 +378,7 @@
   ],
 
   "src/config/config.service.ts": [
+    "src/config/__tests__/config.service.test.ts",
     "src/config/__tests__/env.test.ts"
   ],
 
@@ -637,6 +638,13 @@
 
   "src/buyer-profile/buyer-profile.routes.ts": [
     "src/__tests__/marketplaceSearch.test.ts"
+  ],
+
+  "src/buyer-profile/dto/buyer-profile.dto.ts": [
+    "src/buyer-profile/__tests__/buyer-profile.dto.test.ts",
+    "src/buyer-profile/__tests__/buyer-profile.types.test.ts",
+    "src/buyer-profile/__tests__/index.test.ts",
+    "src/buyer-profile/__tests__/buyer-profile.routes.test.ts"
   ],
 
   "src/metrics/slotMetrics.ts": [
