@@ -38,7 +38,6 @@ export function createBookingIntentsRouter(
   } = {},
 ) {
   const router = Router();
-
   // ─── Repositories (replace with DB layer in production) ────────────────────
   const bookingIntentRepository =
     options.bookingIntentRepository ?? new InMemoryBookingIntentRepository();
@@ -86,6 +85,7 @@ export function createBookingIntentsRouter(
     async (req: Request, res: Response): Promise<void> => {
       try {
         const input = req.body as CreateBookingIntentBody;
+        assertNotAmbiguousBookingPayload(input);
         if (input.rrule !== undefined) {
           const report = await bookingIntentService.createRecurringIntents(
             {
