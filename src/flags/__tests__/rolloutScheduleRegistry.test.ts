@@ -3,6 +3,7 @@ import {
   RolloutScheduleRegistry,
   getRolloutScheduleRegistry,
   resetRolloutScheduleRegistry,
+  type RolloutScheduleFilter,
 } from "../rolloutScheduleRegistry.js";
 import {
   RolloutScheduleError,
@@ -466,46 +467,283 @@ describe("RolloutScheduleRegistry", () => {
   // ─── list() / getById() / findGoverningSchedule() ───────────────────────
 
   describe("read helpers", () => {
-    it("getById returns undefined for an unknown id", () => {
-      expect(registry.getById("nope")).toBeUndefined();
+    describe("getById", () => {
+      it("returns undefined for an unknown id", () => {
+        expect(registry.getById("nope")).toBeUndefined();
+      });
+
+      it("returns a cloned schedule for a valid id", () => {
+        const created = registry.create(baseInput());
+        const fetched = registry.getById(created.id);
+        expect(fetched).toBeDefined();
+        expect(fetched?.id).toBe(created.id);
+        expect(fetched?.flag).toBe(created.flag);
+      });
     });
 
-    it("list filters by flag, tenantId, environment, and status", () => {
-      registry.create(baseInput());
-      registry.create(baseInput({ tenantId: "tenant-b" }));
-      registry.create(baseInput({ flag: "SMS_NOTIFICATIONS", tenantId: "tenant-c" }));
+    describe("list and RolloutScheduleFilter (empty-result and boundary regression suite)", () => {
+      it("returns an empty array when the registry has no schedules", () => {
+        expect(registry.list()).toEqual([]);
+        expect(registry.list({})).toEqual([]);
+        expect(registry.list({ flag: "CREATE_SLOT" })).toEqual([]);
+        expect(registry.list({ tenantId: "tenant-a" })).toEqual([]);
+        expect(registry.list({ environment: "production" })).toEqual([]);
+        expect(registry.list({ status: "pending" })).toEqual([]);
+      });
 
-      expect(registry.list({ tenantId: "tenant-a" })).toHaveLength(1);
-      expect(registry.list({ flag: "SMS_NOTIFICATIONS" })).toHaveLength(1);
-      expect(registry.list({ environment: "production" })).toHaveLength(3);
-      expect(registry.list({ status: "pending" })).toHaveLength(3);
-      expect(registry.list()).toHaveLength(3);
+      it("list filters by flag, tenantId, environment, and status", () => {
+        registry.create(baseInput());
+        registry.create(baseInput({ tenantId: "tenant-b" }));
+        registry.create(baseInput({ flag: "SMS_NOTIFICATIONS", tenantId: "tenant-c" }));
+
+        expect(registry.list({ tenantId: "tenant-a" })).toHaveLength(1);
+        expect(registry.list({ flag: "SMS_NOTIFICATIONS" })).toHaveLength(1);
+        expect(registry.list({ environment: "production" })).toHaveLength(3);
+        expect(registry.list({ status: "pending" })).toHaveLength(3);
+        expect(registry.list()).toHaveLength(3);
+      });
+
+      it("returns an empty array when filter.flag does not match any schedule", () => {
+        registry.create(baseInput({ flag: "CREATE_SLOT" }));
+        const results = registry.list({ flag: "SMS_NOTIFICATIONS" });
+        expect(results).toEqual([]);
+        expect(results).toHaveLength(0);
+      });
+
+      it("returns an empty array when filter.tenantId does not match any schedule", () => {
+        registry.create(baseInput({ tenantId: "tenant-a" }));
+        const results = registry.list({ tenantId: "nonexistent-tenant" });
+        expect(results).toEqual([]);
+        expect(results).toHaveLength(0);
+      });
+
+      it("returns an empty array when filter.environment does not match any schedule", () => {
+        registry.create(baseInput({ environment: "production" }));
+        const results = registry.list({ environment: "development" });
+        expect(results).toEqual([]);
+        expect(results).toHaveLength(0);
+      });
+
+      it("returns an empty array when filter.status does not match any schedule", () => {
+        registry.create(baseInput()); // status is "pending"
+        expect(registry.list({ status: "active" })).toEqual([]);
+        expect(registry.list({ status: "completed" })).toEqual([]);
+        expect(registry.list({ status: "paused" })).toEqual([]);
+        expect(registry.list({ status: "rolled_back" })).toEqual([]);
+      });
+
+      it("returns an empty array when multi-attribute filter matches partially but not completely", () => {
+        registry.create(baseInput({ flag: "CREATE_SLOT", tenantId: "tenant-a", environment: "production" }));
+        const results = registry.list({
+          flag: "CREATE_SLOT",
+          tenantId: "tenant-a",
+          environment: "development",
+        });
+        expect(results).toEqual([]);
+        expect(results).toHaveLength(0);
+      });
+
+      it("returns all schedules when filter fields are explicitly undefined", () => {
+        registry.create(baseInput({ tenantId: "tenant-a" }));
+        registry.create(baseInput({ tenantId: "tenant-b" }));
+
+        const filterWithUndefined: RolloutScheduleFilter = {
+          flag: undefined,
+          tenantId: undefined,
+          environment: undefined,
+          status: undefined,
+        };
+        const results = registry.list(filterWithUndefined);
+        expect(results).toHaveLength(2);
+      });
+
+      it("returns deep copies so mutating array elements in list does not mutate registry state", () => {
+        const schedule = registry.create(baseInput());
+        const listResults = registry.list();
+        listResults[0].status = "completed";
+        listResults[0].steps.push({ percentage: 999, at: T3 });
+
+        const fresh = registry.getById(schedule.id)!;
+        expect(fresh.status).toBe("pending");
+        expect(fresh.steps).toHaveLength(3);
+      });
     });
 
-    it("findGoverningSchedule prefers a tenant-specific schedule over the wildcard", () => {
-      registry.create(baseInput({ tenantId: ALL_TENANTS, steps: [{ percentage: 5, at: T0 }] }));
-      registry.create(baseInput({ tenantId: "tenant-a", steps: [{ percentage: 40, at: T0 }] }));
-      registry.advanceDue(new Date(T0));
+    describe("findGoverningSchedule (regression suite for line 259 return undefined & neighboring paths)", () => {
+      // ── Explicit empty-result / failure path: line 259 return undefined ──
 
-      const governing = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production");
-      expect(governing?.currentPercentage).toBe(40);
+      it("returns undefined when registry has no schedules (empty registry)", () => {
+        const result = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production");
+        expect(result).toBeUndefined();
+        expect(result === undefined).toBe(true);
+      });
 
-      const otherTenant = registry.findGoverningSchedule("CREATE_SLOT", "tenant-z", "production");
-      expect(otherTenant?.currentPercentage).toBe(5);
-    });
+      it("returns undefined when a schedule exists for a different flag", () => {
+        registry.create(baseInput({ flag: "SMS_NOTIFICATIONS", tenantId: "tenant-a", environment: "production" }));
+        const result = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production");
+        expect(result).toBeUndefined();
+      });
 
-    it("findGoverningSchedule returns undefined when nothing governs the tuple", () => {
-      expect(registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production")).toBeUndefined();
-    });
+      it("returns undefined when a schedule exists for a different environment", () => {
+        registry.create(baseInput({ flag: "CREATE_SLOT", tenantId: "tenant-a", environment: "development" }));
+        expect(registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production")).toBeUndefined();
+        expect(registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "test")).toBeUndefined();
+      });
 
-    it("returned schedules are deep copies that cannot mutate internal state", () => {
-      const schedule = registry.create(baseInput());
-      schedule.steps.push({ percentage: 999, at: T3 });
-      schedule.history.push({ action: "advanced", stepIndex: 5, percentage: 999, timestamp: T3, actor: "eve" });
+      it("returns undefined when a schedule exists for a different tenant and no wildcard exists", () => {
+        registry.create(baseInput({ flag: "CREATE_SLOT", tenantId: "tenant-b", environment: "production" }));
+        const result = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production");
+        expect(result).toBeUndefined();
+      });
 
-      const fresh = registry.getById(schedule.id)!;
-      expect(fresh.steps).toHaveLength(3);
-      expect(fresh.history).toHaveLength(1);
+      it("returns undefined when querying ALL_TENANTS directly and no wildcard schedule exists (exercises line 259 tenantId !== ALL_TENANTS bypass)", () => {
+        registry.create(baseInput({ flag: "CREATE_SLOT", tenantId: "tenant-a", environment: "production" }));
+        // When tenantId === ALL_TENANTS, specific lookup fails, then the wildcard branch (if tenantId !== ALL_TENANTS)
+        // is skipped, dropping straight to line 259 return undefined.
+        const result = registry.findGoverningSchedule("CREATE_SLOT", ALL_TENANTS, "production");
+        expect(result).toBeUndefined();
+      });
+
+      it("returns undefined when a wildcard exists for a different flag", () => {
+        registry.create(baseInput({ flag: "SMS_NOTIFICATIONS", tenantId: ALL_TENANTS, environment: "production" }));
+        const result = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production");
+        expect(result).toBeUndefined();
+      });
+
+      it("returns undefined when a wildcard exists for a different environment", () => {
+        registry.create(baseInput({ flag: "CREATE_SLOT", tenantId: ALL_TENANTS, environment: "development" }));
+        const result = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production");
+        expect(result).toBeUndefined();
+      });
+
+      it("returns undefined when internal currentByKey points to a missing schedule id", () => {
+        const schedule = registry.create(baseInput({ flag: "CREATE_SLOT", tenantId: "tenant-a", environment: "production" }));
+        // Corrupt/delete the internal schedule entry while key remains in currentByKey
+        (registry as any).schedules.delete(schedule.id);
+        const result = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production");
+        expect(result).toBeUndefined();
+      });
+
+      it("returns undefined when internal wildcard points to a missing schedule id", () => {
+        const schedule = registry.create(baseInput({ flag: "CREATE_SLOT", tenantId: ALL_TENANTS, environment: "production" }));
+        (registry as any).schedules.delete(schedule.id);
+        const result = registry.findGoverningSchedule("CREATE_SLOT", "tenant-z", "production");
+        expect(result).toBeUndefined();
+      });
+
+      // ── Neighboring normal path (success paths) ──
+
+      it("returns tenant-specific schedule when exact match exists", () => {
+        const created = registry.create(baseInput({
+          flag: "CREATE_SLOT",
+          tenantId: "tenant-a",
+          environment: "production",
+          steps: [{ percentage: 25, at: T0 }],
+        }));
+        registry.advanceDue(new Date(T0));
+
+        const governing = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production");
+        expect(governing).toBeDefined();
+        expect(governing).toMatchObject({
+          id: created.id,
+          flag: "CREATE_SLOT",
+          tenantId: "tenant-a",
+          environment: "production",
+          status: "completed",
+          currentPercentage: 25,
+          currentStepIndex: 0,
+        });
+        expect(governing?.steps).toHaveLength(1);
+        expect(governing?.history.length).toBeGreaterThanOrEqual(1);
+      });
+
+      it("falls back to wildcard schedule when tenant-specific schedule does not exist", () => {
+        const wildcard = registry.create(baseInput({
+          flag: "CREATE_SLOT",
+          tenantId: ALL_TENANTS,
+          environment: "production",
+          steps: [{ percentage: 15, at: T0 }],
+        }));
+        registry.advanceDue(new Date(T0));
+
+        const governing = registry.findGoverningSchedule("CREATE_SLOT", "tenant-any", "production");
+        expect(governing).toBeDefined();
+        expect(governing?.id).toBe(wildcard.id);
+        expect(governing?.tenantId).toBe(ALL_TENANTS);
+        expect(governing?.currentPercentage).toBe(15);
+      });
+
+      it("prefers a tenant-specific schedule over the wildcard", () => {
+        registry.create(baseInput({ tenantId: ALL_TENANTS, steps: [{ percentage: 5, at: T0 }] }));
+        registry.create(baseInput({ tenantId: "tenant-a", steps: [{ percentage: 40, at: T0 }] }));
+        registry.advanceDue(new Date(T0));
+
+        const governing = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production");
+        expect(governing?.currentPercentage).toBe(40);
+
+        const otherTenant = registry.findGoverningSchedule("CREATE_SLOT", "tenant-z", "production");
+        expect(otherTenant?.currentPercentage).toBe(5);
+      });
+
+      it("returns wildcard schedule when querying ALL_TENANTS directly and wildcard exists", () => {
+        const wildcard = registry.create(baseInput({
+          flag: "CREATE_SLOT",
+          tenantId: ALL_TENANTS,
+          environment: "production",
+          steps: [{ percentage: 30, at: T0 }],
+        }));
+        registry.advanceDue(new Date(T0));
+
+        const governing = registry.findGoverningSchedule("CREATE_SLOT", ALL_TENANTS, "production");
+        expect(governing).toBeDefined();
+        expect(governing?.id).toBe(wildcard.id);
+        expect(governing?.tenantId).toBe(ALL_TENANTS);
+        expect(governing?.currentPercentage).toBe(30);
+      });
+
+      // ── Boundary inputs and immutability contract ──
+
+      it("returns undefined for boundary inputs such as unknown or empty tenantId when no wildcard exists", () => {
+        registry.create(baseInput({ tenantId: "tenant-a" }));
+        expect(registry.findGoverningSchedule("CREATE_SLOT", "", "production")).toBeUndefined();
+        expect(registry.findGoverningSchedule("CREATE_SLOT", "   ", "production")).toBeUndefined();
+        expect(registry.findGoverningSchedule("CREATE_SLOT", "TENANT-A", "production")).toBeUndefined();
+      });
+
+      it("returns wildcard for boundary tenantId when wildcard exists", () => {
+        registry.create(baseInput({ tenantId: ALL_TENANTS }));
+        const emptyTenantResult = registry.findGoverningSchedule("CREATE_SLOT", "", "production");
+        expect(emptyTenantResult).toBeDefined();
+        expect(emptyTenantResult?.tenantId).toBe(ALL_TENANTS);
+      });
+
+      it("isolates environments strictly (development, test, production)", () => {
+        registry.create(baseInput({ environment: "development", steps: [{ percentage: 10, at: T0 }] }));
+        registry.create(baseInput({ environment: "test", steps: [{ percentage: 20, at: T0 }] }));
+        registry.advanceDue(new Date(T0));
+
+        expect(registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "development")?.currentPercentage).toBe(10);
+        expect(registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "test")?.currentPercentage).toBe(20);
+        expect(registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production")).toBeUndefined();
+      });
+
+      it("returned schedules are deep copies that cannot mutate internal state", () => {
+        const schedule = registry.create(baseInput());
+        schedule.steps.push({ percentage: 999, at: T3 });
+        schedule.history.push({ action: "advanced", stepIndex: 5, percentage: 999, timestamp: T3, actor: "eve" });
+
+        const fresh = registry.getById(schedule.id)!;
+        expect(fresh.steps).toHaveLength(3);
+        expect(fresh.history).toHaveLength(1);
+
+        const governing = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production")!;
+        governing.steps.push({ percentage: 999, at: T3 });
+        governing.history.push({ action: "advanced", stepIndex: 5, percentage: 999, timestamp: T3, actor: "eve" });
+
+        const freshGoverning = registry.findGoverningSchedule("CREATE_SLOT", "tenant-a", "production")!;
+        expect(freshGoverning.steps).toHaveLength(3);
+        expect(freshGoverning.history).toHaveLength(1);
+      });
     });
   });
 });

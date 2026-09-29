@@ -26,27 +26,30 @@ const BASE_INTENT: Omit<BookingIntentRecord, "id"> = {
 // and owned by "alice" (not "user1" or "user2"), so no self-booking conflict.
 const ALICE_SLOT_ID = "slot-11111111-1111-4111-8111-111111111111";
 
+// Shared across every suite in this file: each endpoint-level suite below needs
+// the same app wired to a fresh in-memory repository per test.
+let app: express.Express;
+let repo: InMemoryBookingIntentRepository;
+
+beforeEach(() => {
+  process.env.FF_CREATE_BOOKING_INTENT = "true";
+  setFeatureFlagsFromEnv(process.env);
+  repo = new InMemoryBookingIntentRepository();
+  app = express();
+  app.use(express.json());
+  app.use(featureFlagContextMiddleware);
+  app.use(
+    "/api/v1/booking-intents",
+    createBookingIntentsRouter({ bookingIntentRepository: repo }),
+  );
+});
+
+afterAll(() => {
+  delete process.env.FF_CREATE_BOOKING_INTENT;
+  setFeatureFlagsFromEnv(process.env);
+});
+
 describe("booking intents endpoints", () => {
-  let app: express.Express;
-  let repo: InMemoryBookingIntentRepository;
-
-  beforeEach(() => {
-    process.env.FF_CREATE_BOOKING_INTENT = "true";
-    setFeatureFlagsFromEnv(process.env);
-    repo = new InMemoryBookingIntentRepository();
-    app = express();
-    app.use(express.json());
-    app.use(featureFlagContextMiddleware);
-    app.use(
-      "/api/v1/booking-intents",
-      createBookingIntentsRouter({ bookingIntentRepository: repo }),
-    );
-  });
-
-  afterAll(() => {
-    delete process.env.FF_CREATE_BOOKING_INTENT;
-    setFeatureFlagsFromEnv(process.env);
-  });
 
   // ─── GET /:id ───────────────────────────────────────────────────────────────
 
@@ -150,9 +153,8 @@ describe("booking intents endpoints", () => {
 
   describe("POST /:id/no-show", () => {
     it("allows a supplier to mark a confirmed booking as a no-show and forfeit escrow share", async () => {
-      await repo.create({
+      const intent = await repo.create({
         ...BASE_INTENT,
-        id: "intent-no-show-1",
         professional: "pro-1",
         customerId: "user1",
         status: "confirmed",
@@ -164,12 +166,12 @@ describe("booking intents endpoints", () => {
           nowMs: 1500,
           activeBookings: 1,
           capacity: 1,
-          config: {},
+          config: { strategy: "fixed" },
         },
       });
 
       const res = await request(app)
-        .post("/api/v1/booking-intents/intent-no-show-1/no-show")
+        .post(`/api/v1/booking-intents/${intent.id}/no-show`)
         .send({ reason: "Buyer did not arrive", forfeitRatio: 0.2 })
         .set("x-chronopay-user-id", "pro-1")
         .set("x-chronopay-role", "professional");
@@ -183,15 +185,14 @@ describe("booking intents endpoints", () => {
     });
 
     it("rejects a customer from marking no-show", async () => {
-      await repo.create({
+      const intent = await repo.create({
         ...BASE_INTENT,
-        id: "intent-no-show-2",
         professional: "pro-1",
         customerId: "user1",
       });
 
       const res = await request(app)
-        .post("/api/v1/booking-intents/intent-no-show-2/no-show")
+        .post(`/api/v1/booking-intents/${intent.id}/no-show`)
         .send({ reason: "No show" })
         .set("x-chronopay-user-id", "user1")
         .set("x-chronopay-role", "customer");
@@ -201,15 +202,14 @@ describe("booking intents endpoints", () => {
     });
 
     it("rejects invalid forfeit ratios", async () => {
-      await repo.create({
+      const intent = await repo.create({
         ...BASE_INTENT,
-        id: "intent-no-show-3",
         professional: "pro-1",
         customerId: "user1",
       });
 
       const res = await request(app)
-        .post("/api/v1/booking-intents/intent-no-show-3/no-show")
+        .post(`/api/v1/booking-intents/${intent.id}/no-show`)
         .send({ forfeitRatio: 2 })
         .set("x-chronopay-user-id", "pro-1")
         .set("x-chronopay-role", "professional");
@@ -235,7 +235,6 @@ describe("POST /:id/refund", () => {
   it("returns a proportional refund for a partially consumed booking", async () => {
     const intent = await repo.create({
       ...BASE_INTENT,
-      id: "intent-refund-1",
       customerId: "user1",
       professional: "pro-1",
       status: "confirmed",
@@ -249,7 +248,7 @@ describe("POST /:id/refund", () => {
         nowMs: 0,
         activeBookings: 1,
         capacity: 1,
-        config: {},
+        config: { strategy: "fixed" },
       },
     });
 
@@ -269,7 +268,6 @@ describe("POST /:id/refund", () => {
   it("rejects invalid cancellation timestamps on refund requests", async () => {
     const intent = await repo.create({
       ...BASE_INTENT,
-      id: "intent-refund-2",
       customerId: "user1",
       professional: "pro-1",
       status: "confirmed",
@@ -283,7 +281,7 @@ describe("POST /:id/refund", () => {
         nowMs: 0,
         activeBookings: 1,
         capacity: 1,
-        config: {},
+        config: { strategy: "fixed" },
       },
     });
 

@@ -1,13 +1,4 @@
-// `CHECKOUT` must stay listed here: `resolveFeatureFlags` iterates this tuple
-// to build the active flag state, so a registry entry missing from it is
-// silently never resolved (and `requireFeatureFlag` 500s at runtime).
-export const FEATURE_FLAG_NAMES = Object.freeze([
-  "CREATE_SLOT",
-  "CREATE_BOOKING_INTENT",
-  "CHECKOUT",
-  "SMS_NOTIFICATIONS",
-  "SEARCH_LTR_RERANKER",
-] as const);
+export const FEATURE_FLAG_NAMES = ["CREATE_SLOT", "CREATE_BOOKING_INTENT", "CHECKOUT", "SMS_NOTIFICATIONS", "SEARCH_LTR_RERANKER"] as const;
 
 export type FeatureFlagName = (typeof FEATURE_FLAG_NAMES)[number];
 

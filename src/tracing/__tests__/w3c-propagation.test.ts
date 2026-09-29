@@ -1,4 +1,4 @@
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect, jest } from "@jest/globals";
 import { parseTraceparent, formatTraceparent, createChildContext, type TraceContext } from "../context.js";
 import { tracingMiddleware, getPropagationHeaders, TRACE_HEADERS } from "../middleware.js";
 import { createInstrumentedRedisClient } from "../redisInstrumentation.js";

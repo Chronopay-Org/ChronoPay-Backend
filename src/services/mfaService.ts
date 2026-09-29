@@ -9,10 +9,8 @@ import {
   TOTP_PERIOD_SECONDS,
 } from "../utils/totp.js";
 import { encryptTotpSecret, decryptTotpSecret } from "./mfaCrypto.js";
-import {
-  getMfaRepository,
-  type MfaRepository,
-} from "../repositories/mfaRepository.js";
+import { getMfaRepository } from "../repositories/mfaRepository.js";
+import type { MfaRepository } from "../models/mfaEnrollment.js";
 import { signJwt, verifyJwtWithKey } from "../utils/jwt.js";
 import {
   MfaAlreadyEnrolledError,
