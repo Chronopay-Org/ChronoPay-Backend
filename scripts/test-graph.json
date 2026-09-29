@@ -378,6 +378,7 @@
   ],
 
   "src/config/config.service.ts": [
+    "src/config/__tests__/config.service.test.ts",
     "src/config/__tests__/env.test.ts"
   ],
 
