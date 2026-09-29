@@ -7,6 +7,12 @@
  *
  * A duplicate-ID guard runs at module load time so misconfiguration is caught
  * immediately (at startup or test import) rather than silently at runtime.
+ *
+ * ID rules: every registered migration must expose a unique, zero-padded,
+ * strictly sequential id ("001", "002", ...) in the SAME order as this array,
+ * because `MigrationRunner` uses the id as the tracking-table key and
+ * `driftDetector.validateMigrationOrder` asserts position N has id "(N+1)".
+ * Renumber here (and in the migration file) rather than reusing an id.
  */
 
 import { Migration } from "../migrationRunner.js";

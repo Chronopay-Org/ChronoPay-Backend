@@ -11,7 +11,18 @@ export interface VerifiedJwtPayload extends JWTPayload {
 }
 
 export async function verifyJwt(token: string, options?: { issuer?: string; audience?: string }) {
+  // The config service loads secrets asynchronously from the provider. Until
+  // that preload lands, the version list is empty and every token would be
+  // rejected as invalid — so fall back to the environment, which is what the
+  // default env-backed provider reads anyway.
   const secrets = configService.getAllSecretVersions("JWT_SECRET");
+  if (secrets.length === 0) {
+    const fromEnv = process.env.JWT_SECRET?.trim();
+    if (fromEnv) {
+      return verifyJwtWithKey(token, fromEnv, buildVerifyOptions(options));
+    }
+  }
+
   const verifyOptions = buildVerifyOptions(options);
 
   for (const secret of secrets) {

@@ -68,6 +68,19 @@ export function shouldRetryContractError(error: unknown): boolean {
     return true;
   }
 
+  // A 5xx from the provider is retriable by definition. Reading the status off
+  // the error is more reliable than matching status digits in its message text
+  // (e.g. ContractProviderUnavailableError carries 503 but no "503" in text).
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    typeof (error as { statusCode: unknown }).statusCode === "number" &&
+    (error as { statusCode: number }).statusCode >= 500
+  ) {
+    return true;
+  }
+
   return (
     text.includes("rate limit") ||
     text.includes("timeout") ||

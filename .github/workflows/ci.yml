@@ -59,9 +59,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history on PRs so git diff can compute the merge-base.
-          # Pushes to main always run the full suite so depth=1 is fine.
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          # Full history on PRs so `git diff origin/main...HEAD` can compute
+          # the merge-base (with depth=1 the origin/main ref does not exist
+          # and that step fails). Pushes to main always run the full suite
+          # so depth=1 is fine there.
+          # NB: the 0/1 must be quoted — unquoted, `true && 0 || 1`
+          # evaluates to 1 because 0 is falsy in the GitHub expression
+          # language (so PRs would get a shallow clone too).
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -109,12 +114,20 @@ jobs:
         id: select_tests
         if: github.event_name == 'pull_request'
         run: |
+          set -euo pipefail
           mapfile -t changed < /tmp/changed_files.txt
           npx tsx scripts/select-tests.ts \
             --changed-files "${changed[@]}" \
             --graph scripts/test-graph.json \
             --output /tmp/selected-tests.txt \
             --verbose
+          # Fail fast if the selector produced no output — an empty/missing
+          # file would otherwise make the next step run
+          # `npm test -- --testPathPattern=""` (matching nothing).
+          if [ ! -s /tmp/selected-tests.txt ]; then
+            echo "::error::select-tests produced no output — expected a test list or __full_run__"
+            exit 1
+          fi
           echo "Selected tests:"
           cat /tmp/selected-tests.txt
 

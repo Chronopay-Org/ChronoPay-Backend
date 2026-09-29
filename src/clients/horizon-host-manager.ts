@@ -1,6 +1,8 @@
 import { horizonHostHealth, horizonFailoverTotal } from "../metrics.js";
-import { HorizonUnavailableError } from "../errors/contractErrors.js";
-import { shouldRetryContractError } from "../errors/contractErrors.js";
+import {
+  HorizonUnavailableError,
+  shouldRetryContractError,
+} from "../errors/contractErrors.js";
 
 const QUARANTINE_COOLDOWN_MS = 15000;
 const ERROR_WINDOW_MS = 10000;
@@ -14,6 +16,23 @@ interface HostStatus {
   quarantinedAt: number;
   errorTimestamps: number[];
   lastSuccessAt: number;
+}
+
+/**
+ * True when the error is an HTTP client-error response (4xx).
+ *
+ * A 4xx means the host answered correctly and rejected our request, which says
+ * nothing about host health. Counting e.g. a `tx_bad_seq` 400 as a host failure
+ * would quarantine a perfectly healthy Horizon and make
+ * `sendTransactionWithSequenceRecovery` fail after a few collisions. 429 is
+ * deliberately excluded: a rate-limited host does need a cooldown.
+ */
+function isHttpClientError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("statusCode" in error)) {
+    return false;
+  }
+  const status = (error as { statusCode: unknown }).statusCode;
+  return typeof status === "number" && status >= 400 && status < 500 && status !== 429;
 }
 
 export class HorizonHostManager {
@@ -102,8 +121,12 @@ export class HorizonHostManager {
   }
 
   public recordError(url: string, error: unknown) {
+    if (isHttpClientError(error)) {
+      return; // don't quarantine for 4xx errors
+    }
+
     if (!shouldRetryContractError(error)) {
-       return; // don't quarantine for 4xx errors
+       return; // don't quarantine for non-retriable errors
     }
 
     const host = this.hosts.find(h => h.url === url);

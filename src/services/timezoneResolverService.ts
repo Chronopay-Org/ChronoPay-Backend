@@ -7,7 +7,10 @@ import {
 } from "../modules/slots/slot-repository.js";
 import { AuditLogger, defaultAuditLogger } from "./auditLogger.js";
 
-const VALID_TZ_REGEX = /^[A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?$/;
+// Cheap pre-filter only; `Intl.DateTimeFormat` below is the real authority.
+// Allows 0-2 segments so single-segment zones like "UTC" are not rejected
+// before Intl gets to validate them.
+const VALID_TZ_REGEX = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+){0,2}$/;
 
 export class InvalidTimezoneError extends Error {
   constructor(timezone: string) {

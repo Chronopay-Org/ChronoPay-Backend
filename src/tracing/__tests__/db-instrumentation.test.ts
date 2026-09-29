@@ -152,23 +152,31 @@ describe("DB Instrumentation", () => {
     });
 
     it("should record query duration", async () => {
-      const mockPool = {
-        query: jest.fn().mockImplementation(
-          () =>
-            new Promise((resolve) => {
-              setTimeout(() => {
-                resolve({ rowCount: 1, rows: [] });
-              }, 50);
-            }),
-        ),
-      } as any;
+      // Span start and end are both read with Date.now() (createChildContext
+      // and withSpan), so this drives the clock rather than sleeping. A real
+      // setTimeout(50) is not guaranteed to yield a 50ms Date.now() delta —
+      // timers can fire slightly early and Date.now() has millisecond
+      // resolution — so a real sleep made this assertion flaky (49 vs 50).
+      let now = 1_000;
+      const nowSpy = jest.spyOn(Date, "now").mockImplementation(() => now);
 
-      await queryWithSpan(mockPool, "SELECT 1", []);
+      try {
+        const mockPool = {
+          query: jest.fn().mockImplementation(() => {
+            now += 250; // pretend the query took 250ms
+            return Promise.resolve({ rowCount: 1, rows: [] });
+          }),
+        } as any;
 
-      expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      expect(span.duration).toBeGreaterThanOrEqual(50);
-      expect(span.attributes.latency).toBe(span.duration);
+        await queryWithSpan(mockPool, "SELECT 1", []);
+
+        expect(collectedSpans).toHaveLength(1);
+        const span = collectedSpans[0];
+        expect(span.duration).toBe(250);
+        expect(span.attributes.latency).toBe(span.duration);
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
 
     it("should limit statement length for long queries", async () => {

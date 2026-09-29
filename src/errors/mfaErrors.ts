@@ -80,10 +80,7 @@ export class MfaChallengeInvalidError extends Error implements MfaErrorShape {
 }
 
 export function isMfaError(error: unknown): error is Error & MfaErrorShape {
-  return (
-    error instanceof Error &&
-    "statusCode" in error &&
-    typeof (error as MfaErrorShape).statusCode === "number" &&
-    "errorCode" in error
-  );
+  if (!(error instanceof Error)) return false;
+  const candidate = error as { statusCode?: unknown };
+  return typeof candidate.statusCode === "number" && "errorCode" in error;
 }
