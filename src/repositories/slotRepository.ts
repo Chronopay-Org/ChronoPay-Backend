@@ -35,7 +35,7 @@ export interface SecondaryListingRecord {
   updatedAt: string;
 }
 
-const _slots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
+const _legacySlots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
   id: idx + 1,
   professional: `Professional ${idx + 1}`,
   startTime: new Date(Date.UTC(2026, 0, 1, 8, 0, 0) + idx * 60 * 60 * 1000).toISOString(),
@@ -43,7 +43,23 @@ const _slots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
   _internalNote: "do not expose",
 }));
 
-const seededSlotCatalog: Slot[] = [
+/**
+ * A slot from the bundled demo catalog. Unlike the legacy `Slot` shape it is
+ * keyed by an opaque string id and carries the ownership/transferability
+ * fields the secondary-marketplace routes read off the record.
+ */
+export interface SeededSlotRecord {
+  id: string;
+  professional: string;
+  ownerId: string;
+  buyerId: string;
+  transferable: boolean;
+  startTime: number;
+  endTime: number;
+  bookable: boolean;
+}
+
+const seededSlotCatalog: SeededSlotRecord[] = [
   {
     id: "slot-11111111-1111-4111-8111-111111111111",
     professional: "supplier-1",
@@ -78,7 +94,7 @@ const seededSlotCatalog: Slot[] = [
 
 const secondaryListings = new Map<string, SecondaryListingRecord>();
 
-export function getSlotRecordById(slotId: string): Slot | undefined {
+export function getSlotRecordById(slotId: string): SeededSlotRecord | undefined {
   const fixedSlotId = String(slotId);
   return seededSlotCatalog.find((slot) => String(slot.id) === fixedSlotId)
     ? { ...seededSlotCatalog.find((slot) => String(slot.id) === fixedSlotId)! }
@@ -150,11 +166,9 @@ export const __test__clearSlots = (): void => {
   secondaryListings.clear();
 };
 
-// @ts-expect-error - Auto-fixed by script
 export const getSlotsCount = async (): Promise<number> => _legacySlots.length;
 
 export const getSlotsPage = async (offset: number, limit: number): Promise<Slot[]> => {
   if (offset < 0 || limit < 0) throw new Error("Invalid pagination parameters");
-  // @ts-expect-error - Auto-fixed by script
   return _legacySlots.slice(offset, offset + limit);
 };

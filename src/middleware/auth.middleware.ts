@@ -6,6 +6,7 @@
 
 import { Request, Response, NextFunction } from "express";
 import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
+import { configService } from "../config/config.service.js";
 
 export enum UserRole {
   USER = "user",
@@ -29,22 +30,106 @@ declare global {
 
 /**
  * Authentication middleware
- * Verifies the JWT token and attaches the decoded payload to the request
+ *
+ * Reads the `Authorization: Bearer <jwt>` header, verifies the signature and
+ * expiry against the active JWT secrets (including rotated-out versions), and
+ * attaches the decoded payload to `req.user`.
+ *
+ * Status codes:
+ * - 401 the request carried no usable credentials (missing header, wrong
+ *   scheme, empty token, or a token that fails verification)
+ * - 500 the service is misconfigured (no signing secret available), which is
+ *   a server fault and must not be reported as "unauthenticated"
  */
 export function authenticateToken(req: Request, res: Response, next: NextFunction) {
-  try {
-    // @ts-expect-error - Auto-fixed by script
-    const decoded = verifyJwt(token);
-    // @ts-expect-error - Auto-fixed by script
-    req.user = decoded;
-    next();
-  } catch (error) {
-    return res.status(500).json({
+  const authHeader = req.headers?.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({
       success: false,
-      error: "Authentication error",
-      message: error instanceof Error ? error.message : "An unknown error occurred",
+      error: "Authorization header is required",
     });
   }
+
+  const [scheme, ...rest] = authHeader.trim().split(/\s+/);
+  if (!scheme || scheme.toLowerCase() !== "bearer") {
+    return res.status(401).json({
+      success: false,
+      error: "Authorization header must use the Bearer scheme",
+    });
+  }
+
+  const token = rest.join(" ").trim();
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      error: "Bearer token is missing",
+    });
+  }
+
+  // Without a signing key we cannot validate anything, and reporting 401 here
+  // would tell an authenticated caller they are merely unauthorized. Surface
+  // the server-side misconfiguration instead.
+  if (!hasJwtSecret()) {
+    return res.status(500).json({
+      success: false,
+      error: "Authentication middleware error: JWT signing secret is not configured",
+      message: "Authentication middleware error",
+    });
+  }
+
+  verifyJwt(token)
+    .then((decoded) => {
+      // `Express.Request["user"]` is declared twice in src/types/express.d.ts
+      // (a pre-existing conflict), and the surviving shape requires a string
+      // `id` while the JWT payload types it as optional. The payload is the
+      // source of truth, so narrow it at the single assignment site rather
+      // than widening the global type for every caller.
+      req.user = decoded as typeof req.user;
+      next();
+    })
+    .catch(() => {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid or expired token",
+      });
+    });
+}
+
+/**
+ * Optional variant of {@link authenticateToken}.
+ *
+ * Populates `req.user` when a valid bearer token is present, and continues
+ * unauthenticated when the request carries no `Authorization` header at all.
+ * A header that *is* present but unusable is still a 401 — sending broken
+ * credentials is a client error, not an anonymous request.
+ *
+ * Used on routes that are readable anonymously but whose behaviour narrows
+ * once the caller identifies itself.
+ */
+export function authenticateTokenIfPresent(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  if (!req.headers?.authorization) {
+    return next();
+  }
+  return authenticateToken(req, res, next);
+}
+
+/**
+ * True when at least one JWT signing secret is available.
+ *
+ * The default secrets provider is env-backed, so the environment is checked
+ * directly; the config service is consulted as well for deployments that
+ * register an explicit provider.
+ */
+function hasJwtSecret(): boolean {
+  if (process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length > 0) {
+    return true;
+  }
+  return configService.getAllSecretVersions("JWT_SECRET").length > 0;
 }
 
 export { authenticateToken as authenticate };

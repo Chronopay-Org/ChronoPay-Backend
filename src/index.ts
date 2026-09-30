@@ -201,12 +201,38 @@ const _shutdownHooks: Array<() => void> = [];
 })();
 
 const PORT = config.port || 3001;
-const server = app.listen(PORT, () => {
-  logger.info({ port: PORT }, `ChronoPay API listening on http://localhost:${PORT}`);
-});
+
+/**
+ * Under test we must not bind a port: several suites import this module in the
+ * same process, and the first `listen` would make every later import throw
+ * EADDRINUSE. Tests drive the exported Express app through supertest instead.
+ */
+const isTestEnv = process.env.NODE_ENV === "test";
+const server = isTestEnv
+  ? undefined
+  : app.listen(PORT, () => {
+      logger.info({ port: PORT }, `ChronoPay API listening on http://localhost:${PORT}`);
+    });
 
 let _serverInstance: any = server;
 let _isShuttingDown = false;
+let _activeRequests = 0;
+
+/** Express middleware that keeps the in-flight request counter current. */
+export function trackRequests(req: any, res: any, next: () => void): void {
+  _activeRequests += 1;
+  let settled = false;
+  const done = (): void => {
+    if (settled) return;
+    settled = true;
+    _activeRequests -= 1;
+  };
+  res.on("finish", done);
+  res.on("close", done);
+  next();
+}
+
+app.use(trackRequests);
 
 export function setServer(srv: any): void {
   _serverInstance = srv;
@@ -236,6 +262,10 @@ export async function gracefulShutdown(): Promise<void> {
   }
 }
 
-export function getActiveRequestCount(): number { return 0; }
+/** Number of requests currently being served and not yet finished. */
+export function getActiveRequestCount(): number {
+  return _activeRequests;
+}
 
-export default server;
+export { app };
+export default app;

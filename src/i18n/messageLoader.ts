@@ -13,14 +13,16 @@ import { ES_MESSAGES } from "./locales.es.js";
 
 export type SupportedLocale = "en" | "es";
 
-type DeepString<T> = {
-  [K in keyof T]: T[K] extends string ? string : DeepString<T[K]>;
-};
+/**
+ * Recursively widens literal types to their primitives so every locale file
+ * (whose literals differ per translation) satisfies the same catalog shape.
+ */
+type Widen<T> = T extends string ? string : { [K in keyof T]: Widen<T[K]> };
 
 /**
  * Message catalog type: nested object matching the locale file structure.
  */
-export type MessageCatalog = DeepString<typeof EN_MESSAGES>;
+export type MessageCatalog = Widen<typeof EN_MESSAGES>;
 
 /**
  * Locale-indexed catalog of messages.

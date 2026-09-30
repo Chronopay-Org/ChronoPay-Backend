@@ -290,7 +290,7 @@ describe("RBAC role hierarchy", () => {
     const result = middleware(req as any, res as any, () => {
       throw new Error("next should not be called");
     });
-    expect((result as any).s).toBe(500);
+    expect((result as { s?: number }).s).toBe(500);
   });
 
   it("fails startup validation for a missing roles object", () => {

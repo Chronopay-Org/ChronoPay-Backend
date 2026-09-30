@@ -171,6 +171,9 @@ export function sendError(
   if (!entry) {
     throw new Error(`Unknown error code: ${String(code)}`);
   }
+  // The taxonomy entry decides the emission path, so narrow the union code to
+  // match the sender the entry selects (the record keys already guarantee the
+  // code/scope pairing at runtime).
   if (isPublicError(entry)) {
     return sendPublicError(res, code as PublicErrorCode, message, options);
   }

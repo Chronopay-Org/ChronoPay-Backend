@@ -7,6 +7,12 @@
  *
  * A duplicate-ID guard runs at module load time so misconfiguration is caught
  * immediately (at startup or test import) rather than silently at runtime.
+ *
+ * ID rules: every registered migration must expose a unique, zero-padded,
+ * strictly sequential id ("001", "002", ...) in the SAME order as this array,
+ * because `MigrationRunner` uses the id as the tracking-table key and
+ * `driftDetector.validateMigrationOrder` asserts position N has id "(N+1)".
+ * Renumber here (and in the migration file) rather than reusing an id.
  */
 
 import { Migration } from "../migrationRunner.js";
@@ -26,16 +32,16 @@ import { migration as migration011a } from "./011_add_slot_valid_until.js";
 import { migration as migration011b } from "./011_create_outbox_table.js";
 import { migration as migration011c } from "./011_create_refund_entries_table.js";
 import { migration as migration012 } from "./012_create_redemption_ledger.js";
-import { migration as migration013 } from "./013_enable_row_level_security.js";
 import { migration as migration014 } from "./014_add_slot_geo_fields.js";
-import { migration as migration015 } from "./015_add_reputation_bootstrap_columns.js";
-import { migration as migration016 } from "./016_create_reputation_events.js";
-import { migration as migration017 } from "./017_create_reputation_snapshots.js";
-import { migration as migration018 } from "./018_add_grace_window_config.js";
-import { migration as migration019 } from "./019_add_partner_token_quotas.js";
-import { migration as migration020 } from "./020_add_active_booking_intent_unique_idx.js";
-import { migration as migration021 } from "./021_create_escrow_holdings_table.js";
-import { migration as migration022 } from "./022_create_mfa_enrollments_table.js";
+import { migration as migration013 } from "./013_enable_row_level_security.js";
+import { migration as migration014a } from "./014_add_reputation_bootstrap_columns.js";
+import { migration as migration014b } from "./014_create_reputation_events.js";
+import { migration as migration015 } from "./015_create_reputation_snapshots.js";
+import { migration as migration016 } from "./016_add_grace_window_config.js";
+import { migration as migration017 } from "./018_add_partner_token_quotas.js";
+import { migration as migration019 } from "./019_add_active_booking_intent_unique_idx.js";
+import { migration as migration020 } from "./020_create_escrow_holdings_table.js";
+import { migration as migration021 } from "./021_create_mfa_enrollments_table.js";
 
 export const migrations: Migration[] = [
   migration001,
@@ -54,28 +60,53 @@ export const migrations: Migration[] = [
   migration011b,
   migration011c,
   migration012,
-  migration013,
   migration014,
+  migration013,
+  migration014a,
+  migration014b,
   migration015,
   migration016,
   migration017,
-  migration018,
   migration019,
   migration020,
   migration021,
-  migration022,
 ];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────
 // This runs once when the module is first imported. Fail-fast here is safer
 // than discovering the error mid-migration run in production.
-const ids = migrations.map((m) => m.id);
-const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
 
-if (duplicates.length > 0) {
-  throw new Error(
-    `Duplicate migration IDs detected: ${[...new Set(duplicates)].join(", ")}. ` +
-      "Each migration must have a unique ID. " +
-      "Fix the registry in src/db/migrations/index.ts before continuing.",
-  );
+/**
+ * Return the IDs that appear more than once, preserving the order in which each
+ * duplicated ID is first re-encountered.
+ */
+export function findDuplicateMigrationIds(list: Pick<Migration, "id">[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const migration of list) {
+    if (seen.has(migration.id)) {
+      duplicates.add(migration.id);
+    } else {
+      seen.add(migration.id);
+    }
+  }
+  return [...duplicates];
 }
+
+/**
+ * Throw a descriptive error when the registry contains duplicate IDs. Kept as a
+ * named export so the failure path can be tested deterministically without
+ * importing a malformed registry into the process.
+ */
+export function assertUniqueMigrationIds(list: Pick<Migration, "id">[]): void {
+  const duplicates = findDuplicateMigrationIds(list);
+  if (duplicates.length > 0) {
+    throw new Error(
+      `Duplicate migration IDs detected: ${duplicates.join(", ")}. ` +
+        "Each migration must have a unique ID. " +
+        "Fix the registry in src/db/migrations/index.ts before continuing.",
+    );
+  }
+}
+
+assertUniqueMigrationIds(migrations);

@@ -1,9 +1,16 @@
+import { createHash } from "crypto";
+import {
+  Account,
+  Asset,
+  Memo,
+  Networks,
+  Operation,
+  TransactionBuilder,
+} from "@stellar/stellar-sdk";
 import { ContractService } from "./contract.service.js";
 import { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { AppError } from "../errors/AppError.js";
 import type { HorizonContractClient } from "../clients/horizon-contract-client.js";
-import { Asset, Account, TransactionBuilder, Networks, Operation, Memo } from "@stellar/stellar-sdk";
-import crypto from "crypto";
 
 /**
  * Trustline info representation for testing and Horizon inspection.
@@ -288,10 +295,16 @@ export class TokenService {
     signer: any, // Keypair from @stellar/stellar-sdk
     networkPassphrase?: string
   ): string {
-    const assetCode = `CHRONO:${intentId.substring(0, 6).toUpperCase()}`;
+    // Stellar asset codes are capped at 12 alphanumeric characters, so derive a
+    // deterministic code by sanitizing the intent id rather than embedding a
+    // separator (a `CHRONO:` prefix would always exceed the limit).
+    const assetCode = `CHRONO${intentId
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .substring(0, 6)
+      .toUpperCase()}`;
     const asset = new Asset(assetCode, sourceAccount);
     
-    const hash = crypto.createHash("sha256").update(intentId).digest();
+    const hash = createHash("sha256").update(intentId).digest();
     
     const account = new Account(sourceAccount, sequenceNumber);
     const tx = new TransactionBuilder(account, {
@@ -313,7 +326,7 @@ export class TokenService {
           source: sourceAccount
         })
       )
-      .addMemo(Memo.hash(hash.toString("hex")))
+      .addMemo(Memo.hash(hash))
       .build();
       
     tx.sign(signer);

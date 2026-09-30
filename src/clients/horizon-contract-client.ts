@@ -380,6 +380,211 @@ export interface StreamEventsOptions {
   backoffMaxMs?: number;
 }
 
+/**
+ * Jittered exponential backoff for SSE reconnects.
+ *
+ * Delay grows as `base * factor^attempt` (capped at `max`) with a random
+ * upward jitter of up to {@link SSE_JITTER_FACTOR} of the grown value, and is
+ * clamped to ≥ 0. Jitter is one-sided (never below the deterministic base) so
+ * successive delays stay ordered even after rounding.
+ */
+function streamBackoffDelay(baseMs: number, maxMs: number, attempt: number): number {
+  const growth = Math.min(baseMs * Math.pow(SSE_BACKOFF_FACTOR, attempt), maxMs);
+  const jitter = 1 + SSE_JITTER_FACTOR * Math.random();
+  return Math.max(0, Math.round(growth * jitter));
+}
+
+/**
+ * Abortable sleep used between reconnect attempts.
+ *
+ * The timer is cleared and the promise resolves immediately when `signal`
+ * aborts, so an abort during backoff stops the stream without waiting out the
+ * full delay.
+ */
+function streamSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+/**
+ * Parses one SSE frame (up to a blank line) into a {@link HorizonSseEvent}.
+ *
+ * Frames without a `data:` line and frames whose JSON payload fails to parse
+ * yield `undefined` — callers must skip them. The event type defaults to
+ * `"message"` per the SSE spec when the frame has no `event:` line.
+ */
+function parseSseFrame(frame: string): HorizonSseEvent | undefined {
+  let eventType = "message";
+  let dataLine: string | undefined;
+
+  for (const line of frame.split("\n")) {
+    if (line.startsWith(":")) continue; // comment / keep-alive
+    if (line.startsWith("event:")) {
+      eventType = line.slice("event:".length).trim();
+    } else if (line.startsWith("data:")) {
+      const chunk = line.slice("data:".length);
+      dataLine = dataLine === undefined ? chunk : dataLine + "\n" + chunk;
+    }
+  }
+
+  if (dataLine === undefined) return undefined;
+
+  let data: unknown;
+  try {
+    data = JSON.parse(dataLine.trim());
+  } catch {
+    return undefined;
+  }
+
+  if (data === null || typeof data !== "object") return undefined;
+
+  const payload = data as { paging_token?: unknown; id?: unknown };
+  const cursor =
+    typeof payload.paging_token === "string"
+      ? payload.paging_token
+      : typeof payload.id === "string"
+        ? payload.id
+        : "";
+
+  return { cursor, eventType, data };
+}
+
+/**
+ * How one SSE connection ended — drives the caller's stop/reconnect/finish
+ * decision without conflating the three cases.
+ */
+interface SseConnectionOutcome {
+  /** The external signal fired while consuming the body. */
+  aborted: boolean;
+  /** The body stream errored mid-flight (network disconnect). */
+  streamError: unknown;
+  /** The caller's onEvent callback rejected. */
+  handlerError: unknown;
+}
+
+/**
+ * Consumes an SSE body incrementally, delivering each parsed event to
+ * `onEvent` as soon as it is read (never buffering the whole stream), so an
+ * abort mid-stream is observed without waiting for the server to close.
+ *
+ * Handles frames split across chunk boundaries, CRLF line endings, and several
+ * frames in a single chunk. The returned outcome distinguishes the ways a
+ * connection can end so the caller can decide between stopping (abort),
+ * reconnecting (stream or handler error), and finishing (clean close).
+ */
+async function runSseConnection(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal | undefined,
+  onEvent: (event: HorizonSseEvent) => Promise<void>,
+): Promise<SseConnectionOutcome> {
+  const outcome: SseConnectionOutcome = {
+    aborted: false,
+    streamError: undefined,
+    handlerError: undefined,
+  };
+  const decoder = new TextDecoder();
+  const reader = body.getReader();
+
+  let buffer = "";
+  let aborted = false;
+  let notifyInterrupt: (() => void) | undefined;
+
+  const onAbort = () => {
+    aborted = true;
+    // Unblock a pending read awaiter, if any.
+    if (notifyInterrupt) {
+      const fn = notifyInterrupt;
+      notifyInterrupt = undefined;
+      fn();
+    }
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  /** Deliver one parsed frame, recording a handler crash. */
+  const deliver = async (event: HorizonSseEvent): Promise<boolean> => {
+    try {
+      await onEvent(event);
+      return true;
+    } catch (err) {
+      outcome.handlerError = err;
+      return false;
+    }
+  };
+
+  try {
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => {
+            notifyInterrupt = () => reject(new Error("aborted"));
+            // Abort may already have fired between reads.
+            if (aborted) {
+              const fn = notifyInterrupt;
+              notifyInterrupt = undefined;
+              fn();
+            }
+          }),
+        ]);
+        // Read won the race — drop the stale rejector so a later abort can
+        // never reject the already-settled loser promise.
+        notifyInterrupt = undefined;
+      } catch (err) {
+        // Abort while waiting for the next chunk — not a stream error.
+        if (aborted) {
+          outcome.aborted = true;
+          break;
+        }
+        outcome.streamError = err;
+        break;
+      }
+
+      if (chunk.done) break;
+
+      buffer += decoder.decode(chunk.value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+
+      for (const frame of frames) {
+        const normalized = frame.replace(/\r\n/g, "\n");
+        const parsed = parseSseFrame(normalized);
+        if (!parsed) continue;
+        if (!(await deliver(parsed))) return outcome;
+      }
+    }
+
+    if (!aborted && outcome.handlerError === undefined && buffer.length > 0) {
+      const parsed = parseSseFrame(buffer.replace(/\r\n/g, "\n"));
+      if (parsed) {
+        await deliver(parsed);
+      }
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    try {
+      await reader.cancel();
+    } catch {
+      // stream already closed or errored
+    }
+  }
+
+  return outcome;
+}
+
 export interface StellarPayoutBalanceOptions {
   amount?: string | number;
   baseReserve?: number;
@@ -619,6 +824,135 @@ export class HorizonContractClient implements IContractClient {
     );
 
     return { data, blockNumber: 0 };
+  }
+
+  /**
+   * Streams events from a Horizon SSE endpoint with durable cursor resume.
+   *
+   * Behaviour:
+   *  - Connects to `GET <host><path>?cursor=<cursor>` with `Accept:
+   *    text/event-stream`.
+   *  - The initial cursor is `resumeAfter` if supplied, otherwise the value in
+   *    the cursor store, otherwise `"now"` (Horizon's "only future events"
+   *    sentinel).
+   *  - Every parsed frame is delivered to `onEvent`; the cursor is only
+   *    persisted **after** `onEvent` resolves, so a handler crash never skips
+   *    an event on reconnect.
+   *  - Network errors and 5xx responses reconnect with jittered exponential
+   *    backoff (`SSE_BACKOFF_BASE_MS`/`SSE_BACKOFF_MAX_MS`/`SSE_BACKOFF_FACTOR`,
+   *    overridable via `backoffBaseMs`/`backoffMaxMs` for tests); 4xx responses
+   *    are terminal and propagate as {@link HorizonHttpError}.
+   *  - `onReconnect(attempt, delayMs, cursor)` fires before each reconnect.
+   *  - An aborted `signal` stops the stream cleanly (resolves, no throw),
+   *    including while a backoff sleep or an inter-event idle timer is armed.
+   *  - A server-side close (`done: true` in the SSE payload) also ends the
+   *    stream without error.
+   */
+  async streamEvents(options: StreamEventsOptions): Promise<void> {
+    const store = options.cursorStore ?? new InMemoryCursorStore();
+    const key = options.streamKey ?? options.path;
+    const baseMs = options.backoffBaseMs ?? SSE_BACKOFF_BASE_MS;
+    const maxMs = options.backoffMaxMs ?? SSE_BACKOFF_MAX_MS;
+    const signal = options.signal;
+
+    // Aborted before we even start → no connection is made.
+    if (signal?.aborted) {
+      return;
+    }
+
+    let attempt = 0;
+
+    /** Backoff + onReconnect; false when the stream must stop (aborted). */
+    const reconnect = async (): Promise<boolean> => {
+      if (signal?.aborted) return false;
+      const delay = streamBackoffDelay(baseMs, maxMs, attempt);
+      options.onReconnect?.(++attempt, delay, await this.safeCursor(store, key));
+      await streamSleep(delay, signal);
+      return !signal?.aborted;
+    };
+
+    while (true) {
+      let cursor: string | undefined;
+      try {
+        cursor = options.resumeAfter ?? (await store.get(key));
+      } catch {
+        cursor = undefined; // a broken store must not kill the stream
+      }
+
+      const initialCursor = cursor ?? "now";
+      const host = await this.hostManager.getHealthyHost();
+      const url =
+        host.replace(/\/+$/, "") +
+        options.path +
+        `?cursor=${encodeURIComponent(initialCursor)}`;
+
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          headers: { Accept: "text/event-stream" },
+          signal,
+        });
+      } catch {
+        // Network-level failure (ECONNRESET, DNS, …) → backoff and reconnect.
+        if (!(await reconnect())) return;
+        continue;
+      }
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        // A 4xx means our request was wrong (expired cursor, auth, absent
+        // path…) — retrying cannot fix it, so surface it to the caller.
+        if (response.status >= 400 && response.status < 500) {
+          throw new HorizonHttpError(response.status, body);
+        }
+        // 5xx: transient server failure → backoff and reconnect.
+        if (!(await reconnect())) return;
+        continue;
+      }
+
+      if (!response.body) {
+        // No stream payload (e.g. mocked or empty 200) — clean stop.
+        return;
+      }
+
+      // Consume frames as they arrive; the persisted cursor only advances
+      // after each onEvent resolves, so a handler crash never skips an event.
+      const outcome = await runSseConnection(response.body, signal, async (event) => {
+        await options.onEvent(event);
+        await this.safeSetCursor(store, key, event.cursor);
+      });
+
+      // Abort mid-stream (or mid-backoff earlier) → stop cleanly.
+      if (outcome.aborted) return;
+
+      // Handler crashed → reconnect from the last acked cursor; the failing
+      // event is redelivered on the next connection.
+      if (outcome.handlerError !== undefined || outcome.streamError !== undefined) {
+        if (!(await reconnect())) return;
+        continue;
+      }
+
+      // Clean end-of-body (server closed the stream) — the stream is over.
+      return;
+    }
+  }
+
+  /** Cursor read that tolerates store failures. */
+  private async safeCursor(store: CursorStore, key: string): Promise<string | undefined> {
+    try {
+      return await store.get(key);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Cursor write that tolerates store failures. */
+  private async safeSetCursor(store: CursorStore, key: string, cursor: string): Promise<void> {
+    try {
+      await store.set(key, cursor);
+    } catch {
+      // best-effort persistence
+    }
   }
 
   /**

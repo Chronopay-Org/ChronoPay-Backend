@@ -20,13 +20,11 @@ import {
 } from "../sendError.js";
 import { ValidationError, NotFoundError, InternalServerError, DatabaseError } from "../AppError.js";
 
-const createMockResponse = (): Response => {
-  const response: Partial<Response> = {
-    status: jest.fn().mockReturnThis() as unknown as Response["status"],
-    json: jest.fn().mockReturnThis() as unknown as Response["json"],
-  };
-  return response as Response;
-};
+const createMockResponse = (): Response =>
+  ({
+    status: jest.fn().mockReturnThis(),
+    json: jest.fn().mockReturnThis(),
+  }) as unknown as Response;
 
 describe("Type-Safe Error Sender", () => {
   let mockRes: Response;
@@ -36,8 +34,8 @@ describe("Type-Safe Error Sender", () => {
     process.env.NODE_ENV = "development";
   });
 
-  const lastJson = (): Record<string, unknown> =>
-    (mockRes.json as unknown as jest.Mock).mock.calls[0][0] as Record<string, unknown>;
+  const lastJson = (): Record<string, any> =>
+    (mockRes.json as unknown as jest.Mock).mock.calls[0][0] as Record<string, any>;
 
   describe("sendPublicError", () => {
     it("sends a valid public error code with the taxonomy status", () => {
@@ -271,7 +269,7 @@ describe("Type-Safe Error Sender", () => {
       sendPublicError(mockRes, "VALIDATION_ERROR", "Test", { locale: "es" });
 
       expect(typeof lastJson().message).toBe("string");
-      expect((lastJson().message as string).length).toBeGreaterThan(0);
+      expect(lastJson().message.length).toBeGreaterThan(0);
       expect(lastJson().message).not.toBe("errors.validation.validation_error");
     });
 

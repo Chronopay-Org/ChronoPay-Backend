@@ -67,8 +67,7 @@ export interface CreateProductInput {
   timezone?: string;
   priceCents?: number;
   currency?: string;
-  maxSubscribers?: number | null;
-  active?: boolean;
+  maxSubscribers?: number;
 }
 
 export interface SubscribeInput {
@@ -214,7 +213,7 @@ export class SubscriptionService {
       priceCents: input.priceCents ?? 0,
       currency: input.currency ?? "USD",
       maxSubscribers: input.maxSubscribers ?? null,
-      active: input.active ?? true,
+      active: true,
     });
   }
 
@@ -232,7 +231,7 @@ export class SubscriptionService {
   }
 
   deactivateProduct(productId: string): SubscriptionProductRecord {
-    const _product = this.getProduct(productId);
+    this.getProduct(productId);
     return this.productRepo.update(productId, { active: false });
   }
 

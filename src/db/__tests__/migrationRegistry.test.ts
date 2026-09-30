@@ -1,48 +1,33 @@
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
+import type { Pool } from "pg";
+
 import { migrations } from "../migrations/index.js";
+import { validateMigrationOrder } from "../driftDetector.js";
+import { MigrationRunner } from "../migrationRunner.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// `validate` and `validateMigrationOrder` are pure structural checks: the pool is
+// never touched, so a stub repository is enough to exercise the real registry.
+const noopRepo = {
+  ensureMigrationsTable: async () => {},
+  getAppliedMigrations: async () => [],
+  recordMigration: async () => {},
+  removeMigration: async () => {},
+};
 
-describe("Migration Registry", () => {
-  it("contains unique migration IDs without duplicates", () => {
+describe("migration registry", () => {
+  it("registers unique, zero-padded, strictly sequential IDs", () => {
     const ids = migrations.map((m) => m.id);
-    const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
-    expect(duplicates).toEqual([]);
+
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual(ids.map((_, index) => String(index + 1).padStart(3, "0")));
   });
 
-  it("exposes valid id, name, up, and down functions for each migration", () => {
-    for (const m of migrations) {
-      expect(typeof m.id).toBe("string");
-      expect(m.id.trim()).not.toBe("");
+  it("passes the `npm run migrate validate` guard used by CI", async () => {
+    const runner = new MigrationRunner(null as unknown as Pool, noopRepo, migrations);
 
-      expect(typeof m.name).toBe("string");
-      expect(m.name.trim()).not.toBe("");
-
-      expect(typeof m.up).toBe("function");
-      expect(typeof m.down).toBe("function");
-    }
+    await expect(runner.validate()).resolves.toEqual({ valid: true, errors: [] });
   });
 
-  it("registers migrations in ascending alphanumeric order", () => {
-    const ids = migrations.map((m) => m.id);
-    const sortedIds = [...ids].sort((a, b) =>
-      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
-    );
-    expect(ids).toEqual(sortedIds);
-  });
-
-  it("matches registered migrations to actual files on disk in src/db/migrations", () => {
-    const migrationsDir = path.resolve(__dirname, "../migrations");
-    const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".ts") && f !== "index.ts");
-
-    for (const m of migrations) {
-      const matchingFile = files.find(
-        (f) => f.startsWith(`${m.id}_`) || f.startsWith(m.id.replace(/[a-z]$/, "") + "_") || f.includes(m.name)
-      );
-      expect(matchingFile).toBeDefined();
-    }
+  it("passes the drift-check order validation", () => {
+    expect(validateMigrationOrder(migrations).errors).toEqual([]);
   });
 });

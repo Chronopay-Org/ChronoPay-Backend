@@ -2,7 +2,7 @@ import { PoolClient } from "pg";
 import { Migration } from "../migrationRunner.js";
 
 export const migration: Migration = {
-  id: "007a",
+  id: "007",
   name: "add_supplier_kyc_columns",
 
   async up(client: PoolClient): Promise<void> {
