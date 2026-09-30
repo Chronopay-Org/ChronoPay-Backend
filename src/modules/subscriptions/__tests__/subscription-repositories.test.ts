@@ -1,7 +1,4 @@
-import {
-  InMemorySubscriptionProductRepository,
-  type SubscriptionProductRecord,
-} from "../subscription-product-repository.js";
+import { InMemorySubscriptionProductRepository } from "../subscription-product-repository.js";
 import {
   InMemorySubscriptionRepository,
   type SubscriptionRecord,
@@ -13,25 +10,6 @@ describe("SubscriptionProductRepository", () => {
   beforeEach(() => {
     repo = new InMemorySubscriptionProductRepository();
   });
-
-  function makeProduct(overrides: Partial<SubscriptionProductRecord> = {}): SubscriptionProductRecord {
-    return {
-      id: "sp-test",
-      name: "Weekly Yoga",
-      description: "Every Monday yoga session",
-      professional: "alice",
-      slotDurationMs: 3_600_000,
-      recurrenceRule: "FREQ=WEEKLY;BYDAY=MO",
-      timezone: "America/New_York",
-      priceCents: 2500,
-      currency: "USD",
-      maxSubscribers: null,
-      active: true,
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      ...overrides,
-    };
-  }
 
   it("creates and retrieves a product", () => {
     const created = repo.create({
@@ -63,6 +41,7 @@ describe("SubscriptionProductRepository", () => {
   it("lists products by professional", () => {
     repo.create({
       name: "Product A",
+      description: "Alice's daily plan",
       professional: "alice",
       slotDurationMs: 3_600_000,
       recurrenceRule: "FREQ=DAILY",
@@ -74,6 +53,7 @@ describe("SubscriptionProductRepository", () => {
     });
     repo.create({
       name: "Product B",
+      description: "Bob's daily plan",
       professional: "bob",
       slotDurationMs: 3_600_000,
       recurrenceRule: "FREQ=DAILY",
@@ -92,6 +72,7 @@ describe("SubscriptionProductRepository", () => {
   it("lists only active products", () => {
     repo.create({
       name: "Active",
+      description: "Active plan",
       professional: "alice",
       slotDurationMs: 3_600_000,
       recurrenceRule: "FREQ=DAILY",
@@ -103,6 +84,7 @@ describe("SubscriptionProductRepository", () => {
     });
     repo.create({
       name: "Inactive",
+      description: "Inactive plan",
       professional: "alice",
       slotDurationMs: 3_600_000,
       recurrenceRule: "FREQ=DAILY",
@@ -121,6 +103,7 @@ describe("SubscriptionProductRepository", () => {
     it("updates a product", () => {
       const created = repo.create({
         name: "Original",
+        description: "Original plan",
         professional: "alice",
         slotDurationMs: 3_600_000,
         recurrenceRule: "FREQ=DAILY",
@@ -145,6 +128,7 @@ describe("SubscriptionProductRepository", () => {
   it("deletes a product", () => {
     const created = repo.create({
       name: "ToDelete",
+      description: "Plan to delete",
       professional: "alice",
       slotDurationMs: 3_600_000,
       recurrenceRule: "FREQ=DAILY",

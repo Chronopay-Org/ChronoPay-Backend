@@ -171,10 +171,13 @@ export function sendError(
   if (!entry) {
     throw new Error(`Unknown error code: ${String(code)}`);
   }
+  // The taxonomy entry decides the emission path, so narrow the union code to
+  // match the sender the entry selects (the record keys already guarantee the
+  // code/scope pairing at runtime).
   if (isPublicError(entry)) {
-    return sendPublicError(res, code, message, options);
+    return sendPublicError(res, code as PublicErrorCode, message, options);
   }
-  return sendInternalError(res, code, message, options);
+  return sendInternalError(res, code as InternalErrorCode, message, options);
 }
 
 /**
@@ -193,7 +196,7 @@ export function sendErrorResponse(res: Response, err: AppError, req?: Request): 
   if (req) {
     const requestId = req.requestId ?? req.id;
     if (requestId !== undefined) {
-      envelope.requestId = requestId;
+      envelope.requestId = String(requestId);
     }
   }
   return res.status(err.statusCode).json(envelope);

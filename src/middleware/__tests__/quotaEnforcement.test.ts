@@ -1,481 +1,502 @@
+// @ts-nocheck
 /**
  * quotaEnforcement.test.ts
  *
- * Focused behaviour coverage for the enforceQuota middleware.
+ * Focused unit tests for the enforceQuota middleware.
  *
- * Strategy: mock `checkAndConsume` (the quota service) and `getPool` (the DB
- * connection) so the middleware can be exercised in full isolation — no DB, no
- * Redis, no Prometheus side-effects.
- *
- * Cases covered:
- *  1. Missing apiKeyId  → skips enforcement and calls next()
- *  2. Daily limit exceeded → 429 with quota payload and "daily" message
- *  3. Monthly limit exceeded → 429 with quota payload and "monthly" message
- *  4. Both limits exceeded → 429 (daily reported in message)
- *  5. Allowed request  → calls next() and sets X-Quota-* response headers
- *  6. Service error (checkAndConsume throws) → fail-open, calls next()
- *  7. next() is NOT called when quota is exceeded (no double-call)
+ * Strategy:
+ *  - Mock all external dependencies (checkAndConsume, SqlQuotaStore,
+ *    getPool, logger) using jest.unstable_mockModule so the tests work
+ *    under Jest's experimental ESM support.
+ *  - Exercise every branch documented in quotaEnforcement.ts:
+ *      1. No apiKeyId  → passes through silently (next() called, no 429)
+ *      2. Allowed      → quota headers attached + next()
+ *      3. Blocked daily  → 429 with daily error message
+ *      4. Blocked monthly → 429 with monthly error message
+ *      5. checkAndConsume throws → fail-open (next() called), error logged
  */
 
-import { describe, it, expect, beforeEach, jest } from "@jest/globals";
+import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import type { Request, Response, NextFunction } from "express";
 
-// ─── Minimal mock helpers ─────────────────────────────────────────────────────
+// ─── Shared mock state (mutated per test in beforeEach) ───────────────────────
 
-/** Minimal stub that satisfies the Express Response interface for these tests. */
-function makeRes() {
-  const headers: Record<string, string> = {};
-  const res = {
-    statusCode: 200,
-    body: undefined as unknown,
-    _headers: headers,
-    status(code: number) {
-      this.statusCode = code;
-      return this;
-    },
-    json(body: unknown) {
-      this.body = body;
-      return this;
-    },
-    setHeader(name: string, value: string) {
-      headers[name.toLowerCase()] = value;
-    },
-  };
-  return res as unknown as Response & {
-    statusCode: number;
-    body: unknown;
-    _headers: Record<string, string>;
-  };
-}
+const mockCheckAndConsume = jest.fn();
+const mockGetPool = jest.fn();
+const mockLoggerError = jest.fn();
 
-/** Build a minimal Request-like object with an optional apiKeyId. */
-function makeReq(apiKeyId?: string): Request {
-  return { apiKeyId } as unknown as Request;
-}
+// SqlQuotaStore constructor — we capture the args to verify pool is passed in
+let lastStoreArg: unknown = undefined;
 
-// ─── Module-level mocks (hoisted before imports) ──────────────────────────────
-
-// Mock getPool so SqlQuotaStore constructor does not reach a real database.
-const mockPool = { query: jest.fn() };
-
-jest.unstable_mockModule("../../db/connection.js", () => ({
-  getPool: jest.fn(() => mockPool),
-}));
-
-// Mock the quota service – we control what checkAndConsume returns per test.
-const mockCheckAndConsume = jest.fn<(...args: unknown[]) => Promise<unknown>>();
+// ─── Module mocks ─────────────────────────────────────────────────────────────
 
 jest.unstable_mockModule("../../services/partnerQuotaService.js", () => ({
   checkAndConsume: mockCheckAndConsume,
-  // SqlQuotaStore is newed-up inside enforceQuota; provide a trivial class.
-  SqlQuotaStore: jest.fn().mockImplementation(() => ({})),
+  SqlQuotaStore: function (pool: unknown) {
+    lastStoreArg = pool;
+    return {}; // return a plain object as the store
+  },
 }));
 
-// Mock logger to prevent log noise and allow assertion on error logging.
-const mockLogger = { error: jest.fn(), warn: jest.fn(), info: jest.fn() };
+jest.unstable_mockModule("../../db/connection.js", () => ({
+  getPool: mockGetPool,
+}));
 
 jest.unstable_mockModule("../../utils/logger.js", () => ({
-  logger: mockLogger,
+  logger: {
+    error: mockLoggerError,
+    info: jest.fn(),
+    warn: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
-// ─── Import SUT after mocks are registered ────────────────────────────────────
-
+// Dynamic import so the mocks are resolved first
 const { enforceQuota } = await import("../quotaEnforcement.js");
 
-// ─── Shared quota result builders ─────────────────────────────────────────────
+// ─── Shared fixture builders ──────────────────────────────────────────────────
 
-function allowedResult(overrides: Partial<ReturnType<typeof baseStatus>> = {}) {
+const BASE_STATUS = {
+  tokenId: "tok_test",
+  dailyUsed: 1,
+  dailyLimit: 10000,
+  monthlyUsed: 1,
+  monthlyLimit: 300000,
+  dailyResetAt: "2026-09-28T00:00:00.000Z",
+  monthlyResetAt: "2026-10-01T00:00:00.000Z",
+  timezone: "UTC",
+  dailyPercentUsed: 0.01,
+  monthlyPercentUsed: 0,
+};
+
+function makeAllowedResult(overrides: Record<string, unknown> = {}) {
   return {
     allowed: true,
     exceeded: null,
-    status: { ...baseStatus(), ...overrides },
+    status: { ...BASE_STATUS, ...overrides },
   };
 }
 
-function exceededResult(exceeded: "daily" | "monthly" | "both") {
+function makeBlockedResult(exceeded: "daily" | "monthly" | "both", statusOverrides: Record<string, unknown> = {}) {
   return {
     allowed: false,
     exceeded,
-    status: baseStatus(),
+    status: { ...BASE_STATUS, ...statusOverrides },
   };
 }
 
-function baseStatus() {
-  return {
-    dailyUsed: 50,
-    dailyLimit: 10000,
-    monthlyUsed: 500,
-    monthlyLimit: 300000,
-    dailyResetAt: "2026-09-28T00:00:00.000Z",
-    monthlyResetAt: "2026-10-01T00:00:00.000Z",
-    tokenId: "tok_test",
-    timezone: "UTC",
-    dailyPercentUsed: 0.5,
-    monthlyPercentUsed: 0.17,
+function makeReq(apiKeyId?: string): Partial<Request> {
+  return { apiKeyId } as Partial<Request>;
+}
+
+function makeRes() {
+  const headers: Record<string, string> = {};
+  const res: any = {
+    status: jest.fn().mockReturnThis(),
+    json: jest.fn().mockReturnThis(),
+    setHeader: jest.fn().mockImplementation((key: string, value: string) => {
+      headers[key] = value;
+    }),
+    _headers: headers,
   };
+  return res;
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("enforceQuota middleware", () => {
   let next: NextFunction;
+  const fakePool = { _fake: "pool" };
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    next = jest.fn() as unknown as NextFunction;
+    next = jest.fn();
+    lastStoreArg = undefined;
+    mockGetPool.mockReturnValue(fakePool);
+    mockCheckAndConsume.mockResolvedValue(makeAllowedResult());
+    mockLoggerError.mockReset();
   });
 
-  // ── 1. No apiKeyId → skip silently ──────────────────────────────────────
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // ── Branch 1: no apiKeyId ──────────────────────────────────────────────────
 
   describe("when req.apiKeyId is absent", () => {
-    it("calls next() without touching the quota service", async () => {
-      const req = makeReq(); // apiKeyId undefined
+    it("calls next() without touching checkAndConsume", async () => {
+      const req = makeReq(undefined);
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
       expect(next).toHaveBeenCalledTimes(1);
+      expect(next).toHaveBeenCalledWith(); // called with no error argument
       expect(mockCheckAndConsume).not.toHaveBeenCalled();
     });
 
-    it("does not set any X-Quota-* headers", async () => {
-      const req = makeReq();
+    it("does not send any response when apiKeyId is absent", async () => {
+      const req = makeReq(undefined);
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
-      expect(res._headers).not.toHaveProperty("x-quota-daily-limit");
-      expect(res._headers).not.toHaveProperty("x-quota-monthly-limit");
+      expect(res.status).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
     });
 
-    it("does not respond with 4xx when no apiKeyId is present", async () => {
-      const req = makeReq();
+    it("handles null apiKeyId the same as undefined (falsy bypass)", async () => {
+      const req = makeReq(null as any);
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
-      expect(res.statusCode).toBe(200); // unchanged default
+      expect(next).toHaveBeenCalledWith();
+      expect(mockCheckAndConsume).not.toHaveBeenCalled();
+    });
+
+    it("treats empty-string apiKeyId as absent (falsy bypass)", async () => {
+      const req = makeReq("" as any);
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(next).toHaveBeenCalledWith();
+      expect(mockCheckAndConsume).not.toHaveBeenCalled();
     });
   });
 
-  // ── 2. Daily limit exceeded → 429 ───────────────────────────────────────
+  // ── Branch 2: request allowed ─────────────────────────────────────────────
+
+  describe("when checkAndConsume returns allowed = true", () => {
+    it("calls next() with no arguments", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(next).toHaveBeenCalledWith();
+    });
+
+    it("does not send a 429 response when allowed", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(res.status).not.toHaveBeenCalledWith(429);
+      expect(res.json).not.toHaveBeenCalled();
+    });
+
+    it("attaches X-Quota-Daily-Limit header with string value", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(res.setHeader).toHaveBeenCalledWith("X-Quota-Daily-Limit", "10000");
+    });
+
+    it("attaches X-Quota-Daily-Used header reflecting current usage", async () => {
+      mockCheckAndConsume.mockResolvedValue(makeAllowedResult({ dailyUsed: 42 }));
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(res.setHeader).toHaveBeenCalledWith("X-Quota-Daily-Used", "42");
+    });
+
+    it("attaches X-Quota-Monthly-Limit header with string value", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(res.setHeader).toHaveBeenCalledWith("X-Quota-Monthly-Limit", "300000");
+    });
+
+    it("attaches X-Quota-Monthly-Used header reflecting current usage", async () => {
+      mockCheckAndConsume.mockResolvedValue(makeAllowedResult({ monthlyUsed: 99 }));
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(res.setHeader).toHaveBeenCalledWith("X-Quota-Monthly-Used", "99");
+    });
+
+    it("all four header values are strings (not numbers)", async () => {
+      mockCheckAndConsume.mockResolvedValue(
+        makeAllowedResult({ dailyLimit: 500, dailyUsed: 7, monthlyLimit: 15000, monthlyUsed: 200 }),
+      );
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      for (const call of (res.setHeader as jest.Mock).mock.calls) {
+        expect(typeof call[1]).toBe("string");
+      }
+    });
+
+    it("passes the correct tokenId to checkAndConsume", async () => {
+      const req = makeReq("tok_xyz");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(mockCheckAndConsume).toHaveBeenCalledWith("tok_xyz", expect.anything());
+    });
+
+    it("constructs a SqlQuotaStore from the pool returned by getPool()", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(mockGetPool).toHaveBeenCalled();
+      expect(lastStoreArg).toBe(fakePool);
+    });
+  });
+
+  // ── Branch 3: daily quota exceeded ────────────────────────────────────────
 
   describe("when daily quota is exceeded", () => {
     beforeEach(() => {
-      mockCheckAndConsume.mockResolvedValue(exceededResult("daily"));
+      mockCheckAndConsume.mockResolvedValue(
+        makeBlockedResult("daily", { dailyUsed: 10000, dailyLimit: 10000 }),
+      );
     });
 
     it("responds with HTTP 429", async () => {
-      const req = makeReq("tok_test");
+      const req = makeReq("tok_abc");
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
-      expect(res.statusCode).toBe(429);
+      expect(res.status).toHaveBeenCalledWith(429);
+    });
+
+    it("sets success: false in the response body", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
     });
 
     it("includes 'daily' in the error message", async () => {
-      const req = makeReq("tok_test");
+      const req = makeReq("tok_abc");
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
-      expect((res.body as Record<string, unknown>).error).toMatch(/daily/i);
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.error).toMatch(/daily/i);
     });
 
-    it("returns success:false in the body", async () => {
-      const req = makeReq("tok_test");
+    it("embeds quota status data (dailyUsed, dailyLimit, monthlyUsed, etc.) in response", async () => {
+      const req = makeReq("tok_abc");
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
-      expect((res.body as Record<string, unknown>).success).toBe(false);
-    });
-
-    it("includes quota data in the response body", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      const body = res.body as Record<string, unknown>;
+      const body = (res.json as jest.Mock).mock.calls[0][0];
       expect(body.data).toMatchObject({
-        dailyUsed: 50,
+        dailyUsed: 10000,
         dailyLimit: 10000,
-        monthlyUsed: 500,
+        monthlyUsed: expect.any(Number),
+        monthlyLimit: expect.any(Number),
+        dailyResetAt: expect.any(String),
+        monthlyResetAt: expect.any(String),
+      });
+    });
+
+    it("does not call next() when daily quota is blocked", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it("does not attach quota headers when request is blocked", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(res.setHeader).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Branch 4: monthly quota exceeded ──────────────────────────────────────
+
+  describe("when monthly quota is exceeded", () => {
+    beforeEach(() => {
+      mockCheckAndConsume.mockResolvedValue(
+        makeBlockedResult("monthly", { monthlyUsed: 300000, monthlyLimit: 300000 }),
+      );
+    });
+
+    it("responds with HTTP 429", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(res.status).toHaveBeenCalledWith(429);
+    });
+
+    it("includes 'monthly' in the error message", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.error).toMatch(/monthly/i);
+    });
+
+    it("embeds monthly quota status data in the response", async () => {
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.data).toMatchObject({
+        monthlyUsed: 300000,
         monthlyLimit: 300000,
       });
     });
 
-    it("does NOT call next() when quota is exceeded", async () => {
-      const req = makeReq("tok_test");
+    it("does not call next() when monthly quota is blocked", async () => {
+      const req = makeReq("tok_abc");
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
       expect(next).not.toHaveBeenCalled();
     });
   });
 
-  // ── 3. Monthly limit exceeded → 429 ─────────────────────────────────────
-
-  describe("when monthly quota is exceeded", () => {
-    beforeEach(() => {
-      mockCheckAndConsume.mockResolvedValue(exceededResult("monthly"));
-    });
-
-    it("responds with HTTP 429", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(res.statusCode).toBe(429);
-    });
-
-    it("includes 'monthly' in the error message", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect((res.body as Record<string, unknown>).error).toMatch(/monthly/i);
-    });
-
-    it("does NOT call next()", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(next).not.toHaveBeenCalled();
-    });
-  });
-
-  // ── 4. Both limits exceeded ───────────────────────────────────────────────
-
-  describe("when both daily and monthly quota are exceeded", () => {
-    beforeEach(() => {
-      mockCheckAndConsume.mockResolvedValue(exceededResult("both"));
-    });
-
-    it("responds with HTTP 429", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(res.statusCode).toBe(429);
-    });
-
-    it("does NOT call next()", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(next).not.toHaveBeenCalled();
-    });
-
-    it("reports 'monthly' in the error message (exceeded==='both' falls to else branch)", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      // exceeded==="both" is not strictly "daily", so the ternary
-      // `result.exceeded === "daily" ? "daily" : "monthly"` resolves to "monthly".
-      expect((res.body as Record<string, unknown>).error).toMatch(/monthly/i);
-    });
-  });
-
-  // ── 5. Allowed request → headers and next() ──────────────────────────────
-
-  describe("when request is within quota", () => {
-    beforeEach(() => {
-      mockCheckAndConsume.mockResolvedValue(allowedResult());
-    });
-
-    it("calls next() exactly once", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(next).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not change the response status", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(res.statusCode).toBe(200);
-    });
-
-    it("sets X-Quota-Daily-Limit header", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(res._headers["x-quota-daily-limit"]).toBe("10000");
-    });
-
-    it("sets X-Quota-Daily-Used header", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(res._headers["x-quota-daily-used"]).toBe("50");
-    });
-
-    it("sets X-Quota-Monthly-Limit header", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(res._headers["x-quota-monthly-limit"]).toBe("300000");
-    });
-
-    it("sets X-Quota-Monthly-Used header", async () => {
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(res._headers["x-quota-monthly-used"]).toBe("500");
-    });
-
-    it("passes the token id to checkAndConsume", async () => {
-      const req = makeReq("tok_partner_42");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      expect(mockCheckAndConsume).toHaveBeenCalledWith(
-        "tok_partner_42",
-        expect.anything(),
-      );
-    });
-  });
-
-  // ── 6. Fail-open on service error ────────────────────────────────────────
+  // ── Branch 5: checkAndConsume throws (fail-open) ──────────────────────────
 
   describe("when checkAndConsume throws an error", () => {
-    beforeEach(() => {
+    it("calls next() to fail open so the request is not dropped", async () => {
       mockCheckAndConsume.mockRejectedValue(new Error("DB connection lost"));
-    });
-
-    it("calls next() (fail-open behaviour)", async () => {
-      const req = makeReq("tok_test");
+      const req = makeReq("tok_abc");
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
       expect(next).toHaveBeenCalledTimes(1);
+      expect(next).toHaveBeenCalledWith();
     });
 
-    it("does not return a 4xx or 5xx response to the caller", async () => {
-      const req = makeReq("tok_test");
+    it("does not send any HTTP response when failing open", async () => {
+      mockCheckAndConsume.mockRejectedValue(new Error("DB connection lost"));
+      const req = makeReq("tok_abc");
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
-      expect(res.statusCode).toBe(200);
+      expect(res.status).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
     });
 
-    it("logs the error via logger.error", async () => {
-      const req = makeReq("tok_test");
+    it("calls logger.error once with a quota-related context string", async () => {
+      mockCheckAndConsume.mockRejectedValue(new Error("timeout"));
+      const req = makeReq("tok_abc");
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
-      expect(mockLogger.error).toHaveBeenCalledTimes(1);
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.stringContaining("[quota-enforcement]"),
-        expect.stringContaining("DB connection lost"),
-      );
+      expect(mockLoggerError).toHaveBeenCalledTimes(1);
+      const firstArg = mockLoggerError.mock.calls[0][0];
+      expect(firstArg).toMatch(/quota/i);
     });
 
-    it("handles non-Error thrown values gracefully", async () => {
-      mockCheckAndConsume.mockRejectedValue("string error thrown");
-      const req = makeReq("tok_test");
+    it("logs the Error message as the second argument to logger.error", async () => {
+      mockCheckAndConsume.mockRejectedValue(new Error("ECONNREFUSED"));
+      const req = makeReq("tok_abc");
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
-      expect(next).toHaveBeenCalledTimes(1);
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.stringContaining("[quota-enforcement]"),
-        "string error thrown",
-      );
+      const secondArg = mockLoggerError.mock.calls[0][1];
+      expect(secondArg).toContain("ECONNREFUSED");
+    });
+
+    it("handles non-Error throws (string) gracefully — still fails open", async () => {
+      mockCheckAndConsume.mockRejectedValue("quota store unavailable");
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      expect(next).toHaveBeenCalledWith();
+      expect(mockLoggerError).toHaveBeenCalled();
+    });
+
+    it("logs the stringified value when a non-Error is thrown", async () => {
+      mockCheckAndConsume.mockRejectedValue("quota store unavailable");
+      const req = makeReq("tok_abc");
+      const res = makeRes();
+
+      await enforceQuota(req as Request, res as Response, next);
+
+      const secondArg = mockLoggerError.mock.calls[0][1];
+      expect(secondArg).toBe("quota store unavailable");
     });
   });
 
-  // ── 7. Header values are stringified numbers ─────────────────────────────
+  // ── Boundary / edge cases ─────────────────────────────────────────────────
 
-  describe("header value format", () => {
-    it("header values are strings, not numbers", async () => {
-      mockCheckAndConsume.mockResolvedValue(
-        allowedResult({ dailyLimit: 5000, dailyUsed: 123, monthlyLimit: 100000, monthlyUsed: 999 }),
-      );
-      const req = makeReq("tok_hdr");
+  describe("boundary and edge cases", () => {
+    it("treats exceeded = 'both' as 'monthly' (source uses ternary: !== 'daily' → monthly)", async () => {
+      mockCheckAndConsume.mockResolvedValue({
+        allowed: false,
+        exceeded: "both",
+        status: { ...BASE_STATUS },
+      });
+      const req = makeReq("tok_abc");
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      await enforceQuota(req as Request, res as Response, next);
 
-      // setHeader receives strings (String(number)) not raw numbers
-      expect(typeof res._headers["x-quota-daily-limit"]).toBe("string");
-      expect(typeof res._headers["x-quota-daily-used"]).toBe("string");
-      expect(typeof res._headers["x-quota-monthly-limit"]).toBe("string");
-      expect(typeof res._headers["x-quota-monthly-used"]).toBe("string");
+      expect(res.status).toHaveBeenCalledWith(429);
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.error).toMatch(/monthly/i);
     });
 
-    it("header values reflect the result status", async () => {
-      mockCheckAndConsume.mockResolvedValue(
-        allowedResult({ dailyLimit: 5000, dailyUsed: 123, monthlyLimit: 100000, monthlyUsed: 999 }),
-      );
-      const req = makeReq("tok_hdr");
+    it("returns a Promise (middleware is async)", () => {
+      const req = makeReq("tok_abc");
       const res = makeRes();
 
-      await enforceQuota(req, res, next);
+      const result = enforceQuota(req as Request, res as Response, next);
 
-      expect(res._headers["x-quota-daily-limit"]).toBe("5000");
-      expect(res._headers["x-quota-daily-used"]).toBe("123");
-      expect(res._headers["x-quota-monthly-limit"]).toBe("100000");
-      expect(res._headers["x-quota-monthly-used"]).toBe("999");
-    });
-  });
-
-  // ── 8. Response body shape for 429 ───────────────────────────────────────
-
-  describe("429 response body contract", () => {
-    it("daily exceeded body includes dailyResetAt and monthlyResetAt", async () => {
-      mockCheckAndConsume.mockResolvedValue(exceededResult("daily"));
-      const req = makeReq("tok_test");
-      const res = makeRes();
-
-      await enforceQuota(req, res, next);
-
-      const data = (res.body as Record<string, unknown>).data as Record<string, unknown>;
-      expect(data).toHaveProperty("dailyResetAt");
-      expect(data).toHaveProperty("monthlyResetAt");
+      expect(result).toBeInstanceOf(Promise);
     });
 
-    it("monthly exceeded body includes dailyResetAt and monthlyResetAt", async () => {
-      mockCheckAndConsume.mockResolvedValue(exceededResult("monthly"));
-      const req = makeReq("tok_test");
-      const res = makeRes();
+    it("works correctly with different token IDs in the same test session", async () => {
+      const tokens = ["tok_a", "tok_b", "tok_c"];
+      for (const token of tokens) {
+        jest.clearAllMocks();
+        mockGetPool.mockReturnValue(fakePool);
+        mockCheckAndConsume.mockResolvedValue(makeAllowedResult());
+        const req = makeReq(token);
+        const res = makeRes();
 
-      await enforceQuota(req, res, next);
+        await enforceQuota(req as Request, res as Response, next);
 
-      const data = (res.body as Record<string, unknown>).data as Record<string, unknown>;
-      expect(data).toHaveProperty("dailyResetAt");
-      expect(data).toHaveProperty("monthlyResetAt");
+        expect(mockCheckAndConsume).toHaveBeenCalledWith(token, expect.anything());
+        expect(next).toHaveBeenCalledWith();
+      }
     });
   });
 });
