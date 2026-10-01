@@ -121,8 +121,43 @@ describe("SubscriptionProductRepository", () => {
       expect(updated.updatedAt).toBeDefined();
     });
 
+    const updated = repo.update(created.id, { name: "Updated", active: false, priceCents: 2000 });
+    
+    // Updated fields should reflect the new values
+    expect(updated.name).toBe("Updated");
+    expect(updated.active).toBe(false);
+    expect(updated.priceCents).toBe(2000);
+    
+    // Un-updated fields should remain the same
+    expect(updated.description).toBe("Old description");
+    expect(updated.professional).toBe("alice");
+    expect(updated.slotDurationMs).toBe(3_600_000);
+    
+    // updatedAt should be updated
+    expect(updated.updatedAt).toBeDefined();
+    
+    // The underlying data should also be updated in the repository
+    const found = repo.findById(created.id);
+    expect(found).toBeDefined();
+    expect(found?.name).toBe("Updated");
+    expect(found?.active).toBe(false);
+    expect(found?.priceCents).toBe(2000);
+  });
+
   it("throws on update of nonexistent product", () => {
-    expect(() => repo.update("nonexistent", { name: "X" })).toThrow("not found");
+    expect(() => repo.update("nonexistent", { name: "X" }))
+      .toThrow("SubscriptionProduct nonexistent not found");
+  });
+
+  it("throws when updating with empty string id", () => {
+    expect(() => repo.update("", { name: "X" }))
+      .toThrow("SubscriptionProduct  not found");
+  });
+
+  it("throws when updating while repository is completely empty", () => {
+    const emptyRepo = new InMemorySubscriptionProductRepository();
+    expect(() => emptyRepo.update("any-id", { name: "X" }))
+      .toThrow("SubscriptionProduct any-id not found");
   });
 
   it("deletes a product", () => {
