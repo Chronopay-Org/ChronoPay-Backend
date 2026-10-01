@@ -7,8 +7,15 @@ import { Migration } from "../migrationRunner.js";
  * Creates the `booking_intents` table and the `booking_intent_status` enum type.
  *
  * Design decisions:
- *  - `booking_intent_status` as a PostgreSQL ENUM to restrict allowed statuses.
- *  - `slot_id` has a UNIQUE constraint to enforce a single active intent per slot.
+ *  - `booking_intent_status` as a PostgreSQL ENUM restricted to the values the
+ *    application can persist (see BookingIntentStatus in
+ *    src/modules/booking-intents/booking-intent-repository.ts).  The standard
+ *    flow (pending → confirmed → firm → terminal) plus the refundable-hold
+ *    flow (hold_placed → hold_refunded) and escrow lifecycle states.  `completed`
+ *    is kept for backward compatibility with databases created before the
+ *    hold/escrow statuses were introduced; the application never writes it.
+ *  - `slot_id` starts with a UNIQUE constraint which migration 024 later
+ *    replaces with a partial unique index covering only active intents.
  *  - `professional_id` and `customer_id` reference the `users` table.
  *  - `start_time` and `end_time` are TIMESTAMPTZ to match the `slots` table.
  */
@@ -18,7 +25,21 @@ export const migration: Migration = {
 
   async up(client: PoolClient): Promise<void> {
     await client.query(`
-      CREATE TYPE booking_intent_status AS ENUM ('pending', 'completed', 'expired', 'cancelled')
+      CREATE TYPE booking_intent_status AS ENUM (
+        'pending',
+        'confirmed',
+        'firm',
+        'completed',
+        'cancelled',
+        'expired',
+        'hold_placed',
+        'hold_refunded',
+        'escrow_held',
+        'escrow_released',
+        'escrow_refunded',
+        'escrow_disputed',
+        'no_show'
+      )
     `);
 
     await client.query(`

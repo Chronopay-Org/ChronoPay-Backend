@@ -29,7 +29,7 @@ import { Migration } from "../migrationRunner.js";
  *    small and the radius-search ANY(...) lookup fast.
  */
 export const migration: Migration = {
-  id: "014",
+  id: "017",
   name: "add_slot_geo_fields",
 
   async up(client: PoolClient): Promise<void> {
