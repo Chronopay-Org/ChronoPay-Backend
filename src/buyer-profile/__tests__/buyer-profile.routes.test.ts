@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import express from "express";
 import request from "supertest";
 
@@ -22,7 +23,7 @@ jest.unstable_mockModule("../../middleware/auth.middleware.js", () => ({
       if (!req.user) {
         return res.status(401).json({ success: false, error: "Unauthorized" });
       }
-      if (!allowedRoles.includes(req.user.role)) {
+      if (!allowedRoles.includes(req.user.role ?? "")) {
         return res.status(403).json({ success: false, error: "Insufficient permissions" });
       }
       return next();
@@ -137,6 +138,14 @@ describe("buyer-profile routes", () => {
       .get("/api/v1/buyer-profiles")
       .set("x-test-user-id", userId)
       .expect(403);
+
+    // The profile created earlier in this file is soft-deleted; re-create it
+    // so the admin listing has something to return.
+    await request(app)
+      .post("/api/v1/buyer-profiles")
+      .set("x-test-user-id", userId)
+      .send(profile)
+      .expect(201);
 
     const listing = await request(app)
       .get("/api/v1/buyer-profiles?page=1&limit=10")

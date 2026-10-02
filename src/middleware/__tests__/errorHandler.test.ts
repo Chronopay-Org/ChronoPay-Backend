@@ -824,7 +824,7 @@ describe("createErrorHandler — invalid and boundary inputs", () => {
 describe("asyncErrorHandler", () => {
   it("returns a new 3-arity Express request handler", () => {
     const fn = jest.fn() as unknown as RequestHandler;
-    const wrapped = asyncErrorHandler(fn);
+    const wrapped: RequestHandler = asyncErrorHandler(fn);
 
     expect(wrapped).not.toBe(fn);
     expect(typeof wrapped).toBe("function");
@@ -837,7 +837,7 @@ describe("asyncErrorHandler", () => {
     const req = makeReq();
     const res = makeRes();
     const next = makeNext();
-    const wrapped = asyncErrorHandler(((...args: unknown[]) => {
+    const wrapped: RequestHandler = asyncErrorHandler(((...args: unknown[]) => {
       calls.push(args);
     }) as unknown as RequestHandler);
 
@@ -850,7 +850,7 @@ describe("asyncErrorHandler", () => {
 
   it("does not call next when the wrapped handler resolves", async () => {
     const next = makeNext();
-    const wrapped = asyncErrorHandler(async () => "resolved");
+    const wrapped: RequestHandler = asyncErrorHandler(async () => "resolved");
 
     wrapped(makeReq(), makeRes(), next);
     await flush();
@@ -860,7 +860,7 @@ describe("asyncErrorHandler", () => {
 
   it("supports synchronous handlers that return a non-promise value", async () => {
     const next = makeNext();
-    const wrapped = asyncErrorHandler((() => undefined) as unknown as RequestHandler);
+    const wrapped: RequestHandler = asyncErrorHandler((() => undefined) as unknown as RequestHandler);
 
     wrapped(makeReq(), makeRes(), next);
     await flush();
@@ -871,7 +871,7 @@ describe("asyncErrorHandler", () => {
   it("forwards a rejected promise to next exactly once", async () => {
     const next = makeNext();
     const err = new NotFoundError("Booking not found");
-    const wrapped = asyncErrorHandler(async () => {
+    const wrapped: RequestHandler = asyncErrorHandler(async () => {
       throw err;
     });
 
@@ -884,7 +884,7 @@ describe("asyncErrorHandler", () => {
 
   it("forwards the rejection asynchronously, never synchronously", () => {
     const next = makeNext();
-    const wrapped = asyncErrorHandler(async () => {
+    const wrapped: RequestHandler = asyncErrorHandler(async () => {
       throw new BadRequestError("bad field");
     });
 
@@ -895,7 +895,7 @@ describe("asyncErrorHandler", () => {
 
   it("forwards non-Error rejection values unchanged", async () => {
     const next = makeNext();
-    const wrapped = asyncErrorHandler(async () => {
+    const wrapped: RequestHandler = asyncErrorHandler(async () => {
       throw "string failure";
     });
 
@@ -914,7 +914,7 @@ describe("asyncErrorHandler", () => {
         onRejected(err);
       },
     };
-    const wrapped = asyncErrorHandler((() => thenable) as unknown as RequestHandler);
+    const wrapped: RequestHandler = asyncErrorHandler((() => thenable) as unknown as RequestHandler);
 
     wrapped(makeReq(), makeRes(), next);
     await flush();
@@ -925,7 +925,7 @@ describe("asyncErrorHandler", () => {
 
   it("leaves a synchronous throw to Express instead of routing it through next", () => {
     const next = makeNext();
-    const wrapped = asyncErrorHandler((() => {
+    const wrapped: RequestHandler = asyncErrorHandler((() => {
       throw new Error("sync failure");
     }) as unknown as RequestHandler);
 
@@ -937,7 +937,7 @@ describe("asyncErrorHandler", () => {
 
   it("preserves next calls issued by the wrapped handler itself", async () => {
     const next = makeNext();
-    const wrapped = asyncErrorHandler(((...args: unknown[]) => {
+    const wrapped: RequestHandler = asyncErrorHandler(((...args: unknown[]) => {
       (args[2] as NextFunction)();
     }) as unknown as RequestHandler);
 
@@ -950,7 +950,7 @@ describe("asyncErrorHandler", () => {
 
   it("keeps repeated invocations independent", async () => {
     const next = makeNext();
-    const wrapped = asyncErrorHandler(async () => {
+    const wrapped: RequestHandler = asyncErrorHandler(async () => {
       throw new ConflictError("Slot already booked");
     });
 
@@ -1109,7 +1109,7 @@ describe("errorHandler + notFoundMiddleware over Express", () => {
 
 describe("createErrorHandler — deterministic timestamps", () => {
   const FIXED = new Date("2024-01-02T03:04:05.678Z");
-  const NOT_DATE = [
+  const NOT_DATE: FakeableAPI[] = [
     "setTimeout",
     "clearTimeout",
     "setInterval",
