@@ -109,10 +109,9 @@ describe("migration 001 — create_users_table", () => {
     it("propagates an error thrown by the CREATE INDEX query", async () => {
       const dbError = new Error("index already exists: idx_users_email");
       let callCount = 0;
-      const failOnSecond = makeMockClient(() => {
+      const failOnSecond = makeMockClient(async () => {
         callCount++;
-        if (callCount === 2) return Promise.reject(dbError);
-        return Promise.resolve({ rows: [], rowCount: 0, command: "", oid: 0, fields: [] });
+        if (callCount === 2) throw dbError;
       });
       await expect(
         migration.up(failOnSecond as unknown as PoolClient),

@@ -21,7 +21,10 @@ function makeRow(overrides: Record<string, unknown> = {}) {
 }
 
 function fakeQuery(
-  handler: (sql: { text: string; params: unknown[] }) => { rows?: unknown[]; rowCount?: number },
+  handler: (sql: {
+    text: string;
+    params: unknown[];
+  }) => { rows?: unknown[]; rowCount?: number | null },
 ) {
   return async (text: string, params?: unknown[]) => {
     const out = handler({ text, params: params ?? [] });
@@ -53,7 +56,7 @@ function fakeRepository(): MfaRepository {
     markVerified: jest.fn(),
     advanceLastUsedCounter: jest.fn(),
     deleteByUserId: jest.fn(),
-  };
+  } as unknown as MfaRepository;
 }
 
 describe("PgMfaRepository", () => {
@@ -281,13 +284,13 @@ describe("repository singleton + test seam", () => {
   });
 
   it("setMfaRepositoryForTests replaces the singleton with the injected instance", () => {
-    const fake: MfaRepository = {
+    const fake = {
       upsertEnrollment: jest.fn(),
       findByUserId: jest.fn(),
       markVerified: jest.fn(),
       advanceLastUsedCounter: jest.fn(),
       deleteByUserId: jest.fn(),
-    };
+    } as unknown as MfaRepository;
     setMfaRepositoryForTests(fake);
     expect(getMfaRepository()).toBe(fake);
   });
