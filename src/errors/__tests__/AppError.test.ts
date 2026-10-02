@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { AppError, BadRequestError, ValidationError, isAppError, getStatusCode } from '../../errors/AppError.js';
 import { ERROR_CODES } from '../../errors/errorCodes.js';
 

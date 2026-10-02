@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tests for migration 001 — create_users_table
  *

@@ -14,7 +14,7 @@ import { validateFeeBumpTransaction } from "./fee-bump-validator.js";
 import { CursorStore, InMemoryCursorStore } from "./cursor-store.js";
 import {
   DEFAULT_RATE_LIMIT_RETRY_CONFIG,
-  RateLimitRetryConfig,
+  type RateLimitRetryConfig,
 } from "../utils/retry-policy.js";
 import { recordRateLimitRemaining, recordQueueDepth } from "../metrics/horizonMetrics.js";
 

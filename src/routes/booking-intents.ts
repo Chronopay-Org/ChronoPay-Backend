@@ -37,6 +37,18 @@ export function createBookingIntentsRouter(
     slotRepository?: InMemorySlotRepository;
   } = {},
 ) {
+  function assertNotAmbiguousBookingPayload(body: unknown): void {
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      const candidate = body as Record<string, unknown>;
+      if (candidate.slotId !== undefined && candidate.rrule !== undefined) {
+        throw new BookingIntentError(
+          400,
+          "slotId and rrule are mutually exclusive: provide either a single slotId or a recurring rrule.",
+        );
+      }
+    }
+  }
+
   const router = Router();
   // ─── Repositories (replace with DB layer in production) ────────────────────
   const bookingIntentRepository =

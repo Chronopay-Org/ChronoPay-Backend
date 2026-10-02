@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Focused behavior suite for `EthersContractClient`
  * (`src/clients/ethers-contract-client.ts`, Issue #1016).

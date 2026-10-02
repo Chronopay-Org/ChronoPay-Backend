@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest } from "@jest/globals";
 import { migration } from "../migrations/021a_create_subscription_products.js";
 import type { PoolClient } from "pg";

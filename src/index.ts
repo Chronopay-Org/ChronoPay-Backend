@@ -87,10 +87,11 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
 // Polls the outbox_events table for un-acked events, publishes them via the
 // configured callback, and marks them as acknowledged.  Guarantees at-least-once
 // delivery.  Set OUTBOX_RELAY_DISABLED=true to skip.
+const _shutdownHooks: Array<() => void> = [];
+
 // ─── Subscription Slot Generator Worker ────────────────────────────────────
 // Idempotent background worker that auto-mints recurring slots for active
 // subscriptions. Set SUBSCRIPTION_SLOT_GENERATOR_DISABLED=true to skip.
-const _shutdownHooks: Array<() => void> = [];
 (async () => {
   if (process.env.SUBSCRIPTION_SLOT_GENERATOR_DISABLED === "true") {
     logger.info("subscription-slot-generator disabled via SUBSCRIPTION_SLOT_GENERATOR_DISABLED");

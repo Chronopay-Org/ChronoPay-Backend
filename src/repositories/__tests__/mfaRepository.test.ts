@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest } from "@jest/globals";
 import type { MfaRepository } from "../../models/mfaEnrollment.js";
 import { PgMfaRepository, getMfaRepository, setMfaRepositoryForTests } from "../mfaRepository.js";

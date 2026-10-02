@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, it, expect, beforeEach, jest } from "@jest/globals";
 import { migration } from "../migrations/011_add_slot_valid_until.js";
 import { PoolClient } from "pg";

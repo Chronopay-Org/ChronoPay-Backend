@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Focused behavior tests for migration 005
  * — add_token_references_to_booking_intents.

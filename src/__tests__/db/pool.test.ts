@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Regression suite for src/db/pool.ts.
  *

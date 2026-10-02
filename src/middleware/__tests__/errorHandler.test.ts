@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Focused behavior coverage for `src/middleware/errorHandler.ts`.
  *

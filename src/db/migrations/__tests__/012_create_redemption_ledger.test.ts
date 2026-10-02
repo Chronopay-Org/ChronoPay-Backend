@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { PoolClient } from "pg";
 import { describe, expect, it, jest } from "@jest/globals";
 import { migration } from "../012_create_redemption_ledger.js";

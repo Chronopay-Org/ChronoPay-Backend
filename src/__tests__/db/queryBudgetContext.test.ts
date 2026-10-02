@@ -2,7 +2,7 @@ import {
   QueryBudgetContext,
   runWithQueryBudget,
   getQueryBudgetContext,
-} from "../../db/queryBudgetContext";
+} from "../../db/queryBudgetContext.js";
 
 describe("QueryBudgetContext", () => {
   it("should return undefined when outside of a budget context", () => {

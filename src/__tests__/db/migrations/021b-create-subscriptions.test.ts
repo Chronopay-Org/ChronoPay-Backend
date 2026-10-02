@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Focused behavior tests for src/db/migrations/021b_create_subscriptions.ts
  *

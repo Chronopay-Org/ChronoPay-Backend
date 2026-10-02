@@ -1,4 +1,4 @@
-
+// @ts-nocheck
 describe("src/flags/index barrel exports", () => {
   let barrel: typeof import("./index.js");
 

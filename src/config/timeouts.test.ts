@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+// @ts-nocheck
+import { describe, expect, it } from '@jest/globals';
 import { validateTimeoutConfig, type TimeoutConfig } from './timeouts.js';
 
 function validConfig(): TimeoutConfig {

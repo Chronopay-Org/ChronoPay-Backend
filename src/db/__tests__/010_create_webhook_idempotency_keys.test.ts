@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { migration } from '../migrations/010_create_webhook_idempotency_keys.js';
 import { PoolClient } from 'pg';

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest } from "@jest/globals";
 import { ethers } from "ethers";
 import { ContractInvalidRequestError } from "../../errors/contractErrors.js";

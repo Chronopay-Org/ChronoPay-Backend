@@ -330,7 +330,7 @@ describe("Marketplace Search Cursor Stability", () => {
       pool.slots = [...initialSlots];
 
       const initialSlotIds = new Set(initialSlots.map((s) => s.id));
-      const readSlotIds: number[] = [];
+      const readSlotIds: (number | string)[] = [];
       let currentCursor: string | undefined = undefined;
       let pageCount = 0;
       let nextInsertId = 100;
@@ -368,7 +368,7 @@ describe("Marketplace Search Cursor Stability", () => {
       }
 
       // Check invariant 1: Zero duplicates
-      const readSet = new Set<number>();
+      const readSet = new Set<number | string>();
       for (const id of readSlotIds) {
         expect(readSet.has(id)).toBe(false);
         readSet.add(id);
@@ -384,8 +384,8 @@ describe("Marketplace Search Cursor Stability", () => {
       const initialSlots = createSampleSlots(50);
       pool.slots = [...initialSlots];
 
-      const readSlotIds: number[] = [];
-      const deletedSlotIds = new Set<number>();
+      const readSlotIds: (number | string)[] = [];
+      const deletedSlotIds = new Set<number | string>();
 
       let currentCursor: string | undefined = undefined;
       let step = 0;
@@ -422,7 +422,7 @@ describe("Marketplace Search Cursor Stability", () => {
       }
 
       // Invariant 1: No duplicates
-      const readSet = new Set<number>();
+      const readSet = new Set<number | string>();
       for (const id of readSlotIds) {
         expect(readSet.has(id)).toBe(false);
         readSet.add(id);
@@ -489,7 +489,7 @@ describe("Marketplace Search Cursor Stability", () => {
         pool.slots = [...initialSlots];
 
         const initialSlotIds = new Set(initialSlots.map((s) => s.id));
-        const readSlotIds: number[] = [];
+        const readSlotIds: (number | string)[] = [];
         let currentCursor: string | undefined = undefined;
         let step = 0;
         let nextId = 200;
@@ -526,7 +526,7 @@ describe("Marketplace Search Cursor Stability", () => {
         }
 
         // Invariant: No duplicates
-        const readSet = new Set<number>();
+        const readSet = new Set<number | string>();
         for (const id of readSlotIds) {
           expect(readSet.has(id)).toBe(false);
           readSet.add(id);

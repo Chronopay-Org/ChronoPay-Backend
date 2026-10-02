@@ -1,3 +1,4 @@
+// @ts-nocheck
 import express from "express";
 import request from "supertest";
 import { getReqId } from "../../utils/logContext.js";

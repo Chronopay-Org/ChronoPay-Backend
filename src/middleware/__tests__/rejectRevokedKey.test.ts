@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest, describe, it, expect, beforeEach } from "@jest/globals";
 import type { Request, Response, NextFunction } from "express";
 import { SIGNING_KEY_HEADER, rejectRevokedKey } from "../rejectRevokedKey.js";

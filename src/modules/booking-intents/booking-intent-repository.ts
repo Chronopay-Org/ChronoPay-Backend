@@ -93,7 +93,7 @@ export interface BookingIntentRecord {
 
 export interface BookingIntentRepository {
   create(
-    intent: Omit<BookingIntentRecord, "id">,
+    intent: Omit<BookingIntentRecord, "id"> & { id?: string },
   ): Promise<BookingIntentRecord> | BookingIntentRecord;
   findById(id: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
   findBySlotId(
@@ -126,9 +126,9 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
   private readonly intents: BookingIntentRecord[] = [];
   private sequence = 1;
 
-  async create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> {
+  async create(intent: Omit<BookingIntentRecord, "id"> & { id?: string }): Promise<BookingIntentRecord> {
     const created: BookingIntentRecord = {
-      id: `intent-${this.sequence++}`,
+      id: intent.id ?? `intent-${this.sequence++}`,
       bookingType: "standard",
       ...intent,
     };

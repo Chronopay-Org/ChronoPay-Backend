@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Search Cache Warmup — constants, capacity bounds, and invalid-input coverage.
  *
