@@ -13,10 +13,10 @@ import type { PoolClient } from "pg";
 type MockQuery = ReturnType<typeof jest.fn>;
 
 function makeMockClient(queryImpl?: MockQuery): PoolClient {
-  const query = queryImpl ?? jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+  const query = queryImpl ?? jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
   return {
     query,
-    release: jest.fn(),
+    release: jest.fn<any>(),
   } as unknown as PoolClient;
 }
 
@@ -44,7 +44,7 @@ describe("migration 021a — static contract", () => {
 
 describe("migration 021a — up()", () => {
   it("executes exactly three queries", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
     const client = makeMockClient(query);
 
     await migration.up(client);
@@ -53,7 +53,7 @@ describe("migration 021a — up()", () => {
   });
 
   it("first query creates the subscription_products table", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
     const client = makeMockClient(query);
 
     await migration.up(client);
@@ -63,7 +63,7 @@ describe("migration 021a — up()", () => {
   });
 
   it("first query includes all required columns", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
     const client = makeMockClient(query);
 
     await migration.up(client);
@@ -90,7 +90,7 @@ describe("migration 021a — up()", () => {
   });
 
   it("first query enforces slot_duration_ms > 0 constraint", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
     const client = makeMockClient(query);
 
     await migration.up(client);
@@ -100,7 +100,7 @@ describe("migration 021a — up()", () => {
   });
 
   it("first query enforces price_cents >= 0 constraint", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
     const client = makeMockClient(query);
 
     await migration.up(client);
@@ -110,7 +110,7 @@ describe("migration 021a — up()", () => {
   });
 
   it("second query creates the index on professional", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
     const client = makeMockClient(query);
 
     await migration.up(client);
@@ -122,7 +122,7 @@ describe("migration 021a — up()", () => {
   });
 
   it("third query creates the partial index on active", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
     const client = makeMockClient(query);
 
     await migration.up(client);
@@ -141,7 +141,7 @@ describe("migration 021a — up()", () => {
 
   it("propagates an error thrown by the CREATE TABLE query", async () => {
     const dbError = new Error("duplicate table: subscription_products");
-    const query = jest.fn().mockRejectedValueOnce(dbError);
+    const query = jest.fn<any>().mockRejectedValueOnce(dbError);
     const client = makeMockClient(query);
 
     await expect(migration.up(client)).rejects.toThrow(
@@ -151,7 +151,7 @@ describe("migration 021a — up()", () => {
 
   it("propagates an error thrown by the first CREATE INDEX query", async () => {
     const indexError = new Error("index already exists: idx_subscription_products_professional");
-    const query = jest.fn()
+    const query = jest.fn<any>()
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // CREATE TABLE succeeds
       .mockRejectedValueOnce(indexError);               // first CREATE INDEX fails
     const client = makeMockClient(query);
@@ -163,7 +163,7 @@ describe("migration 021a — up()", () => {
 
   it("propagates an error thrown by the second CREATE INDEX query", async () => {
     const indexError = new Error("index already exists: idx_subscription_products_active");
-    const query = jest.fn()
+    const query = jest.fn<any>()
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // CREATE TABLE succeeds
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // first CREATE INDEX succeeds
       .mockRejectedValueOnce(indexError);               // second CREATE INDEX fails
@@ -176,7 +176,7 @@ describe("migration 021a — up()", () => {
 
   it("does not call further queries after a failure in the first query", async () => {
     const dbError = new Error("connection reset");
-    const query = jest.fn().mockRejectedValue(dbError);
+    const query = jest.fn<any>().mockRejectedValue(dbError);
     const client = makeMockClient(query);
 
     await expect(migration.up(client)).rejects.toThrow("connection reset");
@@ -187,7 +187,7 @@ describe("migration 021a — up()", () => {
 
   it("queries are called in the correct order (table first, then indexes)", async () => {
     const callOrder: string[] = [];
-    const query = jest.fn().mockImplementation(async (sql: unknown) => {
+    const query = jest.fn<any>().mockImplementation(async (sql: unknown) => {
       const s = sql as string;
       if (/CREATE TABLE/i.test(s)) callOrder.push("table");
       else if (/idx_subscription_products_professional/i.test(s)) callOrder.push("idx_professional");
@@ -206,7 +206,7 @@ describe("migration 021a — up()", () => {
 
 describe("migration 021a — down()", () => {
   it("executes exactly one query", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
     const client = makeMockClient(query);
 
     await migration.down(client);
@@ -215,7 +215,7 @@ describe("migration 021a — down()", () => {
   });
 
   it("drops the subscription_products table", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
     const client = makeMockClient(query);
 
     await migration.down(client);
@@ -231,7 +231,7 @@ describe("migration 021a — down()", () => {
 
   it("propagates an error thrown by the DROP TABLE query", async () => {
     const dbError = new Error("permission denied for table subscription_products");
-    const query = jest.fn().mockRejectedValueOnce(dbError);
+    const query = jest.fn<any>().mockRejectedValueOnce(dbError);
     const client = makeMockClient(query);
 
     await expect(migration.down(client)).rejects.toThrow(
@@ -240,7 +240,7 @@ describe("migration 021a — down()", () => {
   });
 
   it("uses IF EXISTS so down() is safe to run even when the table is absent", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
     const client = makeMockClient(query);
 
     await migration.down(client);
@@ -254,8 +254,8 @@ describe("migration 021a — down()", () => {
 
 describe("migration 021a — up/down symmetry", () => {
   it("up then down each call the client without throwing (happy path round-trip)", async () => {
-    const upQuery = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
-    const downQuery = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const upQuery = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
+    const downQuery = jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 });
 
     await migration.up(makeMockClient(upQuery));
     await migration.down(makeMockClient(downQuery));

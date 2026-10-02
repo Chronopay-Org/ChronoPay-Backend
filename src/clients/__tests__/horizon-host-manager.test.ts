@@ -1,6 +1,125 @@
 import { jest } from "@jest/globals";
+
 import { HorizonHostManager } from "../horizon-host-manager.js";
 import { HorizonUnavailableError } from "../../errors/contractErrors.js";
+import { AppError } from "../../errors/AppError.js";
+import {
+  horizonHostHealth,
+  horizonFailoverTotal,
+  _resetMetricCardinalityState,
+} from "../../metrics.js";
+
+/**
+ * Regression coverage for HorizonHostManager failure handling (#1019).
+ *
+ * The failure branch under test is the constructor guard in
+ * `src/clients/horizon-host-manager.ts`:
+ *
+ *   throw new Error("HorizonHostManager requires at least one URL");
+ *
+ * plus the neighboring normal path (primary selected, fallback failover,
+ * recovery probes) and the boundary inputs that drive them (quarantine
+ * cooldown, sliding error window, error classification).
+ *
+ * Determinism: `Date.now` and `global.fetch` are mocked. No fake timers are
+ * used so the `AbortController` bookkeeping inside `probeHost` stays safe.
+ */
+
+// ─── Time / clock helpers ─────────────────────────────────────────────────────
+
+const BASE_TIME = 1_000_000_000; // fixed epoch ms for every test
+const QUARANTINE_COOLDOWN_MS = 15000; // mirrors HorizonHostManager internals
+const ERROR_WINDOW_MS = 10000; // mirrors HorizonHostManager internals
+
+const realDateNow = Date.now.bind(Date);
+const realFetch = globalThis.fetch;
+
+/** Advance the mocked clock to `BASE_TIME + ms`. */
+function advanceTime(ms: number): void {
+  Date.now = jest.fn(() => BASE_TIME + ms) as unknown as typeof Date.now;
+}
+
+afterAll(() => {
+  Date.now = realDateNow;
+  (globalThis as { fetch: typeof fetch }).fetch = realFetch;
+});
+
+// ─── Metric helpers (real prom-client registry) ───────────────────────────────
+
+async function healthFor(url: string): Promise<number | undefined> {
+  const { values } = await horizonHostHealth.get();
+  return values.find((v) => v.labels.url === url)?.value;
+}
+
+async function failoverCount(): Promise<number> {
+  const { values } = await horizonFailoverTotal.get();
+  return values[0]?.value ?? 0;
+}
+
+async function resetMetrics(): Promise<void> {
+  horizonHostHealth.reset();
+  horizonFailoverTotal.reset();
+  _resetMetricCardinalityState();
+}
+
+// ─── Error-classification helpers ─────────────────────────────────────────────
+// `recordError` only quarantines for retriable failures (see
+// `shouldRetryContractError` in src/errors/contractErrors.ts).
+//
+// In production the manager is fed `HorizonHttpError` instances from
+// horizon-contract-client.ts, whose messages are built by
+// `HorizonHttpError.buildMessage`:
+//   5xx → "service unavailable: Horizon HTTP <status>: <detail>"
+//   429 → "rate limit exceeded: Horizon HTTP <status>: <detail>"
+//   4xx → "invalid argument: Horizon HTTP <status>: <detail>"
+// The fixtures below mirror those exact message shapes so the classification
+// exercised here matches what the manager sees at runtime.
+
+/** A retriable 5xx-shaped failure (mirrors `HorizonHttpError(503, "")`). */
+const retriableError = (): Error => new Error("service unavailable: Horizon HTTP 503: ");
+
+const retriableErrors = (): Array<{ name: string; error: unknown }> => [
+  {
+    name: "5xx HorizonHttpError shape (service unavailable)",
+    error: retriableError(),
+  },
+  {
+    name: "429 HorizonHttpError shape (rate limit)",
+    error: new Error("rate limit exceeded: Horizon HTTP 429: "),
+  },
+  {
+    name: "ethers NETWORK_ERROR code",
+    error: Object.assign(new Error("request failed"), { code: "NETWORK_ERROR" }),
+  },
+  {
+    name: "ethers TIMEOUT code",
+    error: Object.assign(new Error("oops"), { code: "TIMEOUT" }),
+  },
+];
+
+const nonRetriableErrors = (): Array<{ name: string; error: unknown }> => [
+  {
+    name: "4xx HorizonHttpError shape (invalid argument)",
+    error: new Error("invalid argument: Horizon HTTP 400: "),
+  },
+  { name: "plain Error", error: new Error("something went wrong") },
+];
+
+// ─── Shared fixtures ──────────────────────────────────────────────────────────
+
+const PRIMARY = "http://primary";
+const FALLBACK = "http://fallback";
+
+/** Quarantine a host: MAX_ERRORS (3) retriable errors at the current time. */
+function quarantineHost(
+  manager: HorizonHostManager,
+  url: string,
+  error: unknown = retriableError(),
+): void {
+  manager.recordError(url, error);
+  manager.recordError(url, error);
+  manager.recordError(url, error);
+}
 
 describe("HorizonHostManager", () => {
   let fetchMock: jest.Mock<
@@ -9,8 +128,77 @@ describe("HorizonHostManager", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    global.fetch = jest.fn<typeof fetch>();
-    Date.now = jest.fn(() => 1000000000); // stable time
+    Date.now = jest.fn(() => BASE_TIME) as unknown as typeof Date.now;
+    fetchMock = jest.fn();
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    fetchMock.mockResolvedValue({ ok: true });
+    return resetMetrics();
+  });
+
+  // ── Constructor: the empty/invalid-URL failure branch (#1019 evidence) ──────
+
+  describe("constructor — URL validation contract", () => {
+    it("throws for an empty URL list", () => {
+      expect(() => new HorizonHostManager([])).toThrow(
+        "HorizonHostManager requires at least one URL",
+      );
+    });
+
+    it("throws a plain Error (not an AppError) for an empty URL list", () => {
+      let caught: unknown;
+      try {
+        new HorizonHostManager([]);
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect(caught).not.toBeInstanceOf(AppError);
+    });
+
+    it("throws for a null URL list", () => {
+      expect(() => new HorizonHostManager(null as unknown as string[])).toThrow(
+        "HorizonHostManager requires at least one URL",
+      );
+    });
+
+    it("accepts a single URL (boundary: minimum valid input)", async () => {
+      const manager = new HorizonHostManager([PRIMARY]);
+      await expect(manager.getHealthyHost()).resolves.toBe(PRIMARY);
+    });
+
+    // Documents current behavior: only an empty list is rejected. If a
+    // whitelist of well-formed URLs is ever introduced, this test should be
+    // updated deliberately as part of a compatibility plan.
+    it("accepts whitespace-only entries (documents current lax validation)", async () => {
+      const manager = new HorizonHostManager(["   "]);
+      await expect(manager.getHealthyHost()).resolves.toBe("   ");
+    });
+
+    it("strips a single trailing slash from host URLs (observable via getHealthyHost)", async () => {
+      const manager = new HorizonHostManager(["http://primary/"]);
+      await expect(manager.getHealthyHost()).resolves.toBe(PRIMARY);
+    });
+  });
+
+  // ── getHealthyHost: normal path ─────────────────────────────────────────────
+
+  describe("getHealthyHost — normal path", () => {
+    it("returns the primary host when nothing is quarantined", async () => {
+      const manager = new HorizonHostManager([PRIMARY, FALLBACK]);
+      await expect(manager.getHealthyHost()).resolves.toBe(PRIMARY);
+    });
+
+    it("never probes while no host is quarantined", async () => {
+      const manager = new HorizonHostManager([PRIMARY, FALLBACK]);
+      await manager.getHealthyHost();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("registers healthy hosts (1) in the horizon_host_health gauge on construction", async () => {
+      new HorizonHostManager([PRIMARY, FALLBACK]);
+      await expect(healthFor(PRIMARY)).resolves.toBe(1);
+      await expect(healthFor(FALLBACK)).resolves.toBe(1);
+    });
   });
 
   // ── getHealthyHost: failover (neighboring failure path) ─────────────────────

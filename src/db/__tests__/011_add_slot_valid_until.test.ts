@@ -4,10 +4,10 @@ import { PoolClient } from "pg";
 
 describe("011_add_slot_valid_until migration", () => {
   let mockClient: Partial<PoolClient>;
-  let mockQuery: jest.Mock;
+  let mockQuery: jest.Mock<any>;
 
   beforeEach(() => {
-    mockQuery = jest.fn().mockResolvedValue({ rowCount: 0, rows: [] } as never);
+    mockQuery = jest.fn<any>().mockResolvedValue({ rowCount: 0, rows: [] } as never);
     mockClient = {
       query: mockQuery as unknown as PoolClient["query"],
     };

@@ -1,5 +1,5 @@
 import { jest } from "@jest/globals";
-import { migration } from "../006_create_reminders_table.js";
+import { migration } from "./006_create_reminders_table.js";
 
 type MockClient = {
   query: jest.Mock<(text: string, values?: unknown[]) => Promise<unknown>>;
