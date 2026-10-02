@@ -1,9 +1,6 @@
 import { jest } from "@jest/globals";
 import { HorizonHostManager } from "../horizon-host-manager.js";
-import {
-  HorizonUnavailableError,
-  ContractProviderUnavailableError,
-} from "../../errors/contractErrors.js";
+import { HorizonUnavailableError } from "../../errors/contractErrors.js";
 
 describe("HorizonHostManager", () => {
   let fetchMock: jest.Mock<
