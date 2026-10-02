@@ -43,8 +43,8 @@ function interaction(method: string, args: unknown[] = []): ContractInteractionA
 
 describe("IContractClient behavior", () => {
   it("returns read data with the observed block number", async () => {
-    const read = jest.fn().mockResolvedValue(42n);
-    const client = makeClient({ getFunction: jest.fn().mockReturnValue(read) });
+    const read = jest.fn<any>().mockResolvedValue(42n);
+    const client = makeClient({ getFunction: jest.fn<any>().mockReturnValue(read) });
 
     await expect(client.call<bigint>(interaction("balanceOf", [ADDRESS]))).resolves.toEqual({
       data: 42n,
@@ -55,7 +55,7 @@ describe("IContractClient behavior", () => {
 
   it("rejects an unknown method without changing the read result contract", async () => {
     const contract = {
-      getFunction: jest.fn().mockImplementation(() => {
+      getFunction: jest.fn<any>().mockImplementation(() => {
         throw new Error("unknown contract method");
       }),
     };
@@ -67,7 +67,7 @@ describe("IContractClient behavior", () => {
   });
 
   it("rejects state changes when no signer is configured", async () => {
-    const client = makeClient({ getFunction: jest.fn() });
+    const client = makeClient({ getFunction: jest.fn<any>() });
 
     await expect(client.sendTransaction(interaction("transfer"))).rejects.toBeInstanceOf(
       ContractInvalidRequestError,
@@ -76,11 +76,11 @@ describe("IContractClient behavior", () => {
 
   it("submits a transaction and forwards confirmation depth to wait", async () => {
     const receipt = { status: 1, blockNumber: 456 };
-    const wait = jest.fn().mockResolvedValue(receipt);
-    const send = jest.fn().mockResolvedValue({ hash: "0xabc", wait });
+    const wait = jest.fn<any>().mockResolvedValue(receipt);
+    const send = jest.fn<any>().mockResolvedValue({ hash: "0xabc", wait });
     const signer = {} as ethers.Signer;
     const client = makeClient(
-      { getFunction: jest.fn().mockReturnValue(send) },
+      { getFunction: jest.fn<any>().mockReturnValue(send) },
       signer,
     );
     const args = {

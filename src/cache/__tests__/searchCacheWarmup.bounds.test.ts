@@ -191,7 +191,7 @@ describe("SearchCacheWarmupService boundary transitions", () => {
     const cache = {
       get: jest.fn<CacheLayer["get"]>().mockResolvedValue(null),
       set: jest.fn<CacheLayer["set"]>().mockResolvedValue(undefined),
-      invalidateByPrefix: jest.fn<NonNullable<CacheLayer["invalidateByPrefix"]>>().mockResolvedValue(3),
+      invalidateByPrefix: jest.fn<NonNullable<CacheLayer["invalidateByPrefix"]>>().mockResolvedValue(3 as never),
     } as unknown as jest.Mocked<CacheLayer>;
     const tracker = new SearchQueryTracker();
     tracker.recordQuery(query("relevance"));
