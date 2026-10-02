@@ -28,7 +28,7 @@ const { slotService, SlotNotFoundError } = await import("../../services/slotServ
 const { authorizeSlotDelete, assertSlotDeleteAllowed } = await import("../slotAuthorization.js");
 type SlotDeleteAuth = import("../slotAuthorization.js").SlotDeleteAuth;
 
-const findById = slotService.findById as unknown as jest.Mock<() => Promise<unknown>>;
+const findById = slotService.findById as unknown as jest.Mock<(id: string) => Promise<unknown>>;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

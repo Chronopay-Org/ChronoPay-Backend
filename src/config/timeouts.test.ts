@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from '@jest/globals';
 import { validateTimeoutConfig, type TimeoutConfig } from './timeouts.js';
 
 function validConfig(): TimeoutConfig {
@@ -25,7 +25,7 @@ describe('validateTimeoutConfig', () => {
     ['http.contractMs', (config: TimeoutConfig) => { config.http.contractMs = -1; }],
     ['retry.maxAttempts', (config: TimeoutConfig) => { config.retry.maxAttempts = 0; }],
     ['queryBudget.defaultMs', (config: TimeoutConfig) => { config.queryBudget.defaultMs = -1; }],
-  ])('rejects non-positive %s values with a deterministic error', (name, mutate) => {
+  ])('rejects non-positive %s values with a deterministic error', (name: string, mutate: (config: TimeoutConfig) => void) => {
     const config = validConfig();
     mutate(config);
     expect(() => validateTimeoutConfig(config)).toThrow(
