@@ -296,7 +296,7 @@ describe("idempotencyMiddleware boundaries (#1112)", () => {
 
   describe("replay fidelity", () => {
     it("replays a non-2xx business response verbatim without re-running the handler", async () => {
-      const { app, redis, executions } = createHarness((_req, res) => {
+      const { app, redis, executions: _executions } = createHarness((_req, res) => {
         res.status(409).json({ code: "INSUFFICIENT_FUNDS", retryable: false });
       });
 
