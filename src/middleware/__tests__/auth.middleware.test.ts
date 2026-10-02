@@ -2,7 +2,7 @@
 /**
  * Test suite for authentication and authorization middleware.
  */
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response } from 'express';
 import { authenticateToken, authorize, authorizeOwnerOrAdmin, UserRole } from '../../middleware/auth.middleware.js';
 
 // Mock dependencies
