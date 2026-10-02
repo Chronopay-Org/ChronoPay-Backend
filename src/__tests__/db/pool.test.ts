@@ -28,7 +28,7 @@ let closePool: ClosePool;
 let initDB: InitDB;
 let query: Query;
 let runWithQueryBudget: RunWithQueryBudget;
-let recordBudgetBreach: jest.Mock;
+let recordBudgetBreach: jest.Mock<any>;
 
 jest.unstable_mockModule("../../db/connection.js", () => ({
   _recordBudgetBreach: jest.fn(),
@@ -46,11 +46,11 @@ beforeAll(async () => {
   initDB = poolModule.initDB;
   query = poolModule.query;
   runWithQueryBudget = budgetModule.runWithQueryBudget as RunWithQueryBudget;
-  recordBudgetBreach = connectionModule._recordBudgetBreach as unknown as jest.Mock;
+  recordBudgetBreach = connectionModule._recordBudgetBreach as unknown as jest.Mock<any>;
 });
 
-const poolEnd = () => jest.spyOn(pool, "end") as unknown as jest.Mock;
-const poolQuery = () => jest.spyOn(pool, "query") as unknown as jest.Mock;
+const poolEnd = () => jest.spyOn(pool, "end") as unknown as jest.Mock<any>;
+const poolQuery = () => jest.spyOn(pool, "query") as unknown as jest.Mock<any>;
 
 function ok(rows: unknown[] = []): QueryResult {
   return { rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] };

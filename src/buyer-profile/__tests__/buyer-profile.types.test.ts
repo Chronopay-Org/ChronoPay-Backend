@@ -3,8 +3,6 @@ import type {
   BuyerProfile,
   CreateBuyerProfileData,
   UpdateBuyerProfileData,
-  BuyerProfileFilters,
-  PaginationParams,
   PaginatedResponse,
   ApiResponse,
 } from "../types/buyer-profile.types.js";
@@ -18,7 +16,7 @@ import {
   type CreateBuyerProfileDTO,
   type UpdateBuyerProfileDTO,
 } from "../dto/buyer-profile.dto.js";
-import { BuyerProfileService, buyerProfileService } from "../buyer-profile.service.js";
+import { BuyerProfileService } from "../buyer-profile.service.js";
 
 const VALID_UUID = "550e8400-e29b-41d4-a716-446655440000";
 const VALID_UUID_2 = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";

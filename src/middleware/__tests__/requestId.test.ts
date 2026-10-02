@@ -48,7 +48,7 @@ describe("requestId", () => {
     app.use(requestIdMiddleware);
     app.get("/", async (req, res) => {
       await Promise.resolve();
-      res.json({ requestId: req.requestId, contextRequestId: getReqId() });
+      res.json({ requestId: (req as any).requestId, contextRequestId: getReqId() });
     });
 
     it("propagates a valid header through the request, response, and async context", async () => {
