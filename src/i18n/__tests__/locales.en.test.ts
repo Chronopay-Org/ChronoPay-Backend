@@ -12,8 +12,7 @@ import { describe, it, expect } from "@jest/globals";
 import { EN_MESSAGES } from "../locales.en.js";
 import { ES_MESSAGES } from "../locales.es.js";
 import { resolveMessage } from "../messageLoader.js";
-import { ERROR_TAXONOMY } from "../../errors/errorCodes.js";
-import type { I18nMessageKey } from "../../errors/errorCodes.js";
+import { ERROR_TAXONOMY, type I18nMessageKey } from "../../errors/errorCodes.js";
 
 type Nested = { [key: string]: string | Nested };
 

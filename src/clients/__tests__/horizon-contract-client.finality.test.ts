@@ -40,7 +40,7 @@ function makeClient(url = BASE_URL): HorizonContractClient {
   return new HorizonContractClient(url, PASSPHRASE, makeService());
 }
 
-const mockFetch = jest.fn();
+const mockFetch = jest.fn<any>();
 global.fetch = mockFetch as unknown as typeof fetch;
 
 function mockOk(body: unknown) {

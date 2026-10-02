@@ -1,6 +1,5 @@
 import { createLoaders } from './loaders.js';
 import { slotService } from '../services/slotService.js';
-import { jest } from '@jest/globals';
 
 describe('createLoaders', () => {
   beforeEach(() => {

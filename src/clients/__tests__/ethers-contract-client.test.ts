@@ -176,7 +176,7 @@ describe("EthersContractClient.call()", () => {
 
   it("propagates a provider failure while reading the block number", async () => {
     const { client, provider } = makeClient();
-    (provider.getBlockNumber as jest.Mock).mockRejectedValueOnce(new Error("provider offline"));
+    (provider.getBlockNumber as jest.Mock<any>).mockRejectedValueOnce(new Error("provider offline"));
 
     await expect(client.call(args())).rejects.toThrow("provider offline");
     expect(mockEthersState.calls).toHaveLength(1);
@@ -257,7 +257,7 @@ describe("EthersContractClient.sendTransaction().wait()", () => {
   });
 
   it("passes undefined when no confirmation count is supplied", async () => {
-    const underlyingWait = jest.fn(async () => ({ mined: true }));
+    const underlyingWait = jest.fn(async (_confirmations?: number) => ({ mined: true }));
     mockEthersState.impl = async () => ({ hash: "0x1", wait: underlyingWait });
     const { client } = makeClient({ signer: {} });
 
