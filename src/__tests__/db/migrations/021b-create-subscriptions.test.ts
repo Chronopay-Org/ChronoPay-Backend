@@ -27,8 +27,12 @@
 
 import { describe, it, expect, beforeEach } from "@jest/globals";
 import type { PoolClient, QueryResult } from "pg";
-import { MigrationRunner, type Migration } from "../../../db/migrationRunner.js";
-import type { MigrationRepository, AppliedMigration } from "../../../db/migrationRepository.js";
+import {
+  MigrationRunner,
+  type Migration,
+  type MigrationRepository,
+} from "../../../db/migrationRunner.js";
+import type { AppliedMigration } from "../../../db/migrationRepository.js";
 import { migration } from "../../../db/migrations/021b_create_subscriptions.js";
 
 // ─── Recording client plumbing ────────────────────────────────────────────────

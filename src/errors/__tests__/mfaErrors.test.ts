@@ -7,7 +7,7 @@ import {
   MfaChallengeExpiredError,
   MfaChallengeInvalidError,
   isMfaError,
-} from "../mfaErrors";
+} from "../mfaErrors.js";
 
 describe("MfaErrors", () => {
   describe("MfaConfigurationError", () => {

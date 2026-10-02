@@ -14,11 +14,16 @@ function makeReq(headers: Record<string, unknown> = {}): Request {
   return { headers } as unknown as Request;
 }
 
-function makeRes() {
+type MockResponse = Response & {
+  status: jest.Mock<(code: number) => Response>;
+  json: jest.Mock<(payload: unknown) => Response>;
+};
+
+function makeRes(): MockResponse {
   const res = {
-    status: jest.fn<Response, [number]>(),
-    json: jest.fn<Response, [unknown]>(),
-  };
+    status: jest.fn<(code: number) => Response>(),
+    json: jest.fn<(payload: unknown) => Response>(),
+  } as unknown as MockResponse;
   res.status.mockReturnThis();
   return res;
 }

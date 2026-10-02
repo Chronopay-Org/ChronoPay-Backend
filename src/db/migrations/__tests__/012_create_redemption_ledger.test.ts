@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { describe, expect, it, jest } from "@jest/globals";
 import { migration } from "../012_create_redemption_ledger.js";
 
-function makeClient(query: jest.Mock): PoolClient {
+function makeClient(query: jest.Mock<any>): PoolClient {
   return { query } as unknown as PoolClient;
 }
 
@@ -12,21 +12,21 @@ function normalizeSql(sql: string): string {
 
 describe("012_create_redemption_ledger migration", () => {
   it("exposes the expected migration identity and lifecycle functions", () => {
-    expect(migration.id).toBe("012");
+    expect(migration.id).toBe("016");
     expect(migration.name).toBe("create_redemption_ledger");
     expect(typeof migration.up).toBe("function");
     expect(typeof migration.down).toBe("function");
   });
 
   it("creates the ledger table and its chain-walk indexes in order", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [] });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [] });
 
     await migration.up(makeClient(query));
 
     expect(query).toHaveBeenCalledTimes(4);
 
     const [createTable, genesisIndex, previousHashIndex, createdAtIndex] = query.mock.calls.map(
-      ([sql]) => normalizeSql(sql),
+      ([sql]) => normalizeSql(sql as string),
     );
 
     expect(createTable).toContain("create table redemption_ledger");
@@ -52,7 +52,7 @@ describe("012_create_redemption_ledger migration", () => {
 
   it.each([0, 1, 2, 3])("stops at the first database failure during up (query %s)", async (failureAt) => {
     const failure = new Error(`query ${failureAt} failed`);
-    const query = jest.fn();
+    const query = jest.fn<any>();
 
     for (let index = 0; index < failureAt; index += 1) {
       query.mockResolvedValueOnce({ rows: [] });
@@ -64,17 +64,17 @@ describe("012_create_redemption_ledger migration", () => {
   });
 
   it("drops the ledger table on down and uses an idempotent drop", async () => {
-    const query = jest.fn().mockResolvedValue({ rows: [] });
+    const query = jest.fn<any>().mockResolvedValue({ rows: [] });
 
     await migration.down(makeClient(query));
 
     expect(query).toHaveBeenCalledTimes(1);
-    expect(normalizeSql(query.mock.calls[0][0])).toBe("drop table if exists redemption_ledger");
+    expect(normalizeSql(query.mock.calls[0][0] as string)).toBe("drop table if exists redemption_ledger");
   });
 
   it("propagates a rollback database failure without issuing another query", async () => {
     const failure = new Error("drop failed");
-    const query = jest.fn().mockRejectedValue(failure);
+    const query = jest.fn<any>().mockRejectedValue(failure);
 
     await expect(migration.down(makeClient(query))).rejects.toBe(failure);
     expect(query).toHaveBeenCalledTimes(1);

@@ -6,43 +6,35 @@ const storage = new Map<string, string>();
 // configuration can be asserted without a live server.
 const redisConstructors: Array<{ url: string; options: any }> = [];
 const mockRedis: any = {
-  // @ts-expect-error - Auto-fixed by script
-  multi: jest.fn<any, any>().mockReturnThis(),
-  // @ts-expect-error - Auto-fixed by script
-  incr: jest.fn<any, any>().mockImplementation(function(this: any, key: string) {
+  multi: jest.fn<any>().mockReturnThis(),
+  incr: jest.fn<any>().mockImplementation(function(this: any, key: string) {
     const current = parseInt(storage.get(key) || '0', 10);
     storage.set(key, (current + 1).toString());
     return this; 
   }),
-  // @ts-expect-error - Auto-fixed by script
-  expire: jest.fn<any, any>().mockReturnThis(),
-  // @ts-expect-error - Auto-fixed by script
-  exec: jest.fn<any, any>().mockImplementation(async function(this: any) {
+  expire: jest.fn<any>().mockReturnThis(),
+  exec: jest.fn<any>().mockImplementation(async function(this: any) {
     const lastIncr = this.incr.mock.calls[this.incr.mock.calls.length - 1];
     const key = lastIncr[0];
     const val = parseInt(storage.get(key) || '1', 10);
     return [[null, val]];
   }),
-  // @ts-expect-error - Auto-fixed by script
-  decr: jest.fn<any, any>().mockImplementation(async (key: string) => {
+  decr: jest.fn<any>().mockImplementation(async (key: string) => {
     const current = parseInt(storage.get(key) || '0', 10);
     storage.set(key, (current - 1).toString());
     return current - 1;
   }),
-  // @ts-expect-error - Auto-fixed by script
-  del: jest.fn<any, any>().mockImplementation(async (_key: string) => {
+  del: jest.fn<any>().mockImplementation(async (_key: string) => {
     storage.delete(_key);
     return 1;
   }),
-  // @ts-expect-error - Auto-fixed by script
-  on: jest.fn<any, any>().mockReturnThis(),
-  // @ts-expect-error - Auto-fixed by script
-  quit: jest.fn<any, any>().mockResolvedValue('OK'),
+  on: jest.fn<any>().mockReturnThis(),
+  quit: jest.fn<any>().mockResolvedValue('OK'),
 };
 
 // 2. Mock the module
 jest.unstable_mockModule('ioredis', () => {
-  const RedisMock = jest.fn<any, any>().mockImplementation((url: string, options: any) => {
+  const RedisMock = jest.fn<any>().mockImplementation((url: string, options: any) => {
     redisConstructors.push({ url, options });
     return mockRedis;
   });
