@@ -285,6 +285,17 @@ function parseStringList(rawValue: string | undefined): string[] {
   return rawValue.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
+function parseUrlList(rawValue: string, key: string, issues: string[]): string[] {
+  const urls: string[] = [];
+  for (const entry of parseStringList(rawValue)) {
+    const url = parseOptionalUrl(entry, key, issues);
+    if (url) {
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
 function parseOptionalUrl(rawValue: string | undefined, key: string, issues: string[]): string | undefined {
   if (rawValue === undefined) return undefined;
   const value = rawValue.trim();
