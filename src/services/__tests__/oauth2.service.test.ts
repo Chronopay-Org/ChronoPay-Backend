@@ -14,6 +14,7 @@ describe("OAuth2Service", () => {
     process.env.OAUTH_GITHUB_CLIENT_SECRET = "github-secret";
     process.env.OAUTH_GITHUB_REDIRECT_URI = "http://localhost:3000/callback";
 
+    oauth2Service.reinitializeProviders();
     jest.clearAllMocks();
   });
 
@@ -197,7 +198,7 @@ describe("OAuth2Service", () => {
       });
 
       await expect(
-        oauth2Service.exchangeCodeForToken("google", "bad-code", "verifier")
+        oauth2Service.exchangeCodeForToken("google", "bad-code", "verifier"),
       ).rejects.toThrow(OAuth2Error);
     });
 
@@ -211,11 +212,7 @@ describe("OAuth2Service", () => {
         }),
       });
 
-      const result = await oauth2Service.exchangeCodeForToken(
-        "github",
-        "github-code",
-        "verifier"
-      );
+      const result = await oauth2Service.exchangeCodeForToken("github", "github-code", "verifier");
 
       expect(result.access_token).toBe("github-token");
     });
@@ -283,9 +280,7 @@ describe("OAuth2Service", () => {
         status: 401,
       });
 
-      await expect(oauth2Service.fetchUserInfo("google", "bad-token")).rejects.toThrow(
-        OAuth2Error
-      );
+      await expect(oauth2Service.fetchUserInfo("google", "bad-token")).rejects.toThrow(OAuth2Error);
     });
 
     it("handles missing profile fields gracefully", async () => {

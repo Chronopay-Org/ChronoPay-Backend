@@ -57,7 +57,7 @@ export class OAuth2Error extends Error {
 }
 
 export class OAuth2Service {
-  private static instance: OAuth2Service;
+  private static instance: OAuth2Service | null = null;
   private providers = new Map<string, OAuth2ProviderConfig>();
 
   private constructor() {
@@ -71,10 +71,20 @@ export class OAuth2Service {
     return OAuth2Service.instance;
   }
 
+  public static resetInstance(): void {
+    OAuth2Service.instance = null;
+  }
+
+  public reinitializeProviders(): void {
+    this.initializeProviders();
+  }
+
   /**
    * Initialize OAuth2 providers with env vars
    */
-  private initializeProviders(): void {
+  public initializeProviders(): void {
+    this.providers.clear();
+
     // Google OAuth2 config
     const googleClientId = process.env.OAUTH_GOOGLE_CLIENT_ID?.trim();
     const googleClientSecret = process.env.OAUTH_GOOGLE_CLIENT_SECRET?.trim();
@@ -116,6 +126,7 @@ export class OAuth2Service {
    * Get provider configuration by name
    */
   public getProvider(provider: string): OAuth2ProviderConfig {
+    this.initializeProviders();
     const config = this.providers.get(provider);
     if (!config) {
       throw new OAuth2Error("invalid_provider", `Provider '${provider}' is not configured`, 400);
@@ -127,6 +138,7 @@ export class OAuth2Service {
    * Get list of enabled providers
    */
   public getEnabledProviders(): string[] {
+    this.initializeProviders();
     return Array.from(this.providers.keys());
   }
 

@@ -9,12 +9,12 @@ const router = Router();
 const COOKIE_NAME_STATE = "oauth2_state";
 const COOKIE_NAME_PKCE = "oauth2_pkce";
 const COOKIE_NAME_NONCE = "oauth2_nonce";
-const COOKIE_OPTIONS = {
+const getCookieOptions = () => ({
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: "lax" as const,
   maxAge: 10 * 60 * 1000, // 10 minutes
-};
+});
 
 /**
  * GET /api/v1/auth/oauth/:provider/start
@@ -40,16 +40,17 @@ router.get("/:provider/start", (req: Request, res: Response) => {
     const nonce = crypto.randomBytes(16).toString("hex");
 
     // Store state, PKCE, and nonce in signed httpOnly cookies for validation on callback
-    res.cookie(COOKIE_NAME_STATE, state, COOKIE_OPTIONS);
+    const cookieOptions = getCookieOptions();
+    res.cookie(COOKIE_NAME_STATE, state, cookieOptions);
     res.cookie(
       COOKIE_NAME_PKCE,
       JSON.stringify({
         verifier: pkceChallenge.codeVerifier,
         challenge: pkceChallenge.codeChallenge,
       }),
-      COOKIE_OPTIONS,
+      cookieOptions,
     );
-    res.cookie(COOKIE_NAME_NONCE, nonce, COOKIE_OPTIONS);
+    res.cookie(COOKIE_NAME_NONCE, nonce, cookieOptions);
 
     // Build authorization URL
     const authUrl = oauth2Service.buildAuthorizationUrl(
@@ -106,7 +107,8 @@ router.get("/:provider/start", (req: Request, res: Response) => {
  */
 router.get("/:provider/callback", async (req: Request, res: Response) => {
   try {
-    const { provider, code, state, error, error_description } = req.query as Record<
+    const provider = req.params.provider || (req.query.provider as string | undefined);
+    const { code, state, error, error_description } = req.query as Record<
       string,
       string | undefined
     >;
@@ -147,9 +149,9 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
     // Validate state - prevent CSRF and replay attacks
     if (!storedState || storedState !== state) {
       // Clear cookies immediately
-      res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
+      res.clearCookie(COOKIE_NAME_STATE, { path: "/", maxAge: 0 });
+      res.clearCookie(COOKIE_NAME_PKCE, { path: "/", maxAge: 0 });
+      res.clearCookie(COOKIE_NAME_NONCE, { path: "/", maxAge: 0 });
 
       return res.status(400).json({
         success: false,
@@ -160,9 +162,9 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
 
     // Validate PKCE data
     if (!pkceData) {
-      res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
+      res.clearCookie(COOKIE_NAME_STATE, { path: "/", maxAge: 0 });
+      res.clearCookie(COOKIE_NAME_PKCE, { path: "/", maxAge: 0 });
+      res.clearCookie(COOKIE_NAME_NONCE, { path: "/", maxAge: 0 });
 
       return res.status(400).json({
         success: false,
@@ -176,9 +178,9 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
       const parsed = JSON.parse(pkceData);
       codeVerifier = parsed.verifier;
     } catch {
-      res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
+      res.clearCookie(COOKIE_NAME_STATE, { path: "/", maxAge: 0 });
+      res.clearCookie(COOKIE_NAME_PKCE, { path: "/", maxAge: 0 });
+      res.clearCookie(COOKIE_NAME_NONCE, { path: "/", maxAge: 0 });
 
       return res.status(400).json({
         success: false,
@@ -190,35 +192,45 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
     // Exchange code for token
     const tokenResponse = await oauth2Service.exchangeCodeForToken(provider, code, codeVerifier);
 
-    // Fetch user info from provider
-    const userInfo = await oauth2Service.fetchUserInfo(provider, tokenResponse.access_token);
-
     // Validate nonce if ID token is present (for Google/OIDC)
     if (tokenResponse.id_token && storedNonce) {
       try {
-        // Simple JWT decode (no verification needed - we trust the provider via HTTPS)
+        let payload: Record<string, unknown> | undefined;
         const parts = tokenResponse.id_token.split(".");
         if (parts.length === 3) {
-          const payload = JSON.parse(
-            Buffer.from(parts[1], "base64").toString("utf-8")
+          payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf-8")) as Record<
+            string,
+            unknown
+          >;
+        } else {
+          const decoded = JSON.parse(
+            Buffer.from(tokenResponse.id_token, "base64").toString("utf-8"),
           ) as Record<string, unknown>;
-          if (!oauth2Service.verifyNonce(storedNonce, payload.nonce as string | undefined)) {
-            res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
-            res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
-            res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
+          payload = (decoded.payload as Record<string, unknown>) || decoded;
+        }
 
-            return res.status(400).json({
-              success: false,
-              error: "nonce_mismatch",
-              message: "Nonce validation failed",
-            });
-          }
+        if (
+          payload &&
+          !oauth2Service.verifyNonce(storedNonce, payload.nonce as string | undefined)
+        ) {
+          res.clearCookie(COOKIE_NAME_STATE, { path: "/", maxAge: 0 });
+          res.clearCookie(COOKIE_NAME_PKCE, { path: "/", maxAge: 0 });
+          res.clearCookie(COOKIE_NAME_NONCE, { path: "/", maxAge: 0 });
+
+          return res.status(400).json({
+            success: false,
+            error: "nonce_mismatch",
+            message: "Nonce validation failed",
+          });
         }
       } catch (_decodeError) {
         // If ID token can't be decoded, just skip nonce validation
         // (not all providers send ID tokens)
       }
     }
+
+    // Fetch user info from provider
+    const userInfo = await oauth2Service.fetchUserInfo(provider, tokenResponse.access_token);
 
     // Generate application JWT
     const jwtSecret = configService.getSecret("JWT_SECRET");
@@ -239,9 +251,9 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
     );
 
     // Clear OAuth2 cookies
-    res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
-    res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
-    res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
+    res.clearCookie(COOKIE_NAME_STATE, { path: "/", maxAge: 0 });
+    res.clearCookie(COOKIE_NAME_PKCE, { path: "/", maxAge: 0 });
+    res.clearCookie(COOKIE_NAME_NONCE, { path: "/", maxAge: 0 });
 
     // Return the JWT to the client (do NOT include provider tokens)
     return res.status(200).json({
