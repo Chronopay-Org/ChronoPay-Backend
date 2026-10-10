@@ -1,4 +1,5 @@
 import { jest, describe, it, expect, beforeEach } from "@jest/globals";
+import crypto from "crypto";
 import { Pool } from "pg";
 import {
   DisputeMediationTranscriptStore,
@@ -234,7 +235,7 @@ describe("DisputeMediationTranscriptStore service (issue #450)", () => {
   it("appendSegment stores SHA-256 of plaintext body (verifiable dedup tag)", async () => {
     const segment = makeSegment({ body: "hello verifiable body" });
     const stored = await store.appendSegment(segment);
-    const expected = require("crypto")
+    const expected = crypto
       .createHash("sha256")
       .update(segment.body, "utf8")
       .digest("hex");

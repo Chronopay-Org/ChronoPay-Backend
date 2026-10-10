@@ -358,7 +358,7 @@ export class InMemoryTranscriptRepository implements TranscriptRepository {
 
 // ─── In-memory KMS (for tests; real deployment would call AWS KMS / Vault) ───
 
-const AES_KW_IV = Buffer.from("A6A6A6A6A6A6A6A6A", "hex");
+const AES_KW_IV = Buffer.from("A6A6A6A6A6A6A6A6", "hex");
 
 export function aesKeyWrap(plainKey: Buffer, kek: Buffer): Buffer {
   const n = plainKey.length / 8;
@@ -376,11 +376,8 @@ export function aesKeyWrap(plainKey: Buffer, kek: Buffer): Buffer {
       const B = Buffer.concat([cipher.update(concat), cipher.final()]);
       const t = BigInt(n * j + i);
       A = Buffer.alloc(8);
-      for (let k = 0; k < 8; k++) {
-        A[k] = B[k] ^ (k >= 7 ? Number(t & 0xffn) : 0);
-      }
       let shift = 56n;
-      for (let k = 7; k >= 0; k--) {
+      for (let k = 0; k < 8; k++) {
         A[k] = B[k] ^ Number((t >> shift) & 0xffn);
         shift -= 8n;
       }
@@ -512,7 +509,7 @@ export class DisputeMediationTranscriptStore {
 
     const encrypted = await encryptSegment(segment, this.kms, activeKek);
 
-    const nowIso = opts.nowIso ?? new Date().toISOString();
+    const nowIso = opts.nowIso ?? (segment.authoredAtIso ?? new Date().toISOString());
     const stored: StoredEncryptedTranscript = {
       id: segment.id,
       disputeId: segment.disputeId,
