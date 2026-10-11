@@ -1,7 +1,4 @@
-import rateLimit, {
-  type Options,
-  type RateLimitRequestHandler,
-} from "express-rate-limit";
+import rateLimit, { type Options, type RateLimitRequestHandler } from "express-rate-limit";
 import { type Request, type Response } from "express";
 import { configService } from "../config/config.service.js";
 import { rateLimitRedisStore } from "./rateLimitStore.js";
@@ -28,7 +25,14 @@ import { fairQueueBurnRateTotal, fairQueueWaitTimeSeconds } from "../metrics.js"
  *   - IP fallback works when auth headers are absent
  */
 export function generateRateLimitKey(req: Request | null | undefined): string {
-  const safeReq = req && typeof req === 'object' ? (req as Partial<Request> & { auth?: { userId?: unknown }; user?: { sub?: unknown; id?: unknown }; apiKeyId?: unknown }) : undefined;
+  const safeReq =
+    req && typeof req === "object"
+      ? (req as Partial<Request> & {
+          auth?: { userId?: unknown };
+          user?: { sub?: unknown; id?: unknown };
+          apiKeyId?: unknown;
+        })
+      : undefined;
 
   // Header-based identity (x-chronopay-user-id) — highest priority
   const authUserId = safeReq?.auth?.userId;
@@ -37,7 +41,13 @@ export function generateRateLimitKey(req: Request | null | undefined): string {
   }
 
   // JWT identity (Authorization: Bearer <token>)
-  const jwtUserId = safeReq?.user && (isNonEmptyValue((safeReq.user as any)?.sub) ? (safeReq.user as any).sub : isNonEmptyValue((safeReq.user as any)?.id) ? (safeReq.user as any).id : undefined);
+  const jwtUserId =
+    safeReq?.user &&
+    (isNonEmptyValue((safeReq.user as any)?.sub)
+      ? (safeReq.user as any).sub
+      : isNonEmptyValue((safeReq.user as any)?.id)
+        ? (safeReq.user as any).id
+        : undefined);
   if (isNonEmptyValue(jwtUserId)) {
     return `rl:user:${String(jwtUserId)}`;
   }
@@ -51,56 +61,57 @@ export function generateRateLimitKey(req: Request | null | undefined): string {
   // IP address fallback — hash to avoid IPv6 detection and ensure consistent length.
   // Blank and malformed values fall back to a stable anonymous identity instead of crashing.
   const ip = getClientIp(safeReq as any);
-  const ipHash = createHash('sha256').update(ip, 'utf8').digest('hex');
+  const ipHash = createHash("sha256").update(ip, "utf8").digest("hex");
   return `rl:ip:${ipHash}`;
 }
 
 function isNonEmptyValue(value: unknown): boolean {
   if (value === null || value === undefined) return false;
-  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === "string") return value.trim().length > 0;
   return true;
 }
 
 // Helper to extract IP without referencing `req.ip` directly in the main function.
 function getClientIp(req: Partial<Request> | undefined): string {
   const anyReq = req as any;
-  const candidateIp = anyReq?.ip ?? anyReq?.socket?.remoteAddress ?? anyReq?.headers?.['x-forwarded-for'] ?? anyReq?.headers?.['x-real-ip'];
+  const candidateIp =
+    anyReq?.ip ??
+    anyReq?.socket?.remoteAddress ??
+    anyReq?.headers?.["x-forwarded-for"] ??
+    anyReq?.headers?.["x-real-ip"];
 
-  if (typeof candidateIp === 'string') {
+  if (typeof candidateIp === "string") {
     const trimmed = candidateIp.trim();
-    return trimmed.length > 0 ? trimmed : 'anonymous';
+    return trimmed.length > 0 ? trimmed : "anonymous";
   }
 
   if (Array.isArray(candidateIp) && candidateIp.length > 0) {
     const first = candidateIp[0];
-    if (typeof first === 'string' && first.trim().length > 0) {
+    if (typeof first === "string" && first.trim().length > 0) {
       return first.trim();
     }
   }
 
-  return 'anonymous';
+  return "anonymous";
 }
 
 /**
  * Original IP-only rate limiter (unchanged for backward compatibility).
  * Uses default MemoryStore; suitable for tests and not used in production.
  */
-export function createRateLimiter(
-  windowMs?: number,
-  max?: number,
-): RateLimitRequestHandler {
+export function createRateLimiter(windowMs?: number, max?: number): RateLimitRequestHandler {
   const resolvedWindowMs = windowMs ?? configService.rateLimitWindowMs;
   const resolvedMax = max ?? configService.rateLimitMax;
 
   const options: Partial<Options> = {
     windowMs: resolvedWindowMs,
     limit: resolvedMax,
-    standardHeaders: 'draft-7',
+    standardHeaders: "draft-7",
     legacyHeaders: false,
     handler: (_req: Request, res: Response) => {
       res.status(429).json({
         success: false,
-        error: 'Too many requests, please try again later.',
+        error: "Too many requests, please try again later.",
       });
     },
   };
@@ -133,10 +144,9 @@ export function createAuthAwareRateLimiter(
   const options: Partial<Options> = {
     windowMs: resolvedWindowMs,
     limit: resolvedMax,
-    standardHeaders: 'draft-7',
+    standardHeaders: "draft-7",
     legacyHeaders: false,
     keyGenerator: generateRateLimitKey,
-    // @ts-expect-error - Auto-fixed by script
     store: rateLimitRedisStore,
     validate: { unsharedStore: false },
     // Skip rate limiting in test environment to avoid flaky tests.
@@ -145,12 +155,12 @@ export function createAuthAwareRateLimiter(
     skip: (req: Request) => {
       if ((req as any).internalBypassActor) return true;
       if ((req as any)._skipRateLimit === false) return false;
-      return process.env.NODE_ENV === 'test';
+      return process.env.NODE_ENV === "test";
     },
     handler: (_req: Request, res: Response) => {
       res.status(429).json({
         success: false,
-        error: 'Too many requests, please try again later.',
+        error: "Too many requests, please try again later.",
       });
     },
   };

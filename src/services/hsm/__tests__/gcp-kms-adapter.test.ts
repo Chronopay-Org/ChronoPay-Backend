@@ -18,8 +18,7 @@ import { runHsmAdapterContractTests } from "./hsm-adapter.contract.js";
 
 const KEY_VERSION =
   "projects/my-project/locations/us-east1/keyRings/my-ring/cryptoKeys/my-key/cryptoKeyVersions/1";
-const CRYPTO_KEY =
-  "projects/my-project/locations/us-east1/keyRings/my-ring/cryptoKeys/my-key";
+const CRYPTO_KEY = "projects/my-project/locations/us-east1/keyRings/my-ring/cryptoKeys/my-key";
 const TEST_MSG = new Uint8Array([1, 2, 3]);
 const TEST_SIG = new Uint8Array([10, 20, 30]);
 const ALGORITHM: SigningAlgorithm = "ECDSA_SHA_256";
@@ -42,30 +41,32 @@ function makeMockGcpClient(overrides: {
 }): KeyManagementServiceClient {
   const client = new KeyManagementServiceClient();
 
+  (client as any).asymmetricVerify = jest.fn();
+
   if (overrides.asymmetricSign) {
-    jest.spyOn(client, "asymmetricSign").mockImplementation(
-      overrides.asymmetricSign as Parameters<typeof jest.spyOn>[1],
-    );
+    jest
+      .spyOn(client, "asymmetricSign")
+      .mockImplementation(overrides.asymmetricSign as Parameters<typeof jest.spyOn>[1]);
   }
   if (overrides.asymmetricVerify) {
-    jest.spyOn(client as any, "asymmetricVerify").mockImplementation(
-      overrides.asymmetricVerify as Parameters<typeof jest.spyOn>[1],
-    );
+    jest
+      .spyOn(client as any, "asymmetricVerify")
+      .mockImplementation(overrides.asymmetricVerify as Parameters<typeof jest.spyOn>[1]);
   }
   if (overrides.createCryptoKeyVersion) {
-    jest.spyOn(client, "createCryptoKeyVersion").mockImplementation(
-      overrides.createCryptoKeyVersion as Parameters<typeof jest.spyOn>[1],
-    );
+    jest
+      .spyOn(client, "createCryptoKeyVersion")
+      .mockImplementation(overrides.createCryptoKeyVersion as Parameters<typeof jest.spyOn>[1]);
   }
   if (overrides.destroyCryptoKeyVersion) {
-    jest.spyOn(client, "destroyCryptoKeyVersion").mockImplementation(
-      overrides.destroyCryptoKeyVersion as Parameters<typeof jest.spyOn>[1],
-    );
+    jest
+      .spyOn(client, "destroyCryptoKeyVersion")
+      .mockImplementation(overrides.destroyCryptoKeyVersion as Parameters<typeof jest.spyOn>[1]);
   }
   if (overrides.getCryptoKey) {
-    jest.spyOn(client, "getCryptoKey").mockImplementation(
-      overrides.getCryptoKey as Parameters<typeof jest.spyOn>[1],
-    );
+    jest
+      .spyOn(client, "getCryptoKey")
+      .mockImplementation(overrides.getCryptoKey as Parameters<typeof jest.spyOn>[1]);
   }
 
   return client;
@@ -181,7 +182,9 @@ describe("GcpKmsAdapter — GCP-specific behaviour", () => {
 
     it("classifies gRPC NOT_FOUND (code 5) as KEY_NOT_FOUND", async () => {
       const client = makeMockGcpClient({
-        asymmetricSign: async () => { throw makeGrpcError(5, "key not found"); },
+        asymmetricSign: async () => {
+          throw makeGrpcError(5, "key not found");
+        },
       });
       const adapter = new GcpKmsAdapter({ clientFactory: () => client });
 
@@ -192,7 +195,9 @@ describe("GcpKmsAdapter — GCP-specific behaviour", () => {
 
     it("classifies gRPC PERMISSION_DENIED (code 7) as PERMISSION_DENIED", async () => {
       const client = makeMockGcpClient({
-        asymmetricSign: async () => { throw makeGrpcError(7, "permission denied"); },
+        asymmetricSign: async () => {
+          throw makeGrpcError(7, "permission denied");
+        },
       });
       const adapter = new GcpKmsAdapter({ clientFactory: () => client });
 
@@ -203,7 +208,9 @@ describe("GcpKmsAdapter — GCP-specific behaviour", () => {
 
     it("classifies gRPC UNAUTHENTICATED (code 16) as PERMISSION_DENIED", async () => {
       const client = makeMockGcpClient({
-        asymmetricSign: async () => { throw makeGrpcError(16, "unauthenticated"); },
+        asymmetricSign: async () => {
+          throw makeGrpcError(16, "unauthenticated");
+        },
       });
       const adapter = new GcpKmsAdapter({ clientFactory: () => client });
 
@@ -214,7 +221,9 @@ describe("GcpKmsAdapter — GCP-specific behaviour", () => {
 
     it("classifies gRPC FAILED_PRECONDITION (code 9) as KEY_DISABLED", async () => {
       const client = makeMockGcpClient({
-        asymmetricSign: async () => { throw makeGrpcError(9, "key disabled"); },
+        asymmetricSign: async () => {
+          throw makeGrpcError(9, "key disabled");
+        },
       });
       const adapter = new GcpKmsAdapter({ clientFactory: () => client });
 
@@ -225,7 +234,9 @@ describe("GcpKmsAdapter — GCP-specific behaviour", () => {
 
     it("classifies gRPC INVALID_ARGUMENT with 'algorithm' message as ALGORITHM_MISMATCH", async () => {
       const client = makeMockGcpClient({
-        asymmetricSign: async () => { throw makeGrpcError(3, "algorithm not supported"); },
+        asymmetricSign: async () => {
+          throw makeGrpcError(3, "algorithm not supported");
+        },
       });
       const adapter = new GcpKmsAdapter({ clientFactory: () => client });
 
@@ -236,7 +247,9 @@ describe("GcpKmsAdapter — GCP-specific behaviour", () => {
 
     it("classifies gRPC INVALID_ARGUMENT with 'disabled' message as KEY_DISABLED", async () => {
       const client = makeMockGcpClient({
-        asymmetricSign: async () => { throw makeGrpcError(3, "key version is disabled"); },
+        asymmetricSign: async () => {
+          throw makeGrpcError(3, "key version is disabled");
+        },
       });
       const adapter = new GcpKmsAdapter({ clientFactory: () => client });
 
@@ -267,7 +280,11 @@ describe("GcpKmsAdapter — GCP-specific behaviour", () => {
       });
 
       const adapter = new GcpKmsAdapter({ clientFactory: () => client });
-      const res = await adapter.sign({ key: { keyId: KEY_VERSION }, message: TEST_MSG, algorithm: ALGORITHM });
+      const res = await adapter.sign({
+        key: { keyId: KEY_VERSION },
+        message: TEST_MSG,
+        algorithm: ALGORITHM,
+      });
       expect(res.signature).toEqual(TEST_SIG);
       expect(calls).toBeGreaterThanOrEqual(2);
     });
@@ -283,7 +300,11 @@ describe("GcpKmsAdapter — GCP-specific behaviour", () => {
       });
 
       const adapter = new GcpKmsAdapter({ clientFactory: () => client });
-      const res = await adapter.sign({ key: { keyId: KEY_VERSION }, message: TEST_MSG, algorithm: ALGORITHM });
+      const res = await adapter.sign({
+        key: { keyId: KEY_VERSION },
+        message: TEST_MSG,
+        algorithm: ALGORITHM,
+      });
       expect(res.signature).toEqual(TEST_SIG);
     });
   });
@@ -312,7 +333,9 @@ describe("GcpKmsAdapter — GCP-specific behaviour", () => {
 
     it("returns valid:false (no throw) on gRPC INVALID_ARGUMENT for signature", async () => {
       const client = makeMockGcpClient({
-        asymmetricVerify: async () => { throw makeGrpcError(3, "signature invalid"); },
+        asymmetricVerify: async () => {
+          throw makeGrpcError(3, "signature invalid");
+        },
       });
       const adapter = new GcpKmsAdapter({ clientFactory: () => client });
 
@@ -419,7 +442,9 @@ describe("GcpKmsAdapter — GCP-specific behaviour", () => {
         clientFactory: () => {
           clientCallCount++;
           return makeMockGcpClient({
-            asymmetricSign: async () => { throw makeGrpcError(5, "not found"); },
+            asymmetricSign: async () => {
+              throw makeGrpcError(5, "not found");
+            },
           });
         },
       });

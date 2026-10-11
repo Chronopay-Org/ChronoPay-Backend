@@ -80,6 +80,7 @@ class FakeKms implements KeyManagementService {
 class FakeEnvelopeRepo implements EnvelopeRepository {
   rows: EnvelopeRow[] = [];
   updates: Array<{ id: string; newWrappedDek: Buffer; newKekVersionId: string }> = [];
+  fetchDelayMs = 0;
 
   seed(rows: EnvelopeRow[]) {
     this.rows = [...rows];
@@ -90,8 +91,11 @@ class FakeEnvelopeRepo implements EnvelopeRepository {
     params: {
       afterId: string | null;
       limit: number;
-    }
+    },
   ): Promise<EnvelopeRow[]> {
+    if (this.fetchDelayMs > 0) {
+      await new Promise((r) => setTimeout(r, this.fetchDelayMs));
+    }
     let list = [...this.rows].sort((a, b) => a.id.localeCompare(b.id));
     if (params.afterId !== null) {
       list = list.filter((r) => r.id > params.afterId!);
@@ -105,7 +109,7 @@ class FakeEnvelopeRepo implements EnvelopeRepository {
       id: string;
       newWrappedDek: Buffer;
       newKekVersionId: string;
-    }
+    },
   ): Promise<void> {
     this.updates.push({
       id: params.id,
@@ -141,7 +145,7 @@ async function waitForStatus(
   runner: KekRotationRunner,
   rotationId: string,
   wanted: string[],
-  timeoutMs = 2000
+  timeoutMs = 2000,
 ) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -150,9 +154,7 @@ async function waitForStatus(
     await new Promise((r) => setTimeout(r, 20));
   }
   const cp = await runner.status(rotationId);
-  throw new Error(
-    `Timeout waiting for status in [${wanted.join(", ")}], got ${cp?.status}`
-  );
+  throw new Error(`Timeout waiting for status in [${wanted.join(", ")}], got ${cp?.status}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,10 +256,12 @@ describe("KekRotationRunner", () => {
     ]);
 
     // First run processes only the first batch then we "crash" by pausing
+    repo.fetchDelayMs = 50;
     await runner.start(makeParams({ batchSize: 2 }));
     // Give it a moment to process first batch
-    await new Promise((r) => setTimeout(r, 80));
+    await new Promise((r) => setTimeout(r, 70));
     await runner.pause("rot-1");
+    repo.fetchDelayMs = 0;
 
     const mid = await runner.status("rot-1");
     expect(mid?.status).toBe("paused");

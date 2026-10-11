@@ -145,10 +145,15 @@ describe("parseSlotIdParam", () => {
     });
 
     it("emits the same envelope for empty and malformed ids", () => {
-      const empty = bodyOf(invoke("").res);
-      const malformed = bodyOf(invoke("no spaces allowed").res);
+      jest.useFakeTimers();
+      try {
+        const empty = bodyOf(invoke("").res);
+        const malformed = bodyOf(invoke("no spaces allowed").res);
 
-      expect(empty).toEqual(malformed);
+        expect(empty).toEqual(malformed);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 
@@ -172,8 +177,7 @@ describe("parseSlotIdParam", () => {
 
       if (requestId !== undefined) {
         app.use((req, _res, next) => {
-          (req as express.Request & { requestId?: string }).requestId =
-            requestId;
+          (req as express.Request & { requestId?: string }).requestId = requestId;
           next();
         });
       }

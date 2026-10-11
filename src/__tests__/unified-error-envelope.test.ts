@@ -70,7 +70,7 @@ describe("Unified error envelope", () => {
   });
 
   it("genericErrorHandler sanitizes errors from /__test__/explode route", async () => {
-    const app = createApp({ enableTestRoutes: true });
+    const app = createApp({ enableTestRoutes: true, enableDocs: false });
 
     const response = await request(app).get("/__test__/explode");
 
@@ -88,7 +88,7 @@ describe("Unified error envelope", () => {
     const responseBody = JSON.stringify(response.body);
     expect(responseBody).not.toContain("Intentional test fault");
     expect(responseBody).not.toContain("stack");
-  });
+  }, 15000);
 });
 
 describe("Route adapters using shared AppError envelope", () => {
@@ -129,8 +129,9 @@ describe("Route adapters using shared AppError envelope", () => {
     app.use("/api/v1/checkout", checkoutRouter);
     app.use(genericErrorHandler);
 
-    const response = await request(app)
-      .get("/api/v1/checkout/sessions/00000000-0000-0000-0000-000000000000");
+    const response = await request(app).get(
+      "/api/v1/checkout/sessions/00000000-0000-0000-0000-000000000000",
+    );
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual(

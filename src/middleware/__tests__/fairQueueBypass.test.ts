@@ -29,12 +29,7 @@ const ACTOR = "payout-worker";
 const ROUTE = "/api/v1/slots";
 const TOLERANCE_MS = 30_000;
 
-function makeSignature(
-  actor: string,
-  route: string,
-  ts: number,
-  secret: string,
-): string {
+function makeSignature(actor: string, route: string, ts: number, secret: string): string {
   const message = `${actor}\n${route}\n${ts}`;
   return "sha256=" + createHmac("sha256", secret).update(message).digest("hex");
 }
@@ -52,18 +47,12 @@ function nowTs(): number {
 // directly to fairQueueBypass().
 const { fairQueueBypass } = await import("../internalHmacAuth.js");
 
-function buildApp(
-  secret?: string,
-  prevSecret?: string,
-  toleranceMs?: number,
-): express.Express {
+function buildApp(secret?: string, prevSecret?: string, toleranceMs?: number): express.Express {
   const app = express();
   app.use(express.json());
 
   // Mount the bypass middleware before the test handler.
-  app.use(
-    fairQueueBypass(secret, prevSecret, toleranceMs ?? TOLERANCE_MS),
-  );
+  app.use(fairQueueBypass(secret, prevSecret, toleranceMs ?? TOLERANCE_MS));
 
   app.get(ROUTE, (req: Request, res: Response) => {
     res.status(200).json({
@@ -112,9 +101,7 @@ describe("fairQueueBypass middleware", () => {
     it("accepts sig without 'sha256=' prefix (raw hex)", async () => {
       const ts = nowTs();
       // Create a raw hex signature (no prefix)
-      const rawHex = createHmac("sha256", SECRET)
-        .update(`${ACTOR}\n${ROUTE}\n${ts}`)
-        .digest("hex");
+      const rawHex = createHmac("sha256", SECRET).update(`${ACTOR}\n${ROUTE}\n${ts}`).digest("hex");
 
       const app = buildApp(SECRET);
       const res = await request(app)
@@ -433,9 +420,10 @@ describe("fairQueueBypass + createAuthAwareRateLimiter integration", () => {
     default: jest.fn<any>().mockImplementation(() => mockRedis),
   }));
 
-  let createAuthAwareRateLimiter: typeof import("../rateLimiter.js")["createAuthAwareRateLimiter"];
-  let _setTestMock: typeof import("../rateLimitStore.js")["_setTestMock"];
-  let _resetStore: typeof import("../rateLimitStore.js")["_resetStore"];
+  let createAuthAwareRateLimiter: (typeof import("../rateLimiter.js"))["createAuthAwareRateLimiter"];
+  let _setTestMock: (typeof import("../rateLimitStore.js"))["_setTestMock"];
+  let _setTestClient: (typeof import("../rateLimitStore.js"))["_setTestClient"];
+  let _resetStore: (typeof import("../rateLimitStore.js"))["_resetStore"];
 
   let app: express.Express;
   const WINDOW_MS = 60_000;
@@ -443,12 +431,14 @@ describe("fairQueueBypass + createAuthAwareRateLimiter integration", () => {
 
   beforeAll(async () => {
     ({ createAuthAwareRateLimiter } = await import("../rateLimiter.js"));
-    ({ _setTestMock, _resetStore } = await import("../rateLimitStore.js"));
+    ({ _setTestMock, _setTestClient, _resetStore } = await import("../rateLimitStore.js"));
     _setTestMock(true);
+    _setTestClient(mockRedis);
   });
 
   afterAll(() => {
     _setTestMock(false);
+    _setTestClient(null);
     _resetStore();
   });
 

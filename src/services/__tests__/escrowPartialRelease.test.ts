@@ -69,33 +69,25 @@ describe("registerBooking", () => {
       { milestoneId: "m-2", description: "d2", amountStroops: 200_000_000 },
     ];
     const svc = makeService();
-    expect(() => svc.registerBooking("b-001", HOLD, over)).toThrow(
-      MilestoneAmountExceedsHoldError,
-    );
+    expect(() => svc.registerBooking("b-001", HOLD, over)).toThrow(MilestoneAmountExceedsHoldError);
   });
 
   it("throws InvalidMilestoneAmountError for zero amount", () => {
     const invalid = [{ milestoneId: "m-zero", description: "d", amountStroops: 0 }];
     const svc = makeService();
-    expect(() => svc.registerBooking("b-001", HOLD, invalid)).toThrow(
-      InvalidMilestoneAmountError,
-    );
+    expect(() => svc.registerBooking("b-001", HOLD, invalid)).toThrow(InvalidMilestoneAmountError);
   });
 
   it("throws InvalidMilestoneAmountError for negative amount", () => {
     const invalid = [{ milestoneId: "m-neg", description: "d", amountStroops: -1 }];
     const svc = makeService();
-    expect(() => svc.registerBooking("b-001", HOLD, invalid)).toThrow(
-      InvalidMilestoneAmountError,
-    );
+    expect(() => svc.registerBooking("b-001", HOLD, invalid)).toThrow(InvalidMilestoneAmountError);
   });
 
   it("throws InvalidMilestoneAmountError for fractional amount", () => {
     const invalid = [{ milestoneId: "m-frac", description: "d", amountStroops: 1.5 }];
     const svc = makeService();
-    expect(() => svc.registerBooking("b-001", HOLD, invalid)).toThrow(
-      InvalidMilestoneAmountError,
-    );
+    expect(() => svc.registerBooking("b-001", HOLD, invalid)).toThrow(InvalidMilestoneAmountError);
   });
 });
 
@@ -113,9 +105,7 @@ describe("authorizeMilestone", () => {
 
   it("throws BookingNotFoundError for unknown booking", () => {
     const svc = makeService();
-    expect(() => svc.authorizeMilestone("ghost", "m-1", "admin")).toThrow(
-      BookingNotFoundError,
-    );
+    expect(() => svc.authorizeMilestone("ghost", "m-1", "admin")).toThrow(BookingNotFoundError);
   });
 
   it("throws MilestoneNotFoundError for unknown milestone", () => {
@@ -182,9 +172,7 @@ describe("releasePartial – happy path", () => {
     svc.authorizeMilestone("b-001", "m-1", "admin");
     await svc.releasePartial("b-001", "m-1", mockNow);
 
-    const milestone = svc
-      .getBooking("b-001")!
-      .milestones.find((m) => m.milestoneId === "m-1")!;
+    const milestone = svc.getBooking("b-001")!.milestones.find((m) => m.milestoneId === "m-1")!;
     expect(milestone.releasedAt).toBe(NOW);
   });
 
@@ -204,9 +192,7 @@ describe("releasePartial – happy path", () => {
 describe("releasePartial – error paths", () => {
   it("throws BookingNotFoundError for unknown booking", async () => {
     const svc = makeService();
-    await expect(svc.releasePartial("ghost", "m-1", mockNow)).rejects.toThrow(
-      BookingNotFoundError,
-    );
+    await expect(svc.releasePartial("ghost", "m-1", mockNow)).rejects.toThrow(BookingNotFoundError);
   });
 
   it("throws MilestoneNotFoundError for unknown milestone", async () => {
@@ -258,17 +244,12 @@ describe("releasePartial – error paths", () => {
     (small as any).amountStroops = 100_000_000; // now exceeds remaining 50M
 
     svc.authorizeMilestone("b-001", "small", "admin");
-    await expect(svc.releasePartial("b-001", "small", mockNow)).rejects.toThrow(
-      OverReleaseError,
-    );
+    await expect(svc.releasePartial("b-001", "small", mockNow)).rejects.toThrow(OverReleaseError);
   });
 
   it("OverReleaseError carries the correct booking/milestone/amount fields", async () => {
     const svc = makeService();
-    svc.registerBooking("b-001", 10, [
-      { milestoneId: "big", description: "d", amountStroops: 10 },
-      { milestoneId: "extra", description: "d", amountStroops: 10 },
-    ]);
+    svc.registerBooking("b-001", 10, [{ milestoneId: "big", description: "d", amountStroops: 10 }]);
 
     // Release the first milestone (hold = 10, after release remaining = 0)
     svc.authorizeMilestone("b-001", "big", "admin");
@@ -276,7 +257,13 @@ describe("releasePartial – error paths", () => {
 
     // Inflate extra milestone to test the error fields
     const booking = svc.getBooking("b-001")!;
-    const extra = booking.milestones.find((m) => m.milestoneId === "extra")!;
+    const extra = {
+      milestoneId: "extra",
+      description: "d",
+      amountStroops: 10,
+      status: "pending" as const,
+    };
+    booking.milestones.push(extra as any);
     svc.authorizeMilestone("b-001", "extra", "admin");
 
     try {

@@ -19,19 +19,10 @@ import {
   MarketplaceSearchQueryInput,
   validateSearchQuery,
 } from "../validation/marketplaceSearchSchema.js";
-import {
-
-
-  NUM_FEATURES,
-} from "./ltr/index.js";
+import { NUM_FEATURES } from "./ltr/index.js";
 import { isFeatureEnabled } from "../flags/index.js";
-import {
-  computeCandidateCells,
-  distanceKm,
-  MAX_GEO_CANDIDATES,
-} from "./geo/h3GeoIndex.js";
+import { computeCandidateCells, distanceKm, MAX_GEO_CANDIDATES } from "./geo/h3GeoIndex.js";
 import { FacetCountsCache, type FacetCounts } from "../cache/facetCountsCache.js";
-
 
 export interface SearchResult {
   slots: Slot[];
@@ -86,21 +77,22 @@ export class MarketplaceSearchService {
     private pool: Pool,
     queryTrackerOrReranker?: SearchQueryTracker | LtrReranker,
     facetCacheOrEmitter?: FacetCountsCache | LtrEventEmitter,
-    diversificationConfig: DiversificationConfig = {}
+    diversificationConfig: DiversificationConfig = {},
   ) {
     // The 2nd/3rd constructor slots are duck-typed: legacy callers pass
     // (queryTracker, facetCache), while the LTR-aware callers pass
     // (reranker, eventEmitter). Distinguish by shape so both work.
     const isQueryTracker = (v: unknown): v is SearchQueryTracker =>
       Boolean(v) && "recordQuery" in (v as object);
-    const isReranker = (v: unknown): v is LtrReranker =>
-      Boolean(v) && "rerank" in (v as object);
+    const isReranker = (v: unknown): v is LtrReranker => Boolean(v) && "rerank" in (v as object);
     const isFacetCache = (v: unknown): v is FacetCountsCache =>
       Boolean(v) && "getFacetCounts" in (v as object);
     const isEventEmitter = (v: unknown): v is LtrEventEmitter =>
       Boolean(v) && "emitImpression" in (v as object);
 
-    const queryTracker = isQueryTracker(queryTrackerOrReranker) ? queryTrackerOrReranker : undefined;
+    const queryTracker = isQueryTracker(queryTrackerOrReranker)
+      ? queryTrackerOrReranker
+      : undefined;
     const reranker = isReranker(queryTrackerOrReranker) ? queryTrackerOrReranker : undefined;
     const facetCache = isFacetCache(facetCacheOrEmitter) ? facetCacheOrEmitter : undefined;
     const eventEmitter = isEventEmitter(facetCacheOrEmitter) ? facetCacheOrEmitter : undefined;
@@ -170,7 +162,10 @@ export class MarketplaceSearchService {
    * @returns Validated CursorData
    * @throws MarketplaceSearchError (400) if invalid or malformed
    */
-  public decodeCursor(cursorStr: string, expectedSortBy: "rating" | "price" | "relevance"): CursorData {
+  public decodeCursor(
+    cursorStr: string,
+    expectedSortBy: "rating" | "price" | "relevance",
+  ): CursorData {
     if (!cursorStr || typeof cursorStr !== "string") {
       throw new MarketplaceSearchError("Invalid cursor format", 400);
     }
@@ -306,9 +301,7 @@ export class MarketplaceSearchService {
     let paramCount = 1;
 
     if (query.categories && query.categories.length > 0) {
-      const placeholders = query.categories
-        .map(() => `$${paramCount++}`)
-        .join(", ");
+      const placeholders = query.categories.map(() => `$${paramCount++}`).join(", ");
       conditions.push(`category IN (${placeholders})`);
       params.push(...query.categories);
     }
@@ -361,7 +354,7 @@ export class MarketplaceSearchService {
       const candidateCells = computeCandidateCells(
         query.geo.lat,
         query.geo.lng,
-        query.geo.radiusKm
+        query.geo.radiusKm,
       );
       conditions.push(`h3_cell_res7 = ANY($${paramCount++}::text[])`);
       params.push(candidateCells);
@@ -406,7 +399,7 @@ export class MarketplaceSearchService {
    */
   private buildCursorPredicate(
     cursorData: CursorData,
-    startParamIndex: number
+    startParamIndex: number,
   ): { conditionSql: string; cursorParams: any[]; nextParamIndex: number } {
     let p = startParamIndex;
     const cursorParams: any[] = [];
@@ -446,7 +439,7 @@ export class MarketplaceSearchService {
     cache?: {
       get: (key: string) => Promise<SearchResult | null>;
       set: (key: string, value: SearchResult, ttlMs: number) => Promise<void>;
-    }
+    },
   ): Promise<SearchResult> {
     const query = validateSearchQuery(rawQuery);
     if (this.queryTracker) {
@@ -471,7 +464,11 @@ export class MarketplaceSearchService {
     }
 
     try {
-      const { whereClause: baseWhereClause, params: filterParams, paramCount } = this.buildFilterClause(query);
+      const {
+        whereClause: baseWhereClause,
+        params: filterParams,
+        paramCount,
+      } = this.buildFilterClause(query);
       const orderByClause = this.buildOrderByClause(query);
 
       const countQuery = `SELECT COUNT(*) as total FROM slots ${baseWhereClause}`;
@@ -486,7 +483,7 @@ export class MarketplaceSearchService {
         const cursorData = this.decodeCursor(query.cursor, query.sortBy);
         const { conditionSql, cursorParams, nextParamIndex } = this.buildCursorPredicate(
           cursorData,
-          currentParamIndex
+          currentParamIndex,
         );
 
         if (mainWhereClause.length > 0) {
@@ -518,7 +515,9 @@ export class MarketplaceSearchService {
           price_cents,
           supplier_rating,
           status,
-          created_at${query.suppressHeld === false && query.showHeldReleaseEta ? `,
+          created_at${
+            query.suppressHeld === false && query.showHeldReleaseEta
+              ? `,
           (
             SELECT h.expires_at
             FROM slot_holds h
@@ -527,7 +526,9 @@ export class MarketplaceSearchService {
               AND h.expires_at > NOW()
             ORDER BY h.expires_at DESC
             LIMIT 1
-          ) AS held_release_eta` : ""}
+          ) AS held_release_eta`
+              : ""
+          }
         FROM slots
         ${mainWhereClause}
         ${orderByClause}
@@ -553,11 +554,7 @@ export class MarketplaceSearchService {
       let slotsOrdered = slots;
       let ltrReranked = false;
 
-      if (
-        this.reranker &&
-        isFeatureEnabled("SEARCH_LTR_RERANKER") &&
-        this.reranker.isAvailable()
-      ) {
+      if (this.reranker && isFeatureEnabled("SEARCH_LTR_RERANKER") && this.reranker.isAvailable()) {
         let featureVectors: Array<{ slotId: number; features: number[] }> | undefined;
 
         try {
@@ -578,8 +575,7 @@ export class MarketplaceSearchService {
               ltrReranked = true;
             }
           }
-        } catch {
-        }
+        } catch {}
 
         if (this.eventEmitter && featureVectors) {
           try {
@@ -600,8 +596,7 @@ export class MarketplaceSearchService {
                 features: fv.features,
               })),
             });
-          } catch {
-          }
+          } catch {}
         }
       }
 
@@ -668,11 +663,7 @@ export class MarketplaceSearchService {
       }
       if (error instanceof Error) {
         if (error.message.includes("invalid") || error.message.includes("constraint")) {
-          throw new MarketplaceSearchError(
-            "Invalid search parameters",
-            400,
-            error.message
-          );
+          throw new MarketplaceSearchError("Invalid search parameters", 400, error.message);
         }
       }
       throw error;
@@ -685,7 +676,7 @@ export class MarketplaceSearchService {
    */
   private sortGeoCandidates(
     candidates: Array<{ slot: Slot; distanceKm: number }>,
-    sortBy: MarketplaceSearchQuery["sortBy"]
+    sortBy: MarketplaceSearchQuery["sortBy"],
   ): void {
     candidates.sort((a, b) => {
       switch (sortBy) {
@@ -740,7 +731,7 @@ export class MarketplaceSearchService {
           set: (key: string, value: SearchResult, ttlMs: number) => Promise<void>;
         }
       | undefined,
-    cacheKey: string
+    cacheKey: string,
   ): Promise<SearchResult> {
     const geo = query.geo;
     /* istanbul ignore next -- guarded by validation schema; defensive only */
@@ -815,6 +806,7 @@ export class MarketplaceSearchService {
       if (cache) {
         const ttlMs = 60 * 1000;
         await cache.set(cacheKey, searchResult, ttlMs).catch((err) => {
+          console.warn("Failed to cache marketplace geo search result:", err.message);
           logger.warn("Failed to cache marketplace geo search result:", err.message);
         });
       }
@@ -844,10 +836,7 @@ export class MarketplaceSearchService {
    *   4: recency_boost (decays with days since creation)
    *   5: availability_window (1 for near-future slots, decays)
    */
-  private extractFeatureVectors(
-    slots: Slot[],
-    query: MarketplaceSearchQuery,
-  ) {
+  private extractFeatureVectors(slots: Slot[], query: MarketplaceSearchQuery) {
     const now = Date.now();
     const queryCategorySet = new Set(query.categories ?? []);
 
@@ -914,7 +903,7 @@ export class MarketplaceSearchError extends Error {
   constructor(
     message: string,
     public statusCode: number = 400,
-    public details?: string
+    public details?: string,
   ) {
     super(message);
     this.name = "MarketplaceSearchError";

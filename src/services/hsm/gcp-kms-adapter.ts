@@ -73,8 +73,8 @@ const NODE_HASH_FOR_ALGORITHM: Record<SigningAlgorithm, string> = {
 
 // gRPC status codes that indicate a transient infrastructure issue
 const RETRIABLE_GRPC_CODES = new Set([
-  4,  // DEADLINE_EXCEEDED
-  8,  // RESOURCE_EXHAUSTED (quota / rate limit)
+  4, // DEADLINE_EXCEEDED
+  8, // RESOURCE_EXHAUSTED (quota / rate limit)
   10, // ABORTED
   14, // UNAVAILABLE
 ]);
@@ -102,16 +102,16 @@ function classifyGcpError(err: unknown, keyId: string): HsmError {
     const msg = err.message ?? err.details ?? String(err);
 
     switch (grpcCode) {
-      case 5:  // NOT_FOUND
+      case 5: // NOT_FOUND
         return new HsmError(`Key not found: ${keyId}`, "KEY_NOT_FOUND", {
           cause: err as unknown as Error,
         });
-      case 7:  // PERMISSION_DENIED
+      case 7: // PERMISSION_DENIED
       case 16: // UNAUTHENTICATED
         return new HsmError(`Permission denied for key: ${keyId}`, "PERMISSION_DENIED", {
           cause: err as unknown as Error,
         });
-      case 3:  // INVALID_ARGUMENT — often algorithm mismatch or disabled
+      case 3: // INVALID_ARGUMENT — often algorithm mismatch or disabled
         if (/algorithm|purpose/i.test(msg)) {
           return new HsmError(`Algorithm not supported by key: ${keyId}`, "ALGORITHM_MISMATCH", {
             cause: err as unknown as Error,
@@ -125,7 +125,7 @@ function classifyGcpError(err: unknown, keyId: string): HsmError {
         return new HsmError(`Provider validation error: ${msg}`, "PROVIDER_ERROR", {
           cause: err as unknown as Error,
         });
-      case 9:  // FAILED_PRECONDITION — key disabled / wrong state
+      case 9: // FAILED_PRECONDITION — key disabled / wrong state
         return new HsmError(`Key is disabled or in wrong state: ${keyId}`, "KEY_DISABLED", {
           cause: err as unknown as Error,
         });
@@ -197,8 +197,7 @@ export class GcpKmsAdapter implements IHsmAdapter {
 
   constructor(options: GcpKmsAdapterOptions = {}) {
     this.locations = options.locations?.length ? options.locations : ["global"];
-    this.clientFactory =
-      options.clientFactory ?? (() => new KeyManagementServiceClient());
+    this.clientFactory = options.clientFactory ?? (() => new KeyManagementServiceClient());
     this.retry = new RetryPolicy({
       ...DEFAULT_RETRY_CONFIG,
       maxRetries: 3,
@@ -212,11 +211,9 @@ export class GcpKmsAdapter implements IHsmAdapter {
 
   async sign(request: SignRequest): Promise<SignResponse> {
     if (!NODE_HASH_FOR_ALGORITHM[request.algorithm]) {
-      throw new HsmError(
-        `Unsupported algorithm: ${request.algorithm}`,
-        "ALGORITHM_MISMATCH",
-        { keyRef: request.key },
-      );
+      throw new HsmError(`Unsupported algorithm: ${request.algorithm}`, "ALGORITHM_MISMATCH", {
+        keyRef: request.key,
+      });
     }
 
     const response = await this.withLocationFailover(request.key.keyId, async (keyId, client) => {
@@ -229,6 +226,7 @@ export class GcpKmsAdapter implements IHsmAdapter {
             });
             return res;
           } catch (err) {
+            if (err instanceof HsmError) throw err;
             if (isRetriableGcp(err)) throw err;
             throw classifyGcpError(err, keyId);
           }
@@ -268,52 +266,47 @@ export class GcpKmsAdapter implements IHsmAdapter {
   async verify(request: VerifyRequest): Promise<VerifyResponse> {
     const hashAlgorithm = NODE_HASH_FOR_ALGORITHM[request.algorithm];
     if (!hashAlgorithm) {
-      throw new HsmError(
-        `Unsupported algorithm: ${request.algorithm}`,
-        "ALGORITHM_MISMATCH",
-        { keyRef: request.key },
-      );
+      throw new HsmError(`Unsupported algorithm: ${request.algorithm}`, "ALGORITHM_MISMATCH", {
+        keyRef: request.key,
+      });
     }
 
-    // Retrieve the public key PEM from GCP KMS
-    const publicKeyPem = await this.withLocationFailover(
-      request.key.keyId,
-      async (keyId, client) => {
-        return this.retry.execute(
-          async () => {
-            try {
-              const [pubKeyResponse] = await client.getPublicKey({ name: keyId });
-              if (!pubKeyResponse.pem) {
-                throw new HsmError("GCP KMS returned empty public key", "PROVIDER_ERROR");
-              }
-              return pubKeyResponse.pem;
-            } catch (err) {
-              if (err instanceof HsmError) throw err;
-              if (isRetriableGcp(err)) throw err;
-              throw classifyGcpError(err, keyId);
+    return this.withLocationFailover(request.key.keyId, async (keyId, client) => {
+      return this.retry.execute(
+        async () => {
+          try {
+            if (typeof (client as any).asymmetricVerify === "function") {
+              const [res] = await (client as any).asymmetricVerify({
+                name: keyId,
+                data: request.message,
+                signature: request.signature,
+              });
+              return {
+                valid: Boolean(res?.success),
+                keyVersion: res?.name ?? keyId,
+              };
             }
-          },
-          (err) => isRetriableGcp(err),
-        );
-      },
-    );
 
-    // Verify locally using Node.js crypto
-    try {
-      const verifier = createVerify(hashAlgorithm);
-      verifier.update(request.message);
-      const valid = verifier.verify(
-        publicKeyPem,
-        Buffer.from(request.signature),
+            const [pubKeyResponse] = await client.getPublicKey({ name: keyId });
+            if (!pubKeyResponse.pem) {
+              throw new HsmError("GCP KMS returned empty public key", "PROVIDER_ERROR");
+            }
+            const verifier = createVerify(hashAlgorithm);
+            verifier.update(request.message);
+            const valid = verifier.verify(pubKeyResponse.pem, Buffer.from(request.signature));
+            return { valid, keyVersion: keyId };
+          } catch (err: any) {
+            if (err instanceof HsmError) throw err;
+            if (isGrpcError(err) && err.code === 3) {
+              return { valid: false, keyVersion: keyId };
+            }
+            if (isRetriableGcp(err)) throw err;
+            throw classifyGcpError(err, keyId);
+          }
+        },
+        (err) => isRetriableGcp(err),
       );
-      return {
-        valid,
-        keyVersion: request.key.keyId,
-      };
-    } catch {
-      // Crypto verification errors (e.g. malformed signature) → not valid
-      return { valid: false, keyVersion: request.key.keyId };
-    }
+    });
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -408,34 +401,29 @@ export class GcpKmsAdapter implements IHsmAdapter {
       const location = this.locations[i];
       // For the first location use the keyId as-is; for subsequent locations
       // rewrite the location segment.
-      const resolvedKeyId =
-        i === 0 ? keyId : replaceLocation(keyId, location);
+      const resolvedKeyId = i === 0 ? keyId : replaceLocation(keyId, location);
 
       const client = this.clientFactory(location);
       try {
         return await fn(resolvedKeyId, client);
       } catch (err) {
-        if (err instanceof HsmError) {
-          // Structural errors (not-found, permission) don't benefit from failover
-          if (
-            err.code === "KEY_NOT_FOUND" ||
-            err.code === "PERMISSION_DENIED" ||
-            err.code === "ALGORITHM_MISMATCH" ||
-            err.code === "KEY_DISABLED"
-          ) {
-            throw err;
-          }
-          lastError = err;
-          continue;
+        const hsmErr = err instanceof HsmError ? err : classifyGcpError(err, resolvedKeyId);
+        // Structural errors (not-found, permission) don't benefit from failover
+        if (
+          hsmErr.code === "KEY_NOT_FOUND" ||
+          hsmErr.code === "PERMISSION_DENIED" ||
+          hsmErr.code === "ALGORITHM_MISMATCH" ||
+          hsmErr.code === "KEY_DISABLED"
+        ) {
+          throw hsmErr;
         }
-        // Unexpected non-HsmError — classify and fail without failover
-        throw classifyGcpError(err, keyId);
+        lastError = hsmErr;
+        continue;
       }
     }
 
-    throw (
-      lastError ??
-      new HsmError("All GCP locations exhausted", "REGION_UNAVAILABLE")
-    );
+    throw new HsmError("All GCP locations exhausted", "REGION_UNAVAILABLE", {
+      cause: lastError,
+    });
   }
 }
