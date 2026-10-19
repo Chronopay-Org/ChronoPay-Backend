@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { Request, Response, NextFunction } from "express";
-import { ForbiddenError, UnauthorizedError } from "../errors/AppError.js";
+import { ConfigurationError, ForbiddenError, UnauthorizedError } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { partnerTierService } from "../services/partnerTierService.js";
+import { constantTimeEquals } from "../utils/constantTimeEquals.js";
 
 const API_KEY_HEADER = "x-api-key";
 const API_KEY_ID_PREFIX = "apiKey_";
@@ -64,6 +65,13 @@ export function isEndpointAllowed(tier: string, method: string, path: string, co
 export function requireApiKey(expectedApiKey?: string) {
   return async (req: Request, res: Response, next: NextFunction) => {
     if (!expectedApiKey) {
+      if (process.env.NODE_ENV === "production") {
+        return sendErrorResponse(
+          res,
+          new ConfigurationError("API key authorization is not configured"),
+          req,
+        );
+      }
       return next();
     }
 
@@ -77,7 +85,7 @@ export function requireApiKey(expectedApiKey?: string) {
       );
     }
 
-    if (provided !== expectedApiKey) {
+    if (!constantTimeEquals(provided, expectedApiKey)) {
       return sendErrorResponse(
         res,
         new ForbiddenError("Invalid API key", ERROR_CODES.INVALID_API_KEY.code),

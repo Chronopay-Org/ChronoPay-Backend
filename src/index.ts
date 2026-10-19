@@ -19,6 +19,7 @@ if (pinnedHash) {
 const app = createApp({
   enableDocs: true,
   enableTestRoutes: config.nodeEnv !== "production",
+  apiKey: process.env.CHRONOPAY_API_KEY,
 });
 
 // Optional fraud score drift detector. Operators opt in via env so unit tests
