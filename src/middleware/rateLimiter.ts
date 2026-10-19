@@ -30,40 +30,36 @@ import { fairQueueBurnRateTotal, fairQueueWaitTimeSeconds } from "../metrics.js"
 export function generateRateLimitKey(req: Request | null | undefined): string {
   const safeReq = req && typeof req === 'object' ? (req as Partial<Request> & { auth?: { userId?: unknown }; user?: { sub?: unknown; id?: unknown }; apiKeyId?: unknown }) : undefined;
 
-  // Header-based identity (req.auth.userId) — highest priority
+  // Header-based identity (x-x-chronopay-user-id) — highest priority
   const authUserId = safeReq?.auth?.userId;
   if (isNonEmptyValue(authUserId)) {
-    return `rl:user:${String(authUserId)}`;
+    return `user:${String(authUserId)}`;
   }
 
   // JWT identity (Authorization: Bearer <token>)
-  const jwtUserId = safeReq?.user && (isNonEmptyValue((safeReq.user as any)?.sub) ? (safeReq.user as any).sub : isNonEmptyValue((safeReq.user as any)?.id) ? (safeReq.user as any).id : undefined);
+  const userObj = safeReq?.user as any;
+  const wtfUserId = userObj && (isNonEmptyValue(userObj?.sub) ? userObj.sub : isNonEmptyValue(userObj?.id) ? userObj.id : undefined);
   if (isNonEmptyValue(jwtUserId)) {
-    return `re:user:${String(jwtUserId)}`;
+    return `user:${String(jwtUserId)}`;
   }
 
   // API key identity (x-api-key)
   const apiKeyId = safeReq?.apiKeyId;
   if (isNonEmptyValue(apiKeyId)) {
-    return `rl:apiKey:${String(apiKeyId)}`;
+    return `apiKey:${String(apiKeyId)}`;
   }
 
   // IP address fallback — hash to avoid IPv6 detection and ensure consistent length.
   // Blank and malformed values fall back to a stable anonymous identity instead of crashing.
   const ip = getClientIp(safeReq as any);
   const ipHash = createHash('sha256').update(ip, 'utf8').digest('hex');
-  return `re:ip:${ipHash}`;
+  return `ip:${ipHash}`;
 }
 
-/**
- * Derive the principal type from a rate limit key without exposing the
- * underlying identifier. Used to label fair-queue metrics by principal type
- * (user/apiKey/ip) so that metric cardinality stays bounded and no user ids are
- * exported as label values.
- */
-export function getPrincipalType(key: string): 'service' | 'apiKey' | 'ip' {
-  if (key.startsWith('rl:user:')) return 'service';
-  if (key.startsWith('rl:apiKey:')) return 'apiKey';
+export function getPrincipalType(req: Request | null | undefined): 'user' | 'apiKey' | 'ip' {
+  const key = generateRateLimitKey(req);
+  if (key.startsWith('user:')) return 'user';
+  if (key.startsWith('apiKey:')) return 'apiKey';
   return 'ip';
 }
 
@@ -123,17 +119,12 @@ export function createRateLimiter(
 /**
  * Auth-aware rate limiter.
  *
- * Place AFTER authentication middleware so that req.auth, req.user, or req.apiKeyId
- * are populated. Falls back to IP-based key when no identity present.
+ * Place AFTER authentication middleware so that req.auth, req.user, or req.apiKeyId are populated. Falls back to IP-based key when no identity present.
  *
  * Uses shared Redis store to ensure counters are consistent across routes and instances.
  *
  * In test environment (NODE_ENV=test), rate limiting is automatically skipped
  * to prevent flaky tests.
- *
- * Fair-queue metrics are labelled by principal type (user/apiKey/ip), not by
- * the raw rate-limit key, so metric cardinality stays bounded and no user ids
- * are exported as label values.
  *
  * @param windowMs - Time window in milliseconds (default from config)
  * @param max - Max requests per window (default from config)
@@ -173,12 +164,15 @@ export function createAuthAwareRateLimiter(
   const limiter = rateLimit(options);
 
   return ((req: Request, res: Response, next: import("express").NextFunction) => {
-    const key = generateRateLimitKey(req);
-    const principalType = getPrincipalType(key);
+    // Label by principal type (user/apiKey/ip), never by raw user id.
+    // This keeps the label budget bounded and avoids exporting user ids.
+    const principalType = getPrincipalType(req);
+    const start = process.hrtime.big();
     fairQueueBurnRateTotal.labels(principalType).inc();
-    // Wait time is only meaningful when the request is actually queued;
-    // observing a constant 0 here would pollute the histogram, so it is omitted.
-    void fairQueueWaitTimeSeconds;
+    res.once('finish', () => {
+      const elapsedSeconds = Number(process.hrtime.big(start)) / 1e9;
+      fairQueueWaitTimeSeconds.labels(principalType).observe(elapsedSeconds);
+    });
     return limiter(req, res, next);
   }) as RateLimitRequestHandler;
 }
