@@ -80,11 +80,13 @@ checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
  *               successUrl:
  *                 type: string
  *                 format: uri
- *                 description: Optional redirect URL on successful payment
+ *                 maxLength: 2048
+ *                 description: Optional absolute HTTPS redirect URL on an exact configured host; HTTP allowed only outside production. Invalid values return 400 INVALID_REDIRECT_URL with details.field.
  *               cancelUrl:
  *                 type: string
  *                 format: uri
- *                 description: Optional redirect URL on cancelled payment
+ *                 maxLength: 2048
+ *                 description: Optional cancel redirect, subject to the same configured host and scheme policy as successUrl.
  *     responses:
  *       201:
  *         description: Checkout session created successfully
@@ -104,7 +106,7 @@ checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
  *                   format: uri
  *                   description: Direct payment URL
  *       400:
- *         description: Invalid input data
+ *         description: Invalid input data; redirect failures use the checkout envelope with code INVALID_REDIRECT_URL and details.field identifying successUrl or cancelUrl.
  *         content:
  *           application/json:
  *             schema:
