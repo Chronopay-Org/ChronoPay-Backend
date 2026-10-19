@@ -100,14 +100,14 @@ const _shutdownHooks: Array<() => void> = [];
   const { createSubscriptionSlotGenerator } = await import(
     "./scheduler/subscriptionSlotGenerator.js"
   );
-  const { subscriptionService } = await import(
+  const { subscriptionService: service } = await import(
     "./services/subscriptionContainer.js"
   );
 
   const controller = new AbortController();
   _shutdownHooks.push(() => controller.abort());
 
-  const generator = createSubscriptionSlotGenerator(subscriptionService, {
+  const generator = createSubscriptionSlotGenerator(service, {
     intervalMs: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_INTERVAL_MS) || undefined,
     batchSize: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_BATCH_SIZE) || undefined,
   });
