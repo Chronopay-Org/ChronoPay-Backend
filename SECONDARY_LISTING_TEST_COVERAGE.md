@@ -221,6 +221,14 @@ This PR successfully implements comprehensive regression test coverage for `Seco
 3. ✅ Preserves existing public contract
 4. ✅ Makes error and boundary behavior observable and deterministic
 5. ✅ All tests pass (39/39)
+
+## Secondary Listing Route Authorization
+
+`src/routes/__tests__/slots.secondaryListing.test.ts` covers the endpoint-level security requirements:
+
+- A slot without a persisted owner is rejected, regardless of the caller.
+- Only the persisted owner may create a listing.
+- Supplier consent must be present on the slot (`resaleConsent` or `transferable`); request-body `supplierConsent` is rejected.
 6. ✅ Lint and type checks pass
 7. ✅ Detailed test results included in this summary
 
