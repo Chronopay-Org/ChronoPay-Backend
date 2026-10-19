@@ -79,27 +79,12 @@ describe("CheckoutSessionService", () => {
       expect(result).toEqual(session);
     });
 
-    it("throws UNAUTHORIZED when REQUIRE_AUTH=true and no token", async () => {
-      process.env.REQUIRE_AUTH = "true";
-      try {
-        await expect(
-          CheckoutSessionService.createSession(baseRequest),
-        ).rejects.toMatchObject({ code: CheckoutErrorCode.UNAUTHORIZED, status: 401 });
-      } finally {
-        delete process.env.REQUIRE_AUTH;
-      }
-    });
-
-    it("passes through when REQUIRE_AUTH=true and token provided", async () => {
-      process.env.REQUIRE_AUTH = "true";
+    it("creates session without a token (anonymous)", async () => {
       const session = makeSession();
       (repo.create as jest.Mock).mockResolvedValueOnce(session);
-      try {
-        const result = await CheckoutSessionService.createSession(baseRequest, "tok");
-        expect(result).toEqual(session);
-      } finally {
-        delete process.env.REQUIRE_AUTH;
-      }
+
+      const result = await CheckoutSessionService.createSession(baseRequest);
+      expect(result).toEqual(session);
     });
   });
 

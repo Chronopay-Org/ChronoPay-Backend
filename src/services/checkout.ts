@@ -13,6 +13,7 @@ import {
   CheckoutError,
   CheckoutErrorCode,
 } from "../types/checkout.js";
+import { verifyJwt } from "../utils/jwt.js";
 import { defaultAuditLogger } from "./auditLogger.js";
 import { withSpan } from "../tracing/hooks.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
@@ -60,11 +61,33 @@ export class CheckoutSessionService {
       paymentMethod: request.payment.paymentMethod,
     });
 
-    if (process.env.REQUIRE_AUTH === "true" && !authorizationToken) {
-      this.emitAuditEvent("validated", "failed", `customer:${request.customer.customerId}`, {
-        reason: "Authorization required",
-      });
-      throw new CheckoutError(CheckoutErrorCode.UNAUTHORIZED, "Authorization required", 401);
+    // When a JWT is present, verify it and bind the token subject to the
+    // requested customer.customerId.  This prevents a caller from forging a
+    // session for an arbitrary customer ID while still authenticated.
+    if (authorizationToken) {
+      let payload: Awaited<ReturnType<typeof verifyJwt>>;
+      try {
+        payload = await verifyJwt(authorizationToken);
+      } catch {
+        this.emitAuditEvent("validated", "failed", `customer:${request.customer.customerId}`, {
+          reason: "Invalid or expired token",
+        });
+        throw new CheckoutError(CheckoutErrorCode.UNAUTHORIZED, "Invalid or expired token", 401);
+      }
+
+      const tokenSubject: string | undefined = payload.sub;
+      if (tokenSubject && tokenSubject !== request.customer.customerId) {
+        this.emitAuditEvent("validated", "failed", `customer:${request.customer.customerId}`, {
+          reason: "Token subject does not match customerId",
+          tokenSubject,
+          requestedCustomerId: request.customer.customerId,
+        });
+        throw new CheckoutError(
+          CheckoutErrorCode.UNAUTHORIZED,
+          "Token subject does not match customer.customerId",
+          403,
+        );
+      }
     }
 
     this.emitAuditEvent("validated", "success", `customer:${request.customer.customerId}`, {});

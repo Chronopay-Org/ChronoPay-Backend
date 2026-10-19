@@ -7,17 +7,34 @@ import { setFeatureFlagsFromEnv } from "../flags/index.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
 import { CheckoutSession, CheckoutSessionStatus } from "../types/checkout.js";
 import { randomUUID } from "crypto";
+import { signJwt } from "../utils/jwt.js";
+import { configService } from "../config/config.service.js";
 
 const app = createApp({ enableContentNegotiation: false });
 
+const JWT_SECRET = "checkout-pay-test-secret-32bytes!!";
+const OWNER_ID = "cust-1";
+
+async function makeOwnerToken() {
+  return signJwt(
+    { sub: OWNER_ID, role: "user", email: "cust1@example.com", iat: Math.floor(Date.now() / 1000) },
+    JWT_SECRET,
+    { expiresInSec: 3600 },
+  );
+}
+
 beforeEach(() => {
-  process.env.FF_CHECKOUT = 'true';
+  process.env.FF_CHECKOUT = "true";
+  process.env.JWT_SECRET = JWT_SECRET;
   setFeatureFlagsFromEnv(process.env);
+  configService.refresh();
   CheckoutSessionService.clearAllSessions();
 });
 
 afterAll(() => {
   delete process.env.FF_CHECKOUT;
+  delete process.env.JWT_SECRET;
+  configService.refresh();
   setFeatureFlagsFromEnv(process.env);
   CheckoutSessionService.clearAllSessions();
 });
@@ -30,7 +47,7 @@ function makeSession(overrides: Partial<CheckoutSession> = {}): CheckoutSession 
   return {
     id: randomUUID(),
     payment: { amount: 100, currency: "USD", paymentMethod: "credit_card" },
-    customer: { customerId: "cust-1", email: "test@example.com" },
+    customer: { customerId: OWNER_ID, email: "test@example.com" },
     status: CheckoutSessionStatus.PENDING,
     createdAt: NOW_S,
     updatedAt: NOW_S,
@@ -52,25 +69,33 @@ function makeMockRepo(overrides: Partial<PgCheckoutSessionRepository> = {}) {
 
 describe("POST /api/v1/checkout/sessions/:sessionId/pay", () => {
   let repo: ReturnType<typeof makeMockRepo>;
+  let ownerToken: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     repo = makeMockRepo();
     setCheckoutRepository(repo);
+    ownerToken = await makeOwnerToken();
   });
 
   it("should process payment for a pending session (completed path)", async () => {
     jest.spyOn(Math, "random").mockReturnValue(0.5); // success
     const session = makeSession();
-    const completed = makeSession({ id: session.id, status: CheckoutSessionStatus.COMPLETED, paymentToken: "mock_token_123" });
+    const completed = makeSession({
+      id: session.id,
+      status: CheckoutSessionStatus.COMPLETED,
+      paymentToken: "mock_token_123",
+    });
 
     (repo.findById as jest.Mock)
-      .mockResolvedValueOnce(session)  // paySession → getSession
+      .mockResolvedValueOnce(session) // auth ownership check in route
+      .mockResolvedValueOnce(session) // paySession → getSession
       .mockResolvedValueOnce(session); // completeSession → getSession
     (repo.updateSession as jest.Mock).mockResolvedValueOnce(completed);
 
     const res = await request(app)
       .post(`/api/v1/checkout/sessions/${session.id}/pay`)
-      .set("Content-Type", "application/json");
+      .set("Content-Type", "application/json")
+      .set("Authorization", `Bearer ${ownerToken}`);
 
     expect(res.status).toBe(200);
     expect(res.body.session.status).toBe(CheckoutSessionStatus.COMPLETED);
@@ -83,13 +108,15 @@ describe("POST /api/v1/checkout/sessions/:sessionId/pay", () => {
     const failed = makeSession({ id: session.id, status: CheckoutSessionStatus.FAILED });
 
     (repo.findById as jest.Mock)
-      .mockResolvedValueOnce(session)
-      .mockResolvedValueOnce(session);
+      .mockResolvedValueOnce(session) // auth ownership check in route
+      .mockResolvedValueOnce(session) // paySession → getSession
+      .mockResolvedValueOnce(session); // failSession → getSession
     (repo.updateSession as jest.Mock).mockResolvedValueOnce(failed);
 
     const res = await request(app)
       .post(`/api/v1/checkout/sessions/${session.id}/pay`)
-      .set("Content-Type", "application/json");
+      .set("Content-Type", "application/json")
+      .set("Authorization", `Bearer ${ownerToken}`);
 
     expect(res.status).toBe(200);
     expect(res.body.session.status).toBe(CheckoutSessionStatus.FAILED);
@@ -103,28 +130,42 @@ describe("POST /api/v1/checkout/sessions/:sessionId/pay", () => {
     expect(res.status).toBe(400);
   });
 
-  it("should return 404 for non-existent session", async () => {
+  it("should return 401 without auth token", async () => {
+    const res = await request(app)
+      .post(`/api/v1/checkout/sessions/${randomUUID()}/pay`)
+      .set("Content-Type", "application/json");
+    expect(res.status).toBe(401);
+  });
+
+  it("should return 404 for non-existent session (with auth)", async () => {
     (repo.findById as jest.Mock).mockResolvedValueOnce(null);
 
     const res = await request(app)
       .post("/api/v1/checkout/sessions/00000000-0000-0000-0000-000000000000/pay")
-      .set("Content-Type", "application/json");
+      .set("Content-Type", "application/json")
+      .set("Authorization", `Bearer ${ownerToken}`);
     expect(res.status).toBe(404);
   });
 
-  it("should return 409 for already completed session", async () => {
+  it("should return 409 for already completed session (with auth)", async () => {
     const session = makeSession({ status: CheckoutSessionStatus.COMPLETED });
-    (repo.findById as jest.Mock).mockResolvedValueOnce(session);
+    // findById is called for ownership check first, then for paySession
+    (repo.findById as jest.Mock)
+      .mockResolvedValueOnce(session) // ownership check
+      .mockResolvedValueOnce(session); // paySession getSession
 
     const res = await request(app)
       .post(`/api/v1/checkout/sessions/${session.id}/pay`)
-      .set("Content-Type", "application/json");
+      .set("Content-Type", "application/json")
+      .set("Authorization", `Bearer ${ownerToken}`);
     expect(res.status).toBe(409);
   });
 
-  it("should return 410 for expired session", async () => {
+  it("should return 410 for expired session (with auth)", async () => {
     const expired = makeSession({ expiresAt: NOW_S - 1 });
-    (repo.findById as jest.Mock).mockResolvedValueOnce(expired);
+    (repo.findById as jest.Mock)
+      .mockResolvedValueOnce(expired) // ownership check → triggers 410 immediately
+      .mockResolvedValueOnce(expired);
     (repo.updateSession as jest.Mock).mockResolvedValueOnce({
       ...expired,
       status: CheckoutSessionStatus.EXPIRED,
@@ -132,7 +173,8 @@ describe("POST /api/v1/checkout/sessions/:sessionId/pay", () => {
 
     const res = await request(app)
       .post(`/api/v1/checkout/sessions/${expired.id}/pay`)
-      .set("Content-Type", "application/json");
+      .set("Content-Type", "application/json")
+      .set("Authorization", `Bearer ${ownerToken}`);
     expect(res.status).toBe(410);
   });
 });
