@@ -30,23 +30,22 @@ import { fairQueueBurnRateTotal, fairQueueWaitTimeSeconds } from "../metrics.js"
 export function generateRateLimitKey(req: Request | null | undefined): string {
   const safeReq = req && typeof req === 'object' ? (req as Partial<Request> & { auth?: { userId?: unknown }; user?: { sub?: unknown; id?: unknown }; apiKeyId?: unknown }) : undefined;
 
-  // Header-based identity (x-x-chronopay-user-id) — highest priority
+  // Header-based identity (x-chronopay-user-id) — highest priority
   const authUserId = safeReq?.auth?.userId;
   if (isNonEmptyValue(authUserId)) {
-    return `user:${String(authUserId)}`;
+    return `rl:user:${String(authUserId)}`;
   }
 
   // JWT identity (Authorization: Bearer <token>)
-  const userObj = safeReq?.user as any;
-  const wtfUserId = userObj && (isNonEmptyValue(userObj?.sub) ? userObj.sub : isNonEmptyValue(userObj?.id) ? userObj.id : undefined);
+  const jwtUserId = safeReq?.user && (isNonEmptyValue((safeReq.user as any)?.sub) ? (safeReq.user as any).sub : isNonEmptyValue((safeReq.user as any)?.id) ? (safeReq.user as any).id : undefined);
   if (isNonEmptyValue(jwtUserId)) {
-    return `user:${String(jwtUserId)}`;
+    return `rl:user:${String(jwtUserId)}`;
   }
 
   // API key identity (x-api-key)
   const apiKeyId = safeReq?.apiKeyId;
   if (isNonEmptyValue(apiKeyId)) {
-    return `apiKey:${String(apiKeyId)}`;
+    return `rl:apiKey:${String(apiKeyId)}`;
   }
 
   // IP address fallback — hash to avoid IPv6 detection and ensure consistent length.

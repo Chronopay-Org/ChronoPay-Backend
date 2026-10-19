@@ -28,7 +28,7 @@ declare global {
   }
 }
 
-function parseRole(value: unknown): ChronoPayRole | null {
+export function parseRole(value: unknown): ChronoPayRole | null {
   const role = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (isKnownRole(role)) {
     return role;
@@ -37,16 +37,16 @@ function parseRole(value: unknown): ChronoPayRole | null {
   return null;
 }
 
-function parseJwtRole(value: unknown): ChronoPayRole {
+export function parseJwtRole(value: unknown): ChronoPayRole {
   return parseRole(value) ?? "customer";
 }
 
-function getUserId(claims: VerifiedJwtPayload): string {
+export function getUserId(claims: VerifiedJwtPayload): string {
   const candidate = claims.sub ?? claims.id;
   return typeof candidate === "string" && candidate.trim().length > 0 ? candidate.trim() : "";
 }
 
-function readBearerToken(req: Request): string | null {
+export function readBearerToken(req: Request): string | null {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return null;

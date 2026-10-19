@@ -21,7 +21,7 @@ jest.unstable_mockModule("../../metrics.js", () => ({
 }));
 
 // Import AFTER mocking
-const { horizonRateLimitRemaining, horizonRequestQueueDepth, recordRateLimitRemaining, recordQueueDepth, resetHorizonMetricsForHost } =
+const { recordRateLimitRemaining, recordQueueDepth, resetHorizonMetricsForHost } =
   await import("../../metrics/horizonMetrics.js");
 
 const HOST = "https://horizon-testnet.stellar.org";

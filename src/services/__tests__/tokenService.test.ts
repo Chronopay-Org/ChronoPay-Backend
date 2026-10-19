@@ -213,14 +213,19 @@ describe("TokenService - Trustline & Asset Issuance (Issue #437)", () => {
       // Decode the envelope
       const tx = new Transaction(envelopeXdr, Networks.TESTNET);
       expect(tx.source).toBe(sourceAccount);
-      expect(tx.sequence).toBe("1000");
-      expect(tx.fee).toBe("100");
+      // TransactionBuilder consumes the source account's next sequence, so a tx
+      // built from account sequence 1000 carries sequence 1001.
+      expect(tx.sequence).toBe("1001");
+      // `fee` is a per-operation budget in the Stellar SDK, so the 2-operation
+      // mint envelope carries 100 * 2.
+      expect(tx.fee).toBe("200");
       expect(tx.signatures.length).toBe(1);
 
       // Memo check (hash uniqueness)
       const expectedHash = crypto.createHash("sha256").update(intentId).digest();
       expect(tx.memo.type).toBe("hash");
-      expect(tx.memo.value).toEqual(expectedHash);
+      // The memo round-trips through XDR, so it decodes as a Uint8Array.
+      expect(Buffer.from(tx.memo.value as Uint8Array)).toEqual(expectedHash);
     });
   });
 });

@@ -110,7 +110,9 @@ describe("POST /api/v1/booking-intents", () => {
       expect(response.body).toEqual({
         success: false,
         error: "Selected slot is not bookable.",
+        message: "Selected slot is not bookable.",
         code: "CONFLICT",
+        timestamp: expect.any(String),
       });
     });
 
@@ -135,7 +137,9 @@ describe("POST /api/v1/booking-intents", () => {
       expect(response.body).toEqual({
         success: false,
         error: "Selected slot is not bookable.",
+        message: "Selected slot is not bookable.",
         code: "CONFLICT",
+        timestamp: expect.any(String),
       });
     });
 
@@ -152,7 +156,9 @@ describe("POST /api/v1/booking-intents", () => {
       expect(response.body).toEqual({
         success: false,
         error: "You cannot create a booking intent for your own slot.",
+        message: "You cannot create a booking intent for your own slot.",
         code: "FORBIDDEN",
+        timestamp: expect.any(String),
       });
     });
   });

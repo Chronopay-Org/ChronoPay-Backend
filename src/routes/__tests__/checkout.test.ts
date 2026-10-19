@@ -1,11 +1,59 @@
 import request from "supertest";
 import { createApp } from "../../app.js";
 import { setFeatureFlagsFromEnv } from "../../flags/service.js";
-import { CheckoutSessionService } from "../../services/checkout.js";
+import { CheckoutSession, CheckoutSessionStatus } from "../../types/checkout.js";
+import { CheckoutSessionService, setCheckoutRepository } from "../../services/checkout.js";
+import { PgCheckoutSessionRepository } from "../../modules/checkout/pg-checkout-session-repository.js";
 
 const app = createApp({ enableContentNegotiation: false });
 
 const JSON_CT = { "Content-Type": "application/json" };
+
+/**
+ * In-memory repository backing the API tests: sessions must survive across
+ * HTTP round-trips within a test (create → get → pay → …) without a database.
+ * A fresh instance is installed in `beforeEach`, which is also what
+ * `CheckoutSessionService.clearAllSessions()` conceptually represents here.
+ */
+let sessionStore: Map<string, CheckoutSession>;
+
+function makeInMemoryRepo(): PgCheckoutSessionRepository {
+  const store = new Map<string, CheckoutSession>();
+  sessionStore = store;
+  return {
+    create: async (session: CheckoutSession): Promise<CheckoutSession> => {
+      store.set(session.id, { ...session });
+      return { ...session };
+    },
+    findById: async (id: string): Promise<CheckoutSession | null> => {
+      const found = store.get(id);
+      return found ? { ...found } : null;
+    },
+    updateSession: async (
+      id: string,
+      fields: {
+        status: CheckoutSessionStatus;
+        updatedAt: number;
+        paymentToken?: string;
+        metadata?: Record<string, string | number | boolean>;
+      },
+    ): Promise<CheckoutSession> => {
+      const current = store.get(id);
+      if (!current) {
+        throw new Error(`session ${id} not found`);
+      }
+      const updated: CheckoutSession = {
+        ...current,
+        status: fields.status,
+        updatedAt: fields.updatedAt,
+        ...(fields.paymentToken !== undefined ? { paymentToken: fields.paymentToken } : {}),
+        ...(fields.metadata !== undefined ? { metadata: fields.metadata } : {}),
+      };
+      store.set(id, updated);
+      return { ...updated };
+    },
+  } as unknown as PgCheckoutSessionRepository;
+}
 
 const validBody = {
   payment: { amount: 1000, currency: "USD", paymentMethod: "credit_card" },
@@ -27,6 +75,7 @@ beforeEach(() => {
   process.env.FF_CHECKOUT = "true";
   setFeatureFlagsFromEnv(process.env);
   CheckoutSessionService.clearAllSessions();
+  setCheckoutRepository(makeInMemoryRepo());
 });
 
 afterAll(() => {
@@ -297,9 +346,9 @@ describe("Expired session", () => {
     const { body: created } = await createSession();
     const id = created.session.id;
 
-    // Manually expire the session by backdating expiresAt
-    const session = CheckoutSessionService.getSession(id);
-    (session as any).expiresAt = Math.floor(Date.now() / 1000) - 1;
+    // Manually expire the session by backdating expiresAt in the store.
+    const stored = sessionStore.get(id);
+    stored!.expiresAt = Math.floor(Date.now() / 1000) - 1;
 
     const res = await request(app).get(`/api/v1/checkout/sessions/${id}`);
     expect(res.status).toBe(410);
@@ -310,8 +359,8 @@ describe("Expired session", () => {
     const { body: created } = await createSession();
     const id = created.session.id;
 
-    const session = CheckoutSessionService.getSession(id);
-    (session as any).expiresAt = Math.floor(Date.now() / 1000) - 1;
+    const stored = sessionStore.get(id);
+    stored!.expiresAt = Math.floor(Date.now() / 1000) - 1;
 
     const res = await post(`/api/v1/checkout/sessions/${id}/complete`);
     expect(res.status).toBe(410);

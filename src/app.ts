@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,6 +5,7 @@ import express, { type Request, type Response } from "express";
 import { getCORSConfig } from "./config/cors.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
+import { authenticateTokenIfPresent } from "./middleware/auth.middleware.js";
 import {
   genericErrorHandler,
   jsonParseErrorHandler,
@@ -384,8 +384,12 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // RBAC Middleware for tests
   const rbacMiddleware = (req: Request, res: Response, next: any) => {
+    // A verified JWT already establishes the caller's identity, so it
+    // satisfies the role requirement below. Routes that accept anonymous
+    // callers still pass `authenticateTokenIfPresent` first.
+    const authenticatedByJwt = Boolean(req.user);
     const role = req.header("x-user-role") || req.header("x-role");
-    if (!role && req.method === "POST" && req.path === "/api/v1/slots") {
+    if (!role && !authenticatedByJwt && req.method === "POST" && req.path === "/api/v1/slots") {
       return res.status(401).json({ success: false, error: "Authentication required" });
     }
     if (role === "hacker") return res.status(400).json({ success: false });
@@ -397,7 +401,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   // 1. Slots Routes
   const slotRepo = options.slotRepository || new InMemorySlotRepository();
 
-  app.get("/api/v1/slots", async (req, res) => {
+  app.get("/api/v1/slots", authenticateTokenIfPresent, async (req, res) => {
     const page = parseInt(req.query.page as string);
     const limit = parseInt(req.query.limit as string);
 
@@ -422,6 +426,7 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   app.post(
     "/api/v1/slots",
+    authenticateTokenIfPresent,
     rbacMiddleware,
     requireApiKey(options.apiKey),
     requireFeatureFlag("CREATE_SLOT"),

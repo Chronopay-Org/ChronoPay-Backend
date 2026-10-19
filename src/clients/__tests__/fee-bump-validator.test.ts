@@ -655,6 +655,56 @@ describe("validateFeeBumpTransaction()", () => {
       expect(details!.fee).toBe(BigInt(2000));
     });
   });
+
+  describe("ENVELOPE_TYPE_TX explicit failure handling (regression coverage)", () => {
+    it("returns null when base64 decoding fails (line 36 evidence)", () => {
+      jest.spyOn(Buffer, "from").mockImplementationOnce(() => {
+        throw new Error("Decode exception");
+      });
+      expect(parseFeeBumpTransactionEnvelope("invalid-b64-raises-error")).toBeNull();
+    });
+
+    it("returns null when buffer length is less than 4 (line 41 evidence)", () => {
+      const threeBytesB64 = Buffer.from([0x01, 0x02, 0x03]).toString("base64");
+      expect(parseFeeBumpTransactionEnvelope(threeBytesB64)).toBeNull();
+    });
+
+    it("returns null when ENVELOPE_TYPE_TX is truncated before the base transaction structure (line 62 evidence)", () => {
+      // parseFeeBumpEnvelope offset for innerTx is 52.
+      // line 62 check: buf.length < pos + 4 + 32 + 4 + 8 + 4 (pos is 52, so requires 104 bytes).
+      // line 182 check: buf.length < offset + 4 + 32 (52 + 36 = 88 bytes).
+      // Supplying an 88-byte buffer passes line 182 but fails line 62.
+      const header = concatBuffers(
+        uint32BE(ENVELOPE_TYPE_FEE_BUMP),
+        paddedKey(TEST_FEE_SOURCE_KEY),
+        int64BE(BigInt(1000)),
+        uint32BE(ENVELOPE_TYPE_TX),
+        paddedKey(TEST_INNER_SOURCE_KEY) // 36 bytes. Total = 88 bytes.
+      );
+      expect(header.length).toBe(88); // Sanity check
+
+      const b64 = toBase64Xdr(Array.from(header));
+      expect(parseFeeBumpTransactionEnvelope(b64)).toBeNull();
+    });
+
+    it("successfully parses ENVELOPE_TYPE_TX when providing full structure (neighboring normal path)", () => {
+      const op = makePaymentOperation(TEST_DEST_KEY, BigInt(100));
+      const envelope = buildFeeBumpEnvelope(
+        TEST_FEE_SOURCE_KEY,
+        BigInt(2000),
+        TEST_INNER_SOURCE_KEY,
+        TX_FEE,
+        TX_SEQ_NUM,
+        op,
+        [makeTestSig()],
+        [makeTestSig()]
+      );
+      
+      const parsed = parseFeeBumpTransactionEnvelope(envelope);
+      expect(parsed).not.toBeNull();
+      expect(parsed!.innerSource).toBe(TEST_INNER_SOURCE_KEY);
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -21,7 +21,6 @@ import {
   DuplicateSubscriptionError,
   SubscriptionCapacityExceededError,
   InvalidSubscriptionStateError,
-  SchedulingConflictError,
 } from "../services/subscriptionService.js";
 import {
   InMemorySubscriptionProductRepository,

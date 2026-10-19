@@ -444,6 +444,10 @@
     "src/__tests__/db/connection.test.ts"
   ],
 
+  "src/db/migrations/002_create_slots_table.ts": [
+    "src/db/migrations/__tests__/002_create_slots_table.test.ts"
+  ],
+
   "src/db/migrations/019_add_active_booking_intent_unique_idx.ts": [
     "src/__tests__/db/connection.test.ts",
     "src/modules/booking-intents/__tests__/pg-booking-intent-repository.test.ts"

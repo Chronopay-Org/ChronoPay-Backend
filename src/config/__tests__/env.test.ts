@@ -61,6 +61,10 @@ describe("NODE_ENV", () => {
     expectIssue({ ...VALID, NODE_ENV: "   " }, "NODE_ENV");
   });
 
+  it("rejects empty string value", () => {
+    expectIssue({ ...VALID, NODE_ENV: "" }, "NODE_ENV");
+  });
+
   it("does not echo the raw value in the error", () => {
     try {
       loadEnvConfig({ ...VALID, NODE_ENV: "staging" });
@@ -209,6 +213,10 @@ describe("optional fields", () => {
     expect(load({ WEBHOOK_SECRET: "   " }).webhookSecret).toBeUndefined();
   });
 
+  it("returns undefined for empty string WEBHOOK_SECRET", () => {
+    expect(load({ WEBHOOK_SECRET: "" }).webhookSecret).toBeUndefined();
+  });
+
   it("parses CORS_ALLOWED_ORIGINS as array", () => {
     expect(load({ CORS_ALLOWED_ORIGINS: "https://a.com,https://b.com" }).corsAllowedOrigins).toEqual([
       "https://a.com",
@@ -287,6 +295,10 @@ describe("HORIZON_URL", () => {
 
   it("ignores whitespace-only HORIZON_URL", () => {
     expect(load({ HORIZON_URL: "   " }).horizonUrls).toBeUndefined();
+  });
+
+  it("ignores empty string HORIZON_URL", () => {
+    expect(load({ HORIZON_URL: "" }).horizonUrls).toBeUndefined();
   });
 
   it("parses valid HORIZON_URLS", () => {

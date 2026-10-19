@@ -296,3 +296,37 @@ describe("SorobanEscrowClient – two-phase lifecycle", () => {
     expect(open!.settledAt).toBeUndefined();
   });
 });
+
+// ─── Input Validation (EscrowHoldParams & EscrowSettleParams) ────────────────
+
+describe("SorobanEscrowClient – validation", () => {
+  it("rejects hold with negative amountStroops", async () => {
+    const client = makeClient();
+    await expect(client.hold({ ...BASE_HOLD, amountStroops: -1 })).rejects.toThrow("amountStroops must be strictly positive");
+  });
+
+  it("rejects hold with zero amountStroops", async () => {
+    const client = makeClient();
+    await expect(client.hold({ ...BASE_HOLD, amountStroops: 0 })).rejects.toThrow("amountStroops must be strictly positive");
+  });
+
+  it("rejects hold with empty bookingIntentId", async () => {
+    const client = makeClient();
+    await expect(client.hold({ ...BASE_HOLD, bookingIntentId: "" })).rejects.toThrow("bookingIntentId cannot be empty");
+  });
+
+  it("rejects hold with empty buyerAddress", async () => {
+    const client = makeClient();
+    await expect(client.hold({ ...BASE_HOLD, buyerAddress: "" })).rejects.toThrow("buyerAddress cannot be empty");
+  });
+
+  it("rejects release with empty bookingIntentId", async () => {
+    const client = makeClient();
+    await expect(client.release({ bookingIntentId: "" })).rejects.toThrow("bookingIntentId cannot be empty");
+  });
+
+  it("rejects refund with empty bookingIntentId", async () => {
+    const client = makeClient();
+    await expect(client.refund({ bookingIntentId: "" })).rejects.toThrow("bookingIntentId cannot be empty");
+  });
+});

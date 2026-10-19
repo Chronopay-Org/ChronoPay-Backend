@@ -28,7 +28,10 @@ describe("Input validation middleware", () => {
     delete process.env.JWT_SECRET;
   });
 
-  it("should allow valid slot creation", async () => {
+  // A verified JWT authenticates the caller, so it satisfies the slot-creation
+  // role gate on its own. (The role-header cases below cover the legacy
+  // header-based RBAC stub.)
+  it("should allow valid slot creation with a bearer token", async () => {
     const res = await request(app)
       .post("/api/v1/slots")
       .set("Authorization", `Bearer ${token}`)
@@ -38,8 +41,8 @@ describe("Input validation middleware", () => {
         endTime: 2000,
       });
 
-    expect(res.status).toBe(401);
-    expect(res.body.success).toBe(false);
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
   });
 
   it("should reject slot creation when role is invalid", async () => {

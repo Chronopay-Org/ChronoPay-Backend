@@ -2,6 +2,9 @@ import { jest } from '@jest/globals';
 
 // 1. Define the mock data
 const storage = new Map<string, string>();
+// Captures every `new Redis(url, options)` call so the connection/retry
+// configuration can be asserted without a live server.
+const redisConstructors: Array<{ url: string; options: any }> = [];
 const mockRedis: any = {
   // @ts-expect-error - Auto-fixed by script
   multi: jest.fn<any, any>().mockReturnThis(),
@@ -39,11 +42,13 @@ const mockRedis: any = {
 
 // 2. Mock the module
 jest.unstable_mockModule('ioredis', () => {
+  const RedisMock = jest.fn<any, any>().mockImplementation((url: string, options: any) => {
+    redisConstructors.push({ url, options });
+    return mockRedis;
+  });
   return {
-    // @ts-expect-error - Auto-fixed by script
-    Redis: jest.fn<any, any>().mockImplementation(() => mockRedis),
-    // @ts-expect-error - Auto-fixed by script
-    default: jest.fn<any, any>().mockImplementation(() => mockRedis),
+    Redis: RedisMock,
+    default: RedisMock,
   };
 });
 
@@ -65,6 +70,7 @@ describe('rateLimitStore', () => {
 
     beforeEach(async () => {
       storage.clear();
+      redisConstructors.length = 0;
       jest.clearAllMocks();
       _resetStore();
       store = _createStore('test'); 
@@ -124,6 +130,113 @@ describe('rateLimitStore', () => {
       const val2 = await store.incr('any');
       expect(val1).toBe(1);
       expect(val2).toBe(1);
+    });
+  });
+
+  describe('_setTestMock', () => {
+    const originalEnv = process.env.NODE_ENV;
+
+    beforeEach(() => {
+      redisConstructors.length = 0;
+      _resetStore();
+    });
+
+    afterEach(() => {
+      if (originalEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalEnv;
+      }
+      _setTestMock(false);
+      _resetStore();
+    });
+
+    it('keeps the no-op store when the mock flag is off', () => {
+      _setTestMock(false);
+      const store: any = _createStore('test');
+
+      // No Redis client is constructed for the no-op store.
+      expect(redisConstructors).toHaveLength(0);
+      expect(store.increment).toBeDefined();
+    });
+
+    it('switches test mode to the Redis-backed store when the flag is on', () => {
+      _setTestMock(true);
+      _createStore('test');
+
+      expect(redisConstructors).toHaveLength(1);
+      expect(redisConstructors[0].url).toBe(process.env.REDIS_URL);
+    });
+
+    it('toggles back to the no-op store when the flag is turned off again', () => {
+      _setTestMock(true);
+      _createStore('test');
+      expect(redisConstructors).toHaveLength(1);
+
+      _setTestMock(false);
+      redisConstructors.length = 0;
+      _createStore('test');
+      expect(redisConstructors).toHaveLength(0);
+    });
+  });
+
+  describe('Redis retryStrategy failure handling', () => {
+    const originalEnv = process.env.NODE_ENV;
+    let retryStrategy: (times: number) => number | null;
+
+    beforeEach(() => {
+      redisConstructors.length = 0;
+      _setTestMock(true);
+      _resetStore();
+      process.env.NODE_ENV = 'development';
+      _createStore('development');
+      retryStrategy = redisConstructors[0].options.retryStrategy;
+    });
+
+    afterEach(() => {
+      if (originalEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalEnv;
+      }
+      _setTestMock(false);
+      _resetStore();
+    });
+
+    it('constructs the client with lazyConnect enabled', () => {
+      // Sanity check that we captured the options we are about to exercise.
+      expect(redisConstructors[0].options.lazyConnect).toBe(true);
+      expect(typeof retryStrategy).toBe('function');
+    });
+
+    it('backs off linearly for the first retry attempts', () => {
+      expect(retryStrategy(1)).toBe(100);
+      expect(retryStrategy(2)).toBe(200);
+      expect(retryStrategy(5)).toBe(500);
+      expect(retryStrategy(10)).toBe(1000);
+    });
+
+    it('gives up (returns null) after the 10th retry attempt', () => {
+      expect(retryStrategy(11)).toBeNull();
+      expect(retryStrategy(20)).toBeNull();
+      expect(retryStrategy(1000)).toBeNull();
+    });
+
+    it('does not retry at all when NODE_ENV is test', () => {
+      process.env.NODE_ENV = 'test';
+      // The test-env guard is evaluated when the strategy runs, not when the
+      // client is created, so the same captured strategy flips behaviour.
+      expect(retryStrategy(1)).toBeNull();
+      expect(retryStrategy(10)).toBeNull();
+      expect(retryStrategy(11)).toBeNull();
+    });
+
+    it('restores normal backoff once NODE_ENV leaves test', () => {
+      process.env.NODE_ENV = 'test';
+      expect(retryStrategy(3)).toBeNull();
+
+      process.env.NODE_ENV = 'production';
+      expect(retryStrategy(3)).toBe(300);
     });
   });
 });

@@ -1,4 +1,4 @@
-export const FEATURE_FLAG_NAMES = ["CREATE_SLOT", "CREATE_BOOKING_INTENT", "SMS_NOTIFICATIONS", "SEARCH_LTR_RERANKER"] as const;
+export const FEATURE_FLAG_NAMES = ["CREATE_SLOT", "CREATE_BOOKING_INTENT", "CHECKOUT", "SMS_NOTIFICATIONS", "SEARCH_LTR_RERANKER"] as const;
 
 export type FeatureFlagName = (typeof FEATURE_FLAG_NAMES)[number];
 
@@ -39,6 +39,10 @@ export interface FeatureFlagAccessor {
 }
 
 /** Deployment environments a rollout schedule can target. Mirrors `NodeEnv`. */
-export const ROLLOUT_ENVIRONMENTS = ["development", "test", "production"] as const;
+export const ROLLOUT_ENVIRONMENTS = Object.freeze([
+  "development",
+  "test",
+  "production",
+] as const);
 
 export type RolloutEnvironment = (typeof ROLLOUT_ENVIRONMENTS)[number];

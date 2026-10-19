@@ -742,6 +742,31 @@ export const treasuryBalance = createBudgetedGauge({
   budget: 50,
 });
 
+/**
+ * Numeric drain-alarm severity rank per treasury asset/account.
+ * Mirrors AlarmSeverity ranks: 0=ok, 1=warning, 2=page, 3=critical.
+ */
+export const treasuryDrainSeverity = createBudgetedGauge({
+  name: "treasury_drain_severity",
+  help: "Current drain-alarm severity rank per treasury asset/account (0=ok, 1=warning, 2=page, 3=critical)",
+  labels: ["asset_code", "asset_issuer"],
+  budget: 50,
+});
+
+export const treasuryPollFailures = createBudgetedCounter({
+  name: "treasury_poll_failures_total",
+  help: "Total number of failed treasury balance polls",
+  labels: ["asset_code", "asset_issuer"],
+  budget: 50,
+});
+
+export const treasuryUnknownAsset = createBudgetedCounter({
+  name: "treasury_unknown_asset_total",
+  help: "Total number of treasury entries for assets outside the known set",
+  labels: ["asset_code"],
+  budget: 50,
+});
+
 export const horizonHostHealth = createBudgetedGauge({
   name: "horizon_host_health",
   help: "Health status of Horizon hosts (1 = healthy, 0 = quarantined)",

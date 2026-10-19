@@ -27,7 +27,6 @@ import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-ses
 import { query } from "../db/pool.js";
 import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
 import {
-  addSeniorArbiter,
   appendFinalityLink,
   canTransition,
   decideByMajority,
@@ -44,8 +43,13 @@ import {
 } from "../services/disputeDeadlineService.js";
 import { isDisputeDeadlineSchedulerRunning } from "../scheduler/disputeDeadlineScheduler.js";
 import { getPayoutQuarantineService } from "../services/quarantineStore.js";
+import { getPayoutDlqStore, type PayoutDlqStatus } from "../services/payoutDlqStore.js";
 import { strikeService } from "../services/strikeService.js";
 import type { Dispute as DisputeDomainType, SeniorPanelVote } from "../types/dispute.js";
+import { AUDIT_SCHEMA_VERSION } from "../types/auditEvent.js";
+import gdprDsrRouter, { setDsrSlaService } from "./adminGdprDsr.js";
+import accessReviewRouter from "./adminAccessReview.js";
+import cancellationOverridesRouter from "./adminCancellationOverrides.js";
 
 /**
  * Singleton cancellation-reversal service. The route handlers reuse
@@ -100,12 +104,20 @@ export function setCancellationReversalService(
   _cancellationReversalService = service;
 }
 
-export function setDsrSlaService(_service: any): void {}
+// Re-exported so tests and production bootstrap can swap the DSR SLA service
+// without importing the sub-router module directly.
+export { setDsrSlaService };
 
 // Re-export for route-level test convenience.
 export { setReversalTenantPausedResolver };
 
 const router = Router();
+
+// GDPR DSR SLA and SOC2 access-review endpoints. Mounted as sub-routers so
+// their HTTP edges (validation + error mapping) stay out of this large module.
+router.use(gdprDsrRouter);
+router.use(accessReviewRouter);
+router.use(cancellationOverridesRouter);
 const disputeQueueService = new DisputeArbitrationQueueService();
 
 // In-memory dispute state for E2E tests

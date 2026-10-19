@@ -57,19 +57,21 @@ describe("authenticateToken middleware", () => {
 
   // --- Missing Authorization header ---
 
-  it("GET /api/v1/slots returns 401 when Authorization header is absent", async () => {
-    const res = await request(app).get("/api/v1/slots");
-    expect(res.status).toBe(401);
-    expect(res.body.success).toBe(false);
-    expect(res.body.error).toMatch(/Authorization header is required/i);
-  });
-
+  // Slot *reads* are intentionally public (the marketplace listing is
+  // browsable), so the missing-credentials contract is asserted against the
+  // mutating route, which is the one that actually requires authentication.
   it("POST /api/v1/slots returns 401 when Authorization header is absent", async () => {
     const res = await request(app)
       .post("/api/v1/slots")
       .send({ professional: "alice", startTime: 1000, endTime: 2000 });
     expect(res.status).toBe(401);
     expect(res.body.success).toBe(false);
+  });
+
+  it("GET /api/v1/slots stays readable without an Authorization header", async () => {
+    const res = await request(app).get("/api/v1/slots");
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.slots)).toBe(true);
   });
 
   // --- Wrong authorization scheme ---

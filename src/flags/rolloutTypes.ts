@@ -5,12 +5,20 @@ export { ROLLOUT_ENVIRONMENTS, type RolloutEnvironment } from "./types.js";
 /** Special tenant id meaning "every tenant not covered by a more specific schedule". */
 export const ALL_TENANTS = "*";
 
-export type RolloutStatus =
-  | "pending"
-  | "active"
-  | "paused"
-  | "rolled_back"
-  | "completed";
+/** Valid status values for a rollout schedule. */
+export const ROLLOUT_STATUSES = [
+  "pending",
+  "active",
+  "paused",
+  "rolled_back",
+  "completed",
+] as const;
+
+export type RolloutStatus = (typeof ROLLOUT_STATUSES)[number];
+
+export function isRolloutStatus(value: unknown): value is RolloutStatus {
+  return typeof value === "string" && (ROLLOUT_STATUSES as readonly string[]).includes(value);
+}
 
 /** A single ramp step: the schedule advances to `percentage` once `at` has passed. */
 export interface RolloutStep {
@@ -20,12 +28,37 @@ export interface RolloutStep {
   at: string;
 }
 
-export type RolloutHistoryAction =
-  | "created"
-  | "advanced"
-  | "paused"
-  | "resumed"
-  | "rolled_back";
+export function isValidRolloutStep(value: unknown): value is RolloutStep {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.percentage !== "number" ||
+    !Number.isInteger(candidate.percentage) ||
+    candidate.percentage < 1 ||
+    candidate.percentage > 100
+  ) {
+    return false;
+  }
+  if (typeof candidate.at !== "string") return false;
+  const parsed = Date.parse(candidate.at);
+  return !Number.isNaN(parsed);
+}
+
+export const ROLLOUT_HISTORY_ACTIONS = [
+  "created",
+  "advanced",
+  "paused",
+  "resumed",
+  "rolled_back",
+] as const;
+
+export type RolloutHistoryAction = (typeof ROLLOUT_HISTORY_ACTIONS)[number];
+
+export function isRolloutHistoryAction(value: unknown): value is RolloutHistoryAction {
+  return (
+    typeof value === "string" && (ROLLOUT_HISTORY_ACTIONS as readonly string[]).includes(value)
+  );
+}
 
 export interface RolloutHistoryEntry {
   action: RolloutHistoryAction;

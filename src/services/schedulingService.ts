@@ -300,7 +300,8 @@ export class SchedulingService {
 
   resolveGraceWindow(slotId: string): number {
     const slot = this.slotRepository.findById(slotId);
-    return this.graceWindowService.resolveGraceWindow(slot?.category);
+    if (!slot) throw new SlotNotFoundError(slotId);
+    return this.graceWindowService.resolve(slot.category);
   }
 
   noShowDeadlineMs(slotId: string): number {

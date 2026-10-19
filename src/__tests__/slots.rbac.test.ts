@@ -1,10 +1,22 @@
 import request from "supertest";
 import express from "express";
+import { jest } from "@jest/globals";
 import slotsRouter, { resetSlotStore } from "../routes/slots.js";
+import { featureFlagContextMiddleware } from "../middleware/featureFlags.js";
+import { partnerTierService } from "../services/partnerTierService.js";
+
+// The route's requireApiKey derives the partner tier from the API key; seed
+// requests use the shared test key, so pin the tier service to "premium" to
+// keep this suite focused on RBAC rather than partner-tier gating.
+jest
+  .spyOn(partnerTierService, "fetchPartnerTier")
+  .mockResolvedValue("premium");
 
 function buildApp() {
   const app = express();
   app.use(express.json());
+  // Route-level requireFeatureFlag guards read req.flags from this middleware.
+  app.use(featureFlagContextMiddleware);
   app.use("/api/v1/slots", slotsRouter);
   return app;
 }

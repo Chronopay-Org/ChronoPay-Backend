@@ -2,7 +2,8 @@
 import { jest } from "@jest/globals";
 import request from "supertest";
 import { createApp } from "../app.js";
-import { setCheckoutRepository } from "../services/checkout.js";
+import { setCheckoutRepository, CheckoutSessionService } from "../services/checkout.js";
+import { setFeatureFlagsFromEnv } from "../flags/index.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
 import { CheckoutSession, CheckoutSessionStatus } from "../types/checkout.js";
 import { randomUUID } from "crypto";

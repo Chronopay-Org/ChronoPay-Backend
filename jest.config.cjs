@@ -5,6 +5,12 @@ if (!process.env.REDIS_URL) {
 if (!process.env.POSTGRESQL_URL) {
   process.env.POSTGRESQL_URL = "postgres://test:test@localhost:5432/testdb";
 }
+// src/db/connection.ts reads DATABASE_URL (not POSTGRESQL_URL) and throws at
+// import time when it is missing, which breaks every suite that pulls in
+// src/index.ts. `pg` is mocked below, so no real connection is made.
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = "postgres://test:test@localhost:5432/testdb";
+}
 if (!process.env.NODE_ENV) {
   process.env.NODE_ENV = "test";
 }

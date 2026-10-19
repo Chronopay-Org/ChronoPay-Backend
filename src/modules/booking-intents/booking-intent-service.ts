@@ -4,6 +4,8 @@ import type { SlotRepository } from "../slots/slot-repository.js";
 import type {
   BookingIntentRecord,
   BookingIntentRepository,
+  BookingIntentStatus,
+  BookingType,
   PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
@@ -18,7 +20,7 @@ import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
-import { resolvePrice } from "../../services/pricingStrategy.js";
+import { resolvePrice, type StrategyId } from "../../services/pricingStrategy.js";
 import {
   CancellationPolicyService,
   RefundBreakdown,
@@ -29,8 +31,10 @@ import {
   HoldFeePolicyService,
   createEmptyHoldFeeRegistry,
   HoldFeePolicyRegistry,
+  type HoldFeePolicy,
 } from "../../services/holdFeePolicy.js";
 import { CheckoutSessionService } from "../../services/checkout.js";
+import { writeReputationScore } from "../../services/reputationWriteAudit.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -58,7 +62,7 @@ export interface AutoRefundResult {
 }
 
 export interface SupplierPolicies {
-  getHoldPolicy(professionalId: string): SupplierHoldPolicy;
+  getHoldPolicy(professionalId: string): HoldFeePolicy;
 }
 
 export class BookingIntentError extends AppError {
@@ -128,6 +132,24 @@ export class BookingIntentService {
 
   private captureHoldFeePolicySnapshot(professionalId: string) {
     return this.holdFeePolicyService.snapshotForSupplier(professionalId);
+  }
+
+  /**
+   * Frees a slot after a terminal intent transition (cancel, refund, no-show,
+   * expiry).
+   *
+   * `SchedulingService.releaseSlot` throws when the slot row is absent, which
+   * is the right contract for its direct callers. These transitions must not
+   * fail for that reason: the intent may have been seeded directly, or the
+   * slot already purged. Releasing an already-absent slot is a no-op, so the
+   * failure is swallowed and the transition still succeeds.
+   */
+  private releaseSlotBestEffort(slotId: string): void {
+    try {
+      this.schedulingService.releaseSlot(slotId);
+    } catch {
+      // Slot row already gone — nothing left to release.
+    }
   }
 
   async createIntent(
@@ -307,100 +329,6 @@ export class BookingIntentService {
       }
       throw err;
     }
-
-    const successes: BookingIntentRecord[] = [];
-    const failures: { date: string; reason: string }[] = [];
-
-    // For each occurrence, attempt to find a matching slot and create intent
-    for (const occ of occurrences) {
-      const startEpoch = occ.getTime();
-      const slot = this.slotRepository.list().find((s) => s.startTime === startEpoch && s.bookable);
-      if (!slot) {
-        failures.push({ date: occ.toISOString(), reason: "No available slot at this time" });
-        continue;
-      }
-
-      // Enforce bundle transferability
-      try {
-        this.bundleTransferabilityService.assertBundleTransferable(slot, actor);
-      } catch (err) {
-        if (err instanceof BundleNotTransferableError) {
-          failures.push({ date: occ.toISOString(), reason: err.message });
-          continue;
-        }
-        throw err;
-      }
-
-      // Basic conflicts and checks similar to single-create
-      if (slot.professional === actor.userId) {
-        failures.push({ date: occ.toISOString(), reason: "Cannot book your own slot" });
-        continue;
-      }
-
-      const existingForCustomer = await this.bookingIntentRepository.findBySlotIdAndCustomer(
-        slot.id,
-        actor.userId,
-      );
-      if (existingForCustomer) {
-        failures.push({
-          date: occ.toISOString(),
-          reason: "Customer already has an intent for this slot",
-        });
-        continue;
-      }
-
-      const existingForSlot = await this.bookingIntentRepository.findBySlotId(slot.id);
-      if (existingForSlot) {
-        failures.push({
-          date: occ.toISOString(),
-          reason: "Slot already has active booking intent",
-        });
-        continue;
-      }
-
-      const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
-      const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
-
-      let fxRateSnapshot: { rate: number; baseCurrency: string; targetCurrency: string; capturedAtMs: number; } | undefined;
-      if (slot.currency && input.buyerCurrency && this.fxRateProvider) {
-        try {
-          const rate = await this.fxRateProvider.getRate(slot.currency, input.buyerCurrency);
-          fxRateSnapshot = {
-            rate,
-            baseCurrency: slot.currency,
-            targetCurrency: input.buyerCurrency,
-            capturedAtMs: this.nowMs(),
-          };
-        } catch (err: any) {
-          failures.push({
-            date: occ.toISOString(),
-            reason: err.message ?? "Failed to fetch FX rate",
-          });
-          continue;
-        }
-      }
-
-      const intent = await this.bookingIntentRepository.create({
-        slotId: slot.id,
-        professional: slot.professional,
-        customerId: actor.userId,
-        startTime: slot.startTime,
-        endTime: slot.endTime,
-        status: "pending",
-        note: input.note,
-        createdAt: this.now(),
-        cancellationPolicySnapshot,
-        holdFeePolicySnapshot,
-        fxRateSnapshot,
-      });
-
-      // Reserve slot
-      this.schedulingService.reserveSlot(slot.id);
-
-      successes.push(intent);
-    }
-
-    return { successes, failures };
   }
 
   confirmIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
@@ -458,7 +386,7 @@ export class BookingIntentService {
 
     const updated = this.bookingIntentRepository.update(intentId, updates);
 
-    this.schedulingService.releaseSlot(intent.slotId);
+    this.releaseSlotBestEffort(intent.slotId);
 
     return updated;
   }
@@ -478,6 +406,47 @@ export class BookingIntentService {
 
     const policy = new CancellationPolicyService();
     return policy.calculateRefund(intent);
+  }
+
+  /**
+   * Read-only hold state for a single intent, backing GET /:id/hold-status so
+   * clients can poll a refundable hold without refetching the whole intent.
+   *
+   * Applies the same ownership rule as cancelIntent: only the intent owner or
+   * an admin may read it.
+   */
+  getHoldStatus(intentId: string, actor: AuthContext): {
+    intentId: string;
+    bookingType: BookingIntentRecord["bookingType"];
+    status: BookingIntentRecord["status"];
+    isRefundableHold: boolean;
+    holdUntilMs: number | undefined;
+    holdPlacedAt: string | undefined;
+    refundableNow: boolean;
+    refundAmountCents: number;
+  } {
+    const intent = this.bookingIntentRepository.findById(intentId);
+    if (!intent) {
+      throw new BookingIntentError(404, "Booking intent not found.");
+    }
+
+    if (intent.customerId !== actor.userId && actor.role !== "admin") {
+      throw new BookingIntentError(403, "You are not authorized to view this booking intent.");
+    }
+
+    const isRefundableHold = intent.bookingType === "refundable_hold";
+    const refundableNow = isRefundableHold && intent.status === "hold_placed";
+
+    return {
+      intentId: intent.id,
+      bookingType: intent.bookingType,
+      status: intent.status,
+      isRefundableHold,
+      holdUntilMs: intent.holdUntilMs,
+      holdPlacedAt: intent.holdPlacedAt,
+      refundableNow,
+      refundAmountCents: refundableNow ? this.resolveIntentPrice(intent) : 0,
+    };
   }
 
   refundIntent(
@@ -533,7 +502,7 @@ export class BookingIntentService {
       },
     });
 
-    this.schedulingService.releaseSlot(intent.slotId);
+    this.releaseSlotBestEffort(intent.slotId);
 
     return {
       intent: updated,
@@ -557,7 +526,7 @@ export class BookingIntentService {
 
     const updated = this.bookingIntentRepository.updateStatus(intentId, "expired");
 
-    this.schedulingService.releaseSlot(intent.slotId);
+    this.releaseSlotBestEffort(intent.slotId);
 
     return updated;
   }
@@ -584,7 +553,7 @@ export class BookingIntentService {
         refundReason: "hold_auto_refund",
       },
     });
-    this.schedulingService.releaseSlot(intent.slotId);
+    this.releaseSlotBestEffort(intent.slotId);
     return updated;
   }
 
@@ -638,7 +607,7 @@ export class BookingIntentService {
       status: "no_show",
     });
 
-    this.schedulingService.releaseSlot(intent.slotId);
+    this.releaseSlotBestEffort(intent.slotId);
 
     const scoreBefore = 0;
     const scoreAfter = -1;

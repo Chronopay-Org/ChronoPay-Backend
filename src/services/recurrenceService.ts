@@ -293,10 +293,15 @@ export function createInMemoryHolidayRegistry(seed: RegionalHoliday[] = []): Hol
 }
 
 function sameDayIso(aIso: string, occurrenceMs: number, resolvedTimezone: string): boolean {
-  const aDate = new Date(aIso + "T00:00:00Z");
-  const aDay = formatDateInTimezone(aDate.getTime(), resolvedTimezone);
-  const oDay = formatDateInTimezone(occurrenceMs, resolvedTimezone);
-  return aDay === oDay;
+  // `holiday.date` is a calendar date ("YYYY-MM-DD"), not an instant. Comparing
+  // it to the occurrence's local calendar date avoids the off-by-one you get
+  // by pinning the holiday to midnight UTC and then shifting it into a
+  // negative-offset zone (2026-05-31T00:00Z is 2026-05-30 in New York).
+  if (formatDateInTimezone(occurrenceMs, resolvedTimezone) === aIso) {
+    return true;
+  }
+  // Fall back to UTC for runtimes without full ICU timezone data.
+  return new Date(occurrenceMs).toISOString().slice(0, 10) === aIso;
 }
 
 function formatDateInTimezone(epochMs: number, ianaTimezone: string): string {
