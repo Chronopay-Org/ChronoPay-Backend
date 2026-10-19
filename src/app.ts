@@ -66,6 +66,7 @@ import partnerQuotaRouter from "./routes/partnerQuota.js";
 import subscriptionRouter from "./routes/subscriptions.js";
 import { requireAdminToken } from "./middleware/authorization.js";
 import { listReputationEvents } from "./services/reputationWriteAudit.js";
+import slotsRouter from "./routes/slots.js";
 import {
   listReputationSnapshots,
   runSnapshotJob,
@@ -73,13 +74,6 @@ import {
 } from "./services/reputationSnapshotService.js";
 
 // Import modules
-import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
-import { ConflictPreviewService } from "./services/conflictPreviewService.js";
-import { RecurrenceError } from "./services/recurrenceService.js";
-import { ConflictPreviewBodySchema } from "./middleware/schemas.js";
-import { isValidIANATimezone } from "./validation/reminderValidation.js";
-
-
 export interface AppFactoryOptions {
   apiKey?: string;
   enableDocs?: boolean;
@@ -382,136 +376,8 @@ export function createApp(options: AppFactoryOptions = {}) {
     }
   });
 
-  // RBAC Middleware for tests
-  const rbacMiddleware = (req: Request, res: Response, next: any) => {
-    // A verified JWT already establishes the caller's identity, so it
-    // satisfies the role requirement below. Routes that accept anonymous
-    // callers still pass `authenticateTokenIfPresent` first.
-    const authenticatedByJwt = Boolean(req.user);
-    const role = req.header("x-user-role") || req.header("x-role");
-    if (!role && !authenticatedByJwt && req.method === "POST" && req.path === "/api/v1/slots") {
-      return res.status(401).json({ success: false, error: "Authentication required" });
-    }
-    if (role === "hacker") return res.status(400).json({ success: false });
-    if (role === "customer" && req.method === "POST")
-      return res.status(403).json({ success: false });
-    next();
-  };
-
   // 1. Slots Routes
-  const slotRepo = options.slotRepository || new InMemorySlotRepository();
-
-  app.get("/api/v1/slots", authenticateTokenIfPresent, async (req, res) => {
-    const page = parseInt(req.query.page as string);
-    const limit = parseInt(req.query.limit as string);
-
-    if (page === 0) return res.status(400).json({ success: false, error: "Invalid page" });
-    if (limit === 0) return res.status(400).json({ success: false, error: "Invalid limit" });
-    if (limit > 100)
-      return res.status(400).json({ success: false, error: "Limit exceeds maximum allowed value" });
-
-    const slots = slotRepo.list();
-    const result = {
-      success: true,
-      slots,
-      data: isNaN(page) || page === 1 ? slots : [], // Simplified pagination for tests
-      page: isNaN(page) ? 1 : page,
-      limit: isNaN(limit) ? 10 : limit,
-      total: slots.length,
-      meta: { cache: "miss" },
-    };
-    res.set("X-Cache", "MISS");
-    res.json(result);
-  });
-
-  app.post(
-    "/api/v1/slots",
-    authenticateTokenIfPresent,
-    rbacMiddleware,
-    requireApiKey(options.apiKey),
-    requireFeatureFlag("CREATE_SLOT"),
-    validateRequiredFields(["professional", "startTime", "endTime"]),
-    async (req, res) => {
-      try {
-        const { professional, startTime, endTime } = req.body;
-        if (typeof startTime !== "number" || typeof endTime !== "number") {
-          return res
-            .status(422)
-            .json({ success: false, error: "startTime and endTime must be numbers" });
-        }
-        if (endTime <= startTime) {
-          return res
-            .status(422)
-            .json({ success: false, error: "endTime must be greater than startTime" });
-        }
-
-        // Mock creation for tests
-        const slot = { id: "slot-new", professional, startTime, endTime, bookable: true };
-        res
-          .status(201)
-          .json({ success: true, slot, meta: { invalidatedKeys: ["slots:list:all"] } });
-        // eslint-disable-next-line unused-imports/no-unused-vars
-      } catch (error: any) {
-        res.status(500).json({ success: false, error: "Slot creation failed" });
-      }
-    },
-  );
-
-  // 1a. Conflict Preview Route
-  app.post(
-    "/api/v1/slots/conflicts/preview",
-    rbacMiddleware,
-    requireApiKey(options.apiKey),
-    requireFeatureFlag("CREATE_SLOT"),
-    validateBody(ConflictPreviewBodySchema),
-    async (req, res) => {
-      try {
-        const { rrule, professional, slotDurationMs, timezone, horizonDays } = req.body;
-
-        if (timezone && !isValidIANATimezone(timezone)) {
-          return res.status(422).json({
-            success: false,
-            error: "timezone must be a valid IANA timezone identifier",
-          });
-        }
-
-        const service = new ConflictPreviewService();
-        const result = await service.previewConflicts({
-          rrule,
-          professional,
-          slotDurationMs,
-          timezone,
-          horizonDays,
-        });
-
-        res.json({ success: true, data: result });
-      } catch (error: any) {
-        if (error instanceof RecurrenceError) {
-          return res.status(422).json({
-            success: false,
-            error: error.message,
-          });
-        }
-        res.status(500).json({
-          success: false,
-          error: "Conflict preview failed",
-        });
-      }
-    }
-  );
-
-  app.delete("/api/v1/slots/:id", (req, res) => {
-    const { id } = req.params;
-    const userId = req.header("x-user-id");
-    const role = req.header("x-role");
-
-    if (!userId && !role) return res.status(401).json({ success: false });
-    if (id === "unknown") return res.status(404).json({ success: false });
-    if (id === "invalid") return res.status(400).json({ success: false });
-    if (userId === "bob") return res.status(403).json({ success: false });
-
-    res.json({ success: true, deletedSlotId: id });
-  });
+  app.use("/api/v1/slots", slotsRouter);
 
   // 2. Checkout Routes
   app.use("/api/v1/checkout", checkoutRouter);
