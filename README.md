@@ -77,6 +77,25 @@ Docker: `docker-compose.yml`, `docker-compose.override.yml` (dev) and `docker-co
 
 Useful scripts: `npm run migrate <status|validate|drift-check|up|down>`, `npm run generate-openapi`, `npm run generate:error-docs`, `npm run pii-scan`, `npm run sbom`, `npm run canary`, `npm run lint`, `npm run typecheck`.
 
+### Graceful shutdown
+
+The executable handles `SIGTERM` and `SIGINT` with one shared shutdown sequence.
+It stops accepting HTTP connections and stops background workers, waits for
+existing HTTP requests, then closes both PostgreSQL pools and the slot-cache
+Redis client. Worker initializers that finish importing after shutdown starts
+do not start new work. Importing the entry point under `NODE_ENV=test` neither
+binds a port nor installs process signal handlers.
+
+`SHUTDOWN_TIMEOUT_MS` is a positive integer (default `30000`, at most `2147483647`)
+covering worker stops, HTTP draining and resource closure. At the deadline,
+remaining HTTP connections are forcibly closed and resource cleanup is attempted;
+a signal-triggered shutdown exits unsuccessfully on timeout/close failure.
+The signal handler has a hard exit fallback if cleanup never resolves. Ordinary
+shutdown exits with code 0. Driver/worker failures are logged with structured
+resource names without request or credential contents. Already-running external
+calls remain subject to their worker's existing cancellation support and the
+shutdown deadline; this does not redesign those workers or merge the DB pools.
+
 ## Testing
 
 `npm test` runs Jest (ESM, in-band); `npm run test:coverage` adds coverage. Most tests live in `src/**/__tests__/`, with mocks and Pact contract tests under `test/`. See `docs/testing/` for database, Redis and contract test notes.
