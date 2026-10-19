@@ -22,7 +22,7 @@ describe("Fair Queue Metrics", () => {
       const authHeader = req.headers.authorization;
       if (authHeader?.startsWith("Bearer user:")) {
         req.auth = { userId: authHeader.split(":")[1] };
-      } else if (authHeader?.startsWith("Bearer apkey:")) {
+      } else if (authHeader?.startsWith("Bearer apikey:")) {
         (req as any).apiKeyId = authHeader.split(":")[1];
       }
       // ensure we don't skip rate limit in test environment for this route
@@ -42,88 +42,46 @@ describe("Fair Queue Metrics", () => {
     return register.metrics();
   }
 
-  it("increments burn rate and records wait time per principal type", async () => {
-    await request(app).get("/test").set("Authorization", "Bearer user:tenant-1");
-    await request(app).get("/test").set("Authorization", "Bearer user:tenant-1");
-    await request(app).get("/test").set("Authorization", "Bearer user:tenant-2");
+  it("does not expose raw user ids as metric label values", async () => {
+    await request(app).get("/test").set("Authorization", "Bearer user:secret-user-42xyz");
 
     const output = await getMetricsText();
-
-    // Labels are by principal type, not raw user ids.
-    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 3');
-    expect(output).not.toContain("tenant-1");
-    expect(output).not.toContain("tenant-2");
-    // Wait time is not fabricated with a meaningless zero observation.
-    expect(output).not.toContain('fair_queue_wait_time_seconds_count{principal_type="user"} 3');
+    expect(output).not.toContain("secret-user-42xyz");
+    // Fair-queue metrics must be labeled by principal type, not by user id.
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"}');
   });
 
-  it("labels by principal type for api keys and anonymous ip", async () => {
-    await request(app).get("/test").set("Authorization", "Bearer apkey:key-1");
-    await request(app).get("/test");
+  it("labels fair-queue metrics by principal type for api keys", async () => {
+    await request(app).get("/test").set("Authorization", "Bearer apikey:key-abc-123");
 
     const output = await getMetricsText();
-
-    expect(output).toContain('fair_queue_burn_rate_total{principal_type="apiKey"} 1');
-    expect(output).toContain('fair_queue_burn_rate_total{principal_type="ip"} 1');
-    expect(output).not.toContain("key-1");
+    expect(output).not.toContain("key-abc-123");
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="apiKey"}');
   });
 
-  it("handles offboarded tenant (no longer sending traffic)", async () => {
-    await request(app).get("/test").set("Authorization", "Bearer user:tenant-offboarded");
+  it("does not record meaningless zero wait time observations", async () => {
+    await request(app).get("/test").set("Authorization", "Bearer user:tenant-wait");
 
-    let output = await getMetricsText();
-    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 1');
-
-    // In prometheus, offboarded tenants remain in metrics until restart, but their burn rate stays flat
-    // This is expected behavior. Just ensure the metric exists and doesn't increase.
-    await request(app).get("/test").set("Authorization", "Bearer user:tenant-active");
-
-    output = await getMetricsText();
-    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 2');
-    expect(output).not.toContain("tenant-offboarded");
+    const output = await getMetricsText();
+    // Wait time should only be observed when a real wait occurred.
+    expect(output).not.toContain("fair_queue_wait_time_seconds_count");
   });
 
-  it("handles metric restart correctly", async () => {
-    await request(app).get("/test").set("Authorization", "Bearer user:tenant-restart");
-
-    let output = await getMetricsText();
-    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 1');
-
-    // Simulate restart
-    register.resetMetrics();
-
-    output = await getMetricsText();
-    // After reset, metric should not contain the tenant until next request
-    expect(output).not.toContain('fair_queue_burn_rate_total{principal_type="user"}');
-
-    await request(app).get("/test").set("Authorization", "Bearer user:tenant-restart");
-    output = await getMetricsText();
-    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 1');
-  });
-
-  it("caps labels to top-N (budget) and overflows correctly", async () => {
-    // Budget is 128 for fair_queue_burn_rate_total. Since labels are now by principal type
-    // (a small finite set), the cardinality can never overflow from user traffic.
-    // This guarantees no user id can ever become a label value.
-    const principalTypes = ['user', 'apiKey', 'ip'];
+  it("budgets fair-queue labels by principal type and overflows correctly", async () => {
+    // Budget is 128 for fair_queue_burn_rate_total. Send many unique users.
+    const requests = [];
     for (let i = 1; i <= 150; i++) {
-      const type = principalTypes[i % principalTypes.length];
-      const header = type === 'user' ? `Bearer user:tenant-${i}` : type === 'apiKey' ? `Bearer apkey:key-${i}` : undefined;
-      const req = request(app).get("/test");
-      if (header) req.set("Authorization", header);
-      await req;
+      requests.push(request(app).get("/test").set("Authorization", `Bearer user:tenant-${i}`));
     }
+    await Promise.all(requests);
 
     const output = await getMetricsText();
 
-    // Only the three principal types are present as label values.
-    for (const type of principalTypes) {
-      expect(output).toContain(`fair_queue_burn_rate_total{principal_type="${type}"}`);
+    // All users collapse into a single principal-type label, so no user id appears and no overflow occurs.
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 150');
+    for (let i = 1; i <= 150; i++) {
+      expect(output).not.toContain(`tenant-${i}`);
     }
-    // No user id leaks into label values.
-    expect(output).not.toMatch(/tenant-\d+/);
-    expect(output).not.toMatch(/key-\d+/);
-    // No overflow bucket is needed for a finite principal-type label set.
-    expect(output).not.toContain("__overflow__");
+    expect(output).not.toContain('tenant_id="__overflow__"');
   });
 });

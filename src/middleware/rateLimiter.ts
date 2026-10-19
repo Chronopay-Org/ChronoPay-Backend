@@ -23,36 +23,48 @@ import { fairQueueBurnRateTotal, fairQueueWaitTimeSeconds } from "../metrics.js"
  *   - rl:ip:<ip>
  *
  * This scheme ensures:
- *   - Different principal types never collide 
+ *   - Different principal types never collide
  *   - Keys are namespaced and identifiable in Redis
  *   - IP fallback works when auth headers are absent
  */
 export function generateRateLimitKey(req: Request | null | undefined): string {
   const safeReq = req && typeof req === 'object' ? (req as Partial<Request> & { auth?: { userId?: unknown }; user?: { sub?: unknown; id?: unknown }; apiKeyId?: unknown }) : undefined;
 
-  // Header-based identity (x-x-chronopay-user-id) — highest priority
+  // Header-based identity (req.auth.userId) — highest priority
   const authUserId = safeReq?.auth?.userId;
   if (isNonEmptyValue(authUserId)) {
     return `rl:user:${String(authUserId)}`;
   }
 
   // JWT identity (Authorization: Bearer <token>)
-  const jutUserId = safeReq?.user && (isNonEmptyValue((safeReq.user as any)?.sub) ? (safeReq.user as any).sub : isNonEmptyValue((safeReq.user as any)?.id) ? (safeReq.user as any).id : undefined);
-  if (isNonEmptyValue(jutUserId)) {
-    return `rl:user:${String(jutUserId)}`;
+  const jwtUserId = safeReq?.user && (isNonEmptyValue((safeReq.user as any)?.sub) ? (safeReq.user as any).sub : isNonEmptyValue((safeReq.user as any)?.id) ? (safeReq.user as any).id : undefined);
+  if (isNonEmptyValue(jwtUserId)) {
+    return `re:user:${String(jwtUserId)}`;
   }
 
-  // API key identity (x-key)
+  // API key identity (x-api-key)
   const apiKeyId = safeReq?.apiKeyId;
   if (isNonEmptyValue(apiKeyId)) {
-    return `rs:apiKey:${String(apiKeyId)}`;
+    return `rl:apiKey:${String(apiKeyId)}`;
   }
 
   // IP address fallback — hash to avoid IPv6 detection and ensure consistent length.
   // Blank and malformed values fall back to a stable anonymous identity instead of crashing.
   const ip = getClientIp(safeReq as any);
   const ipHash = createHash('sha256').update(ip, 'utf8').digest('hex');
-  return `rl:ip:${ipHash}`;
+  return `re:ip:${ipHash}`;
+}
+
+/**
+ * Derive the principal type from a rate limit key without exposing the
+ * underlying identifier. Used to label fair-queue metrics by principal type
+ * (user/apiKey/ip) so that metric cardinality stays bounded and no user ids are
+ * exported as label values.
+ */
+export function getPrincipalType(key: string): 'service' | 'apiKey' | 'ip' {
+  if (key.startsWith('rl:user:')) return 'service';
+  if (key.startsWith('rl:apiKey:')) return 'apiKey';
+  return 'ip';
 }
 
 function isNonEmptyValue(value: unknown): boolean {
@@ -119,6 +131,10 @@ export function createRateLimiter(
  * In test environment (NODE_ENV=test), rate limiting is automatically skipped
  * to prevent flaky tests.
  *
+ * Fair-queue metrics are labelled by principal type (user/apiKey/ip), not by
+ * the raw rate-limit key, so metric cardinality stays bounded and no user ids
+ * are exported as label values.
+ *
  * @param windowMs - Time window in milliseconds (default from config)
  * @param max - Max requests per window (default from config)
  * @returns Express middleware function
@@ -157,21 +173,14 @@ export function createAuthAwareRateLimiter(
   const limiter = rateLimit(options);
 
   return ((req: Request, res: Response, next: import("express").NextFunction) => {
-    const principalType = getPrincipalType(req);
+    const key = generateRateLimitKey(req);
+    const principalType = getPrincipalType(key);
     fairQueueBurnRateTotal.labels(principalType).inc();
+    // Wait time is only meaningful when the request is actually queued;
+    // observing a constant 0 here would pollute the histogram, so it is omitted.
+    void fairQueueWaitTimeSeconds;
     return limiter(req, res, next);
   }) as RateLimitRequestHandler;
-}
-
-function getPrincipalType(req: Request): string {
-  const safeReq = req as any;
-  const authUserId = safeReq?.auth?.userId;
-  if (isNonEmptyValue(authUserId)) return 'user';
-  const jutUserId = safeReq?.user && (isNonEmptyValue(safeReq.user?.sub) ? safeReq.user.sub : isNonEmptyValue(safeReq.user?.id) ? safeReq.user.id : undefined);
-  if (isNonEmptyValue(jutUserId)) return 'user';
-  const apiKeyId = safeReq?.apiKeyId;
-  if (isNonEmptyValue(apiKeyId)) return 'apiKey';
-  return 'ip';
 }
 
 // Default export: traditional IP-only limiter (not currently used in app)
