@@ -636,6 +636,9 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use("/api/v1/booking-intents", createBookingIntentsRouter());
 
   // 5. Webhooks Routes
+  // registerWebhookRoutes() is the single registration path for provider
+  // webhooks (HMAC-verified). The default router mounted below only carries
+  // the admin-token-protected idempotency endpoints (#1307).
   registerWebhookRoutes(app);
   app.use("/api/v1", webhookRoutes);
 
