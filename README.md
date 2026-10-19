@@ -61,6 +61,8 @@ Copy `.env.example` to `.env`. Variables listed there:
 
 `src/config/env.ts` additionally reads (not all in `.env.example`): `NODE_ENV`, `REDIS_URL` (required), `HORIZON_URL`/`HORIZON_URLS`, `STELLAR_NETWORK_PASSPHRASE`, `ESCROW_CONTRACT_HASH`, `JWT_ISSUER`, `JWT_AUDIENCE`, `WEBHOOK_SECRET`, `INTERNAL_OVERRIDE_SECRET(_PREV)`, `INTERNAL_BYPASS_TOLERANCE_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, `REQUEST_TIMEOUT_MS`, `TRUST_PROXY`. See [docs/environment-validation.md](docs/environment-validation.md) for validation rules. A database connection is configured in `src/db/` (see [docs/database/migrations.md](docs/database/migrations.md)).
 
+Partner API keys resolve to `basic` by default. Set `PARTNER_API_KEY_TIERS` to a JSON object mapping the derived API key ID (`apiKey_` followed by the key's SHA-256 hex digest) to a tier, for example `{"apiKey_<sha256-hex>":"premium"}`. Tier names use the allowlists in `src/config/partner-tiers.json`. Both the mapping and allowlist are loaded and validated at startup; restart the service after changing them. `reloadPartnerTierMap` and `reloadPartnerTiersConfig` are exported for explicit reloads in tests.
+
 ## Running locally
 
 Requires Node.js 20+ (CI uses 22), npm, and a Redis instance.
