@@ -50,6 +50,33 @@ export class CheckoutSessionService {
       .catch(console.error);
   }
 
+  private static async updateSession(
+    sessionId: string,
+    fields: {
+      status: CheckoutSessionStatus;
+      updatedAt: number;
+      paymentToken?: string;
+      metadata?: Record<string, string | number | boolean>;
+    },
+    expectedStatus: CheckoutSessionStatus,
+    action: string,
+  ): Promise<CheckoutSession> {
+    const updated = await _repo.updateSession(sessionId, fields, expectedStatus);
+    if (!updated) {
+      this.emitAuditEvent(action, "failed", `session:${sessionId}`, {
+        reason: `Session state changed before ${action}`,
+        expectedState: expectedStatus,
+      });
+      throw new CheckoutError(
+        CheckoutErrorCode.INVALID_SESSION_STATE,
+        `Session state changed before ${action}`,
+        409,
+        { expectedState: expectedStatus },
+      );
+    }
+    return updated;
+  }
+
   static async createSession(
     request: CreateCheckoutSessionRequest,
     authorizationToken?: string,
@@ -109,10 +136,15 @@ export class CheckoutSessionService {
     const now = Math.floor(Date.now() / 1000);
     if (now > session.expiresAt && session.status === CheckoutSessionStatus.PENDING) {
       // Persist the expired status so subsequent reads are consistent.
-      await _repo.updateSession(sessionId, {
-        status: CheckoutSessionStatus.EXPIRED,
-        updatedAt: now,
-      });
+      await this.updateSession(
+        sessionId,
+        {
+          status: CheckoutSessionStatus.EXPIRED,
+          updatedAt: now,
+        },
+        CheckoutSessionStatus.PENDING,
+        "expired",
+      );
       throw new CheckoutError(
         CheckoutErrorCode.SESSION_EXPIRED,
         "Checkout session has expired",
@@ -149,11 +181,16 @@ export class CheckoutSessionService {
       );
     }
 
-    const updated = await _repo.updateSession(sessionId, {
-      status: CheckoutSessionStatus.COMPLETED,
-      updatedAt: Math.floor(Date.now() / 1000),
-      paymentToken,
-    });
+    const updated = await this.updateSession(
+      sessionId,
+      {
+        status: CheckoutSessionStatus.COMPLETED,
+        updatedAt: Math.floor(Date.now() / 1000),
+        paymentToken,
+      },
+      CheckoutSessionStatus.PENDING,
+      "paid",
+    );
 
     this.emitAuditEvent("paid", "success", `session:${sessionId}`, {
       customerId: session.customer.customerId,
@@ -183,11 +220,16 @@ export class CheckoutSessionService {
     }
 
     const metadata = { ...(session.metadata ?? {}), failureReason: reason ?? "Unknown" };
-    const updated = await _repo.updateSession(sessionId, {
-      status: CheckoutSessionStatus.FAILED,
-      updatedAt: Math.floor(Date.now() / 1000),
-      metadata,
-    });
+    const updated = await this.updateSession(
+      sessionId,
+      {
+        status: CheckoutSessionStatus.FAILED,
+        updatedAt: Math.floor(Date.now() / 1000),
+        metadata,
+      },
+      CheckoutSessionStatus.PENDING,
+      "failed",
+    );
 
     this.emitAuditEvent("failed", "success", `session:${sessionId}`, {
       customerId: session.customer.customerId,
@@ -213,10 +255,15 @@ export class CheckoutSessionService {
       );
     }
 
-    const updated = await _repo.updateSession(sessionId, {
-      status: CheckoutSessionStatus.CANCELLED,
-      updatedAt: Math.floor(Date.now() / 1000),
-    });
+    const updated = await this.updateSession(
+      sessionId,
+      {
+        status: CheckoutSessionStatus.CANCELLED,
+        updatedAt: Math.floor(Date.now() / 1000),
+      },
+      CheckoutSessionStatus.PENDING,
+      "cancelled",
+    );
 
     this.emitAuditEvent("cancelled", "success", `session:${sessionId}`, {
       customerId: session.customer.customerId,
@@ -410,11 +457,16 @@ export class CheckoutSessionService {
         lastPartialRefundDestinationAmount: quote.destinationAmount,
       };
 
-      const updatedSession = await _repo.updateSession(request.sessionId, {
-        status: session.status,
-        updatedAt: Math.floor(Date.now() / 1000),
-        metadata: updatedMetadata,
-      });
+      const updatedSession = await this.updateSession(
+        request.sessionId,
+        {
+          status: session.status,
+          updatedAt: Math.floor(Date.now() / 1000),
+          metadata: updatedMetadata,
+        },
+        CheckoutSessionStatus.COMPLETED,
+        "partial_refund_path_payment",
+      );
 
       return { session: updatedSession, quote };
     } catch (err: any) {
