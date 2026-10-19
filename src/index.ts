@@ -100,29 +100,14 @@ const _shutdownHooks: Array<() => void> = [];
   const { createSubscriptionSlotGenerator } = await import(
     "./scheduler/subscriptionSlotGenerator.js"
   );
-  const { SubscriptionService } = await import("./services/subscriptionService.js");
-
-  // In production, use SQL-backed repositories; here we use in-memory for the
-  // standalone worker. The app.ts routes use their own repository instances.
-  const { InMemorySubscriptionProductRepository } = await import(
-    "./modules/subscriptions/subscription-product-repository.js"
+  const { subscriptionService } = await import(
+    "./services/subscriptionContainer.js"
   );
-  const { InMemorySubscriptionRepository } = await import(
-    "./modules/subscriptions/subscription-repository.js"
-  );
-  const { InMemorySlotRepository } = await import(
-    "./modules/slots/slot-repository.js"
-  );
-
-  const productRepo = new InMemorySubscriptionProductRepository();
-  const subscriptionRepo = new InMemorySubscriptionRepository();
-  const slotRepo = new InMemorySlotRepository();
-  const service = new SubscriptionService(productRepo, subscriptionRepo, slotRepo);
 
   const controller = new AbortController();
   _shutdownHooks.push(() => controller.abort());
 
-  const generator = createSubscriptionSlotGenerator(service, {
+  const generator = createSubscriptionSlotGenerator(subscriptionService, {
     intervalMs: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_INTERVAL_MS) || undefined,
     batchSize: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_BATCH_SIZE) || undefined,
   });
