@@ -9,9 +9,9 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts",
+    "build": "node api.js && tsc",
+    "start": "node api.js && node dist/index.js",
+    "dev": "node api.js && tsx watch src/index.ts",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.{ts,js,cjs,mjs}\" \".github/workflows/*.{yml,yaml}\" \"eslint.config.js\" \"package.json\" \"tsconfig.json\" \"README.md\" \".prettierrc\"",
     "test": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --runInBand",
