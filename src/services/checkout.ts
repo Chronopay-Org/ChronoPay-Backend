@@ -33,7 +33,10 @@ const SESSION_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 // Singleton repository — can be overridden in tests via setCheckoutRepository().
 let _repo: PgCheckoutSessionRepository = new PgCheckoutSessionRepository(query);
 let _paymentProvider: PaymentProvider | undefined;
-const _mockPaymentProvider = new MockPaymentProvider();
+
+// Lazily instantiated in non-production so importing this module in production
+// never triggers the MockPaymentProvider constructor guard.
+let _mockPaymentProvider: MockPaymentProvider | undefined;
 
 /** Replace the repository (for testing). */
 export function setCheckoutRepository(repo: PgCheckoutSessionRepository): void {
@@ -260,7 +263,9 @@ export class CheckoutSessionService {
     }
 
     const provider = _paymentProvider
-      ?? (process.env.NODE_ENV !== "production" ? _mockPaymentProvider : undefined);
+      ?? (process.env.NODE_ENV !== "production"
+        ? (_mockPaymentProvider ??= new MockPaymentProvider())
+        : undefined);
     if (!provider) {
       throw new CheckoutError(
         CheckoutErrorCode.PAYMENT_PROVIDER_UNAVAILABLE,

@@ -402,7 +402,8 @@ describe("CheckoutSessionService", () => {
         "sess-uuid",
         expect.objectContaining({
           metadata: expect.objectContaining({
-            lastPartialRefundQuote: mockQuote,
+            lastPartialRefundQuoteId: mockQuote.quoteId,
+            lastPartialRefundDestinationAmount: mockQuote.destinationAmount,
           }),
         }),
       );
