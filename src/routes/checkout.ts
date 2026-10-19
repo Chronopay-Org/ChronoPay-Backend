@@ -397,6 +397,12 @@ checkoutRouter.post(
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       503:
+ *         description: Payment provider unavailable
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
  *       500:
  *         description: Internal server error
  *         content:

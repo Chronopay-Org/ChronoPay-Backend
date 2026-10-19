@@ -5,7 +5,7 @@
  * Expiry is computed from the `expires_at` column — no in-process timer.
  */
 
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID } from "crypto";
 import {
   CheckoutSession,
   CreateCheckoutSessionRequest,
@@ -17,6 +17,10 @@ import { defaultAuditLogger } from "./auditLogger.js";
 import { withSpan } from "../tracing/hooks.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
 import { query } from "../db/pool.js";
+import {
+  MockPaymentProvider,
+  type PaymentProvider,
+} from "./paymentProvider.js";
 
 import {
   HorizonContractClient,
@@ -28,10 +32,24 @@ const SESSION_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 
 // Singleton repository — can be overridden in tests via setCheckoutRepository().
 let _repo: PgCheckoutSessionRepository = new PgCheckoutSessionRepository(query);
+let _paymentProvider: PaymentProvider | undefined;
+const _mockPaymentProvider = new MockPaymentProvider();
 
 /** Replace the repository (for testing). */
 export function setCheckoutRepository(repo: PgCheckoutSessionRepository): void {
   _repo = repo;
+}
+
+/** Configure the provider used for checkout charges. */
+export function setCheckoutPaymentProvider(provider?: PaymentProvider): void {
+  if (provider instanceof MockPaymentProvider && process.env.NODE_ENV === "production") {
+    throw new CheckoutError(
+      CheckoutErrorCode.PAYMENT_PROVIDER_UNAVAILABLE,
+      "Mock payment provider cannot be used in production",
+      503,
+    );
+  }
+  _paymentProvider = provider;
 }
 
 export class CheckoutSessionService {
@@ -241,12 +259,22 @@ export class CheckoutSessionService {
       );
     }
 
-    const paymentSuccessful = randomBytes(1)[0] / 255 > 0.1;
-    if (paymentSuccessful) {
-      return this.completeSession(sessionId, "mock_token_123");
-    } else {
-      return this.failSession(sessionId, "Payment provider declined transaction");
+    const provider = _paymentProvider
+      ?? (process.env.NODE_ENV !== "production" ? _mockPaymentProvider : undefined);
+    if (!provider) {
+      throw new CheckoutError(
+        CheckoutErrorCode.PAYMENT_PROVIDER_UNAVAILABLE,
+        "Payment provider is unavailable",
+        503,
+      );
     }
+
+    const result = await provider.charge(session);
+    if (result.status === "succeeded") {
+      return this.completeSession(sessionId, result.providerRef);
+    }
+
+    return this.failSession(sessionId, result.reason);
   }
 
   // ── Per-tenant slippage configuration ──────────────────────────────────────────
