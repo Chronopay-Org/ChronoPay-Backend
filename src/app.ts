@@ -134,14 +134,6 @@ function registerSwaggerDocs(app: express.Express) {
               bearerFormat: "JWT",
               description: "JWT token for user authentication (obtained from auth service)",
             },
-            // Header-based authentication (current implementation)
-            chronoPayAuth: {
-              type: "apiKey",
-              in: "header",
-              name: "x-chronopay-user-id",
-              description:
-                "User ID header for authentication (must be paired with x-chronopay-role)",
-            },
             // API Key authentication
             apiKeyAuth: {
               type: "apiKey",
@@ -235,7 +227,7 @@ function registerSwaggerDocs(app: express.Express) {
         },
         security: [
           // Default security requirement - can be overridden per endpoint
-          { chronoPayAuth: [] },
+          { bearerAuth: [] },
         ],
       },
       apis: chooseApis(),

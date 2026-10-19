@@ -296,7 +296,7 @@ describe("auth middleware & ChronoPayRole contract", () => {
       expect(statusMock).toHaveBeenCalledWith(401);
       expect(jsonMock).toHaveBeenCalledWith({
         success: false,
-        error: "Invalid or expired token",
+        error: "Authentication required.",
       });
       expect(mockNext).not.toHaveBeenCalled();
     });
@@ -364,6 +364,7 @@ describe("auth middleware & ChronoPayRole contract", () => {
     beforeEach(() => {
       jsonMock = jest.fn();
       statusMock = jest.fn().mockReturnValue({ json: jsonMock });
+      jest.spyOn(configService, "getAllSecretVersions").mockReturnValue([TEST_SECRET]);
       mockReq = {
         headers: {},
         ip: "127.0.0.1",
@@ -374,10 +375,14 @@ describe("auth middleware & ChronoPayRole contract", () => {
       mockNext = jest.fn();
     });
 
-    it("returns 401 when x-chronopay-user-id header is missing", () => {
-      mockReq.headers = { "x-chronopay-role": "admin" };
+    it("returns 401 when only spoofed identity headers are present", async () => {
+      mockReq.headers = {
+        "x-chronopay-user-id": "admin-1",
+        "x-chronopay-role": "admin",
+        "x-user-role": "admin",
+      };
       const middleware = requireAuthenticatedActor(["admin"]);
-      middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
+      await middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
 
       expect(statusMock).toHaveBeenCalledWith(401);
       expect(jsonMock).toHaveBeenCalledWith({
@@ -387,80 +392,44 @@ describe("auth middleware & ChronoPayRole contract", () => {
       expect(mockNext).not.toHaveBeenCalled();
     });
 
-    it("returns 401 when x-chronopay-user-id header is empty or whitespace", () => {
-      mockReq.headers = { "x-chronopay-user-id": "", "x-chronopay-role": "admin" };
+    it("ignores forged admin headers when the JWT role is customer", async () => {
+      const token = await makeJwt({ sub: "user-123", role: "customer" });
+      mockReq.headers = {
+        authorization: `Bearer ${token}`,
+        "x-chronopay-user-id": "forged-user",
+        "x-chronopay-role": "admin",
+        "x-user-role": "admin",
+      };
       const middleware = requireAuthenticatedActor(["admin"]);
-      middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
+      await middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
 
-      expect(statusMock).toHaveBeenCalledWith(401);
-      expect(jsonMock).toHaveBeenCalledWith({
-        success: false,
-        error: "Authentication required.",
-      });
-
-      statusMock.mockClear();
-      jsonMock.mockClear();
-      mockReq.headers = { "x-chronopay-user-id": "   ", "x-chronopay-role": "admin" };
-      middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
-
-      expect(statusMock).toHaveBeenCalledWith(401);
-      expect(jsonMock).toHaveBeenCalledWith({
-        success: false,
-        error: "Authentication required.",
-      });
-      expect(mockNext).not.toHaveBeenCalled();
-    });
-
-    it("returns 401 and audits RBAC_MISSING when x-chronopay-role is absent (line 37 return null path)", () => {
-      mockReq.headers = { "x-chronopay-user-id": "user-123" };
-      const middleware = requireAuthenticatedActor(["admin"]);
-      middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
-
-      expect(statusMock).toHaveBeenCalledWith(401);
+      expect(statusMock).toHaveBeenCalledWith(403);
       expect(jsonMock).toHaveBeenCalledWith({
         success: false,
         error: "Role is not authorized for this action.",
       });
-      expect(auditSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "RBAC_MISSING",
-          resource: "/test-endpoint",
-          status: 401,
-        }),
+      expect(mockNext).not.toHaveBeenCalled();
+      expect(mockReq.auth).toMatchObject({ userId: "user-123", role: "customer" });
+    });
+
+    it("returns 401 for an expired JWT", async () => {
+      const token = await makeJwt({ sub: "user-123", role: "admin" }, { expiresInSec: -1 });
+      mockReq.headers = { authorization: `Bearer ${token}` };
+      await requireAuthenticatedActor(["admin"])(
+        mockReq as Request,
+        mockRes as Response,
+        mockNext as unknown as NextFunction,
       );
+
+      expect(statusMock).toHaveBeenCalledWith(401);
       expect(mockNext).not.toHaveBeenCalled();
     });
 
-    it("returns 400 and audits RBAC_INVALID_ROLE when x-chronopay-role is invalid (line 37 return null path)", () => {
-      mockReq.headers = {
-        "x-chronopay-user-id": "user-123",
-        "x-chronopay-role": "hacker",
-      };
+    it("returns 403 and audits RBAC_FORBIDDEN when JWT role does not satisfy requiredRoles", async () => {
+      const token = await makeJwt({ sub: "user-123", role: "customer" });
+      mockReq.headers = { authorization: `Bearer ${token}` };
       const middleware = requireAuthenticatedActor(["admin"]);
-      middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
-
-      expect(statusMock).toHaveBeenCalledWith(400);
-      expect(jsonMock).toHaveBeenCalledWith({
-        success: false,
-        error: "Role is not authorized for this action.",
-      });
-      expect(auditSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "RBAC_INVALID_ROLE",
-          resource: "/test-endpoint",
-          status: 400,
-        }),
-      );
-      expect(mockNext).not.toHaveBeenCalled();
-    });
-
-    it("returns 403 and audits RBAC_FORBIDDEN when role is known but does not satisfy requiredRoles", () => {
-      mockReq.headers = {
-        "x-chronopay-user-id": "user-123",
-        "x-chronopay-role": "customer",
-      };
-      const middleware = requireAuthenticatedActor(["admin"]);
-      middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
+      await middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
 
       expect(statusMock).toHaveBeenCalledWith(403);
       expect(jsonMock).toHaveBeenCalledWith({
@@ -480,41 +449,29 @@ describe("auth middleware & ChronoPayRole contract", () => {
       expect(mockNext).not.toHaveBeenCalled();
     });
 
-    it("authorizes when user role satisfies required role directly", () => {
-      mockReq.headers = {
-        "x-chronopay-user-id": "  user-123  ",
-        "x-chronopay-role": "customer",
-      };
+    it("authorizes when the JWT role satisfies the required role directly", async () => {
+      const token = await makeJwt({ sub: "user-123", role: "customer" });
+      mockReq.headers = { authorization: `Bearer ${token}` };
       const middleware = requireAuthenticatedActor(["customer"]);
-      middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
+      await middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
 
       expect(mockNext).toHaveBeenCalled();
-      expect(mockReq.auth).toEqual({
-        userId: "user-123",
-        role: "customer",
-        claims: {},
-      });
+      expect(mockReq.auth).toMatchObject({ userId: "user-123", role: "customer" });
       expect(statusMock).not.toHaveBeenCalled();
     });
 
-    it("authorizes when user role satisfies required role via role hierarchy", () => {
-      mockReq.headers = {
-        "x-chronopay-user-id": "admin-1",
-        "x-chronopay-role": "ADMIN",
-      };
+    it("authorizes when JWT role satisfies required role via role hierarchy", async () => {
+      const token = await makeJwt({ sub: "admin-1", role: "admin" });
+      mockReq.headers = { authorization: `Bearer ${token}` };
       const middleware = requireAuthenticatedActor(["support"]);
-      middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
+      await middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
 
       expect(mockNext).toHaveBeenCalled();
-      expect(mockReq.auth).toEqual({
-        userId: "admin-1",
-        role: "admin",
-        claims: {},
-      });
+      expect(mockReq.auth).toMatchObject({ userId: "admin-1", role: "admin" });
       expect(statusMock).not.toHaveBeenCalled();
     });
 
-    it("catches unexpected exceptions and returns 401", () => {
+    it("catches unexpected exceptions and returns 401", async () => {
       const badReq = {
         get headers(): any {
           throw new Error("unhandled stream failure");
@@ -522,7 +479,7 @@ describe("auth middleware & ChronoPayRole contract", () => {
       } as unknown as Request;
 
       const middleware = requireAuthenticatedActor(["admin"]);
-      middleware(badReq, mockRes as Response, mockNext as unknown as NextFunction);
+      await middleware(badReq, mockRes as Response, mockNext as unknown as NextFunction);
 
       expect(statusMock).toHaveBeenCalledWith(401);
       expect(jsonMock).toHaveBeenCalledWith({
