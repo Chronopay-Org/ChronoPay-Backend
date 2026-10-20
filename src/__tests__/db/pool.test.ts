@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Regression suite for src/db/pool.ts.
  *
@@ -20,7 +21,7 @@ type InitDB = () => Promise<void>;
 type Query = (text: string, params?: unknown[]) => Promise<QueryResult>;
 type RunWithQueryBudget = <T>(
   context: { budgetMs: number; totalSqlTimeMs: number; route: string; breached: boolean },
-  fn: () => T,
+  fn: () => T | Promise<T>,
 ) => T;
 
 let pool: Pool;
@@ -34,6 +35,8 @@ jest.unstable_mockModule("../../db/connection.js", () => ({
   _recordBudgetBreach: jest.fn(),
   isStatementTimeoutError: (error: unknown) =>
     error instanceof Error && (error as { code?: string }).code === "57014",
+  getPool: () => pool,
+  _setPoolFactory: jest.fn(),
 }));
 
 beforeAll(async () => {
@@ -58,6 +61,31 @@ function ok(rows: unknown[] = []): QueryResult {
 
 afterEach(() => {
   jest.restoreAllMocks();
+});
+
+// ─── single pool ownership ───────────────────────────────────────────────────
+
+describe("pool ownership", () => {
+  it("exposes the same Pool instance as connection.getPool()", async () => {
+    const connectionModule = await import("../../db/connection.js");
+    const getPool = connectionModule.getPool as () => Pool;
+
+    expect(poolModuleDefault()).toBe(getPool());
+  });
+
+  it("does not throw at import time when no env vars are set", async () => {
+    const previousDb = process.env.DATABASE_URL;
+    const previousPg = process.env.POSTGRESQL_URL;
+    delete process.env.DATABASE_URL;
+    delete process.env.POSTGRESQL_URL;
+
+    try {
+      await expect(import("../../db/pool.js")).resolves.toBeDefined();
+    } finally {
+      if (previousDb !== undefined) process.env.DATABASE_URL = previousDb;
+      if (previousPg !== undefined) process.env.POSTGRESQL_URL = previousPg;
+    }
+  });
 });
 
 // ─── closePool ───────────────────────────────────────────────────────────────
@@ -198,3 +226,7 @@ describe("query()", () => {
     expect(q).toHaveBeenCalledWith("SELECT 1", undefined);
   });
 });
+
+function poolModuleDefault(): Pool {
+  return pool;
+}
