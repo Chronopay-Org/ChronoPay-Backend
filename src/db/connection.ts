@@ -122,7 +122,7 @@ export function getPool(): Pool {
     const url = process.env.DATABASE_URL;
     if (!url) {
       throw new Error(
-        "DATABASE_URL environment variable is not set. " +
+        "DATABASE_URL Environment variable is not set. " +
           "Set it to a PostgreSQL connection string, e.g. " +
           "postgresql://user:password@localhost:5432/chronopay",
       );
@@ -161,8 +161,8 @@ export async function closePool(): Promise<void> {
  *
  * Acquires a client from the pool, issues BEGIN, and invokes `fn`. On success,
  * COMMIT is issued and the result is returned. On any error thrown by `fn`,
- * ROLLBACK is attempted (failure to roll back is logged but does not mask the
- * original error), the client is released, and the original error is re-thrown.
+ * ROLLBACK is attempted (failure to roll back is logged but does not mask
+ * the original error), the client is released, and the original error is re-thrown.
  *
  * The client is always released in a finally block regardless of outcome.
  */
