@@ -2,6 +2,20 @@ import request from "supertest";
 import express from "express";
 import adminRouter, { pendingReplays } from "../routes/admin.js";
 import { _settlements } from "../services/settlementReconciler.js";
+import { configService } from "../config/config.service.js";
+import { mfaService } from "../services/mfaService.js";
+
+const CHALLENGE_SECRET = "payout-replay-challenge-secret-12345";
+
+/** Challenges are injected with the signing secret and issuance clock. */
+async function mfaFor(subject: string): Promise<string> {
+  const { mfaToken } = await mfaService.issueChallenge(subject, {
+    challengeSecret: CHALLENGE_SECRET,
+    nowMs: Date.now(),
+    challengeTtlSec: 3600,
+  });
+  return mfaToken;
+}
 
 function buildApp() {
   const app = express();
@@ -13,7 +27,19 @@ function buildApp() {
 const app = buildApp();
 
 describe("Dual-Admin Payout Replay Endpoints", () => {
-  beforeEach(() => {
+  beforeAll(() => {
+    process.env.MFA_CHALLENGE_SECRET = CHALLENGE_SECRET;
+    configService.refresh();
+  });
+
+  afterAll(() => {
+    delete process.env.MFA_CHALLENGE_SECRET;
+    configService.refresh();
+  });
+
+  beforeEach(async () => {
+    // refresh() loads secrets asynchronously — drain the queue before issuing.
+    await new Promise<void>((resolve) => setImmediate(resolve));
     _settlements.clear();
     pendingReplays.clear();
   });
@@ -114,6 +140,7 @@ describe("Dual-Admin Payout Replay Endpoints", () => {
         .post(`/api/v1/admin/payouts/${mockTransactionId}/replay/approve`)
         .set("x-chronopay-user-id", "admin-2")
         .set("x-chronopay-role", "admin")
+        .set("x-chronopay-mfa", await mfaFor("admin-2"))
         .send();
         
       expect(res.status).toBe(200);
@@ -136,6 +163,7 @@ describe("Dual-Admin Payout Replay Endpoints", () => {
         .post(`/api/v1/admin/payouts/${mockTransactionId}/replay/approve`)
         .set("x-chronopay-user-id", "admin-1")
         .set("x-chronopay-role", "admin")
+        .set("x-chronopay-mfa", await mfaFor("admin-1"))
         .send();
         
       expect(res.status).toBe(403);
@@ -160,6 +188,7 @@ describe("Dual-Admin Payout Replay Endpoints", () => {
         .post(`/api/v1/admin/payouts/${mockTransactionId}/replay/approve`)
         .set("x-chronopay-user-id", "admin-2")
         .set("x-chronopay-role", "admin")
+        .set("x-chronopay-mfa", await mfaFor("admin-2"))
         .send();
         
       expect(res.status).toBe(400);
@@ -181,6 +210,7 @@ describe("Dual-Admin Payout Replay Endpoints", () => {
         .post(`/api/v1/admin/payouts/${mockTransactionId}/replay/approve`)
         .set("x-chronopay-user-id", "admin-2")
         .set("x-chronopay-role", "customer") // non-admin role
+        .set("x-chronopay-mfa", await mfaFor("admin-2"))
         .send();
         
       expect(res.status).toBe(403);

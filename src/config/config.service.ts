@@ -112,6 +112,10 @@ export class ConfigService {
     return this.envConfig.mfaChallengeTtlSec;
   }
 
+  public get mfaRequiredForRefunds() {
+    return this.envConfig.mfaRequiredForRefunds;
+  }
+
   public get jwtIssuer() {
     return this.envConfig.jwtIssuer;
   }
