@@ -28,6 +28,11 @@ export interface EnvConfig {
   rateLimitWindowMs: number;
   rateLimitMax: number;
   trustProxy: boolean;
+  /**
+   * Explicit opt-in for test-only routes (e.g. /__test__/explode, /api/v1/test/auth).
+   * Always false unless ENABLE_TEST_ROUTES is set to a truthy value.
+   */
+  enableTestRoutes: boolean;
   timeoutMs?: number;
   webhookSecret?: string;
   jwtIssuer?: string;
@@ -81,6 +86,12 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   );
   const rateLimitMax = parsePositiveInteger(env.RATE_LIMIT_MAX, "RATE_LIMIT_MAX", 100, issues);
   const trustProxy = parseBoolean(env.TRUST_PROXY, "TRUST_PROXY", false, issues);
+  const enableTestRoutes = parseBoolean(
+    env.ENABLE_TEST_ROUTES,
+    "ENABLE_TEST_ROUTES",
+    false,
+    issues,
+  );
 
   const webhookSecret = parseOptionalString(env.WEBHOOK_SECRET);
   const jwtIssuer = parseOptionalString(env.JWT_ISSUER);
@@ -140,6 +151,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     rateLimitWindowMs,
     rateLimitMax,
     trustProxy,
+    enableTestRoutes,
     timeoutMs,
     webhookSecret,
     jwtIssuer,

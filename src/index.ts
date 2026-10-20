@@ -18,7 +18,10 @@ if (pinnedHash) {
 
 const app = createApp({
   enableDocs: true,
-  enableTestRoutes: config.nodeEnv !== "production",
+  // Test-only routes (/__test__/explode, /api/v1/test/auth) are available in
+  // the automated test environment. Every other environment — staging and
+  // production included — must opt in explicitly via ENABLE_TEST_ROUTES.
+  enableTestRoutes: config.nodeEnv === "test" || config.enableTestRoutes,
 });
 
 // Optional fraud score drift detector. Operators opt in via env so unit tests
