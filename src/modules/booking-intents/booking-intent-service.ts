@@ -34,7 +34,12 @@ import {
   type HoldFeePolicy,
 } from "../../services/holdFeePolicy.js";
 import { CheckoutSessionService } from "../../services/checkout.js";
-import { writeReputationScore } from "../../services/reputationWriteAudit.js";
+import { strikeService } from "../../services/strikeService.js";
+import {
+  DEFAULT_GRACE_WINDOW_SECONDS,
+  GraceWindowService,
+  getGraceWindowService,
+} from "../../services/graceWindowService.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -63,6 +68,43 @@ export interface AutoRefundResult {
 
 export interface SupplierPolicies {
   getHoldPolicy(professionalId: string): HoldFeePolicy;
+}
+
+/**
+ * Narrow structural view of `StrikeService` used by `markNoShow`.
+ *
+ * Declaring only the slice the service depends on keeps the strike
+ * collaborator trivially fakeable in tests while the real singleton
+ * satisfies it structurally.
+ */
+export interface NoShowStrikeService {
+  issueStrike(params: {
+    buyerId: string;
+    intentId?: string;
+    slotId?: string;
+    reason?: string;
+    issuedAt?: number;
+  }): Promise<{ strike: { id: string }; autoSuspended: boolean }>;
+}
+
+/**
+ * Grace window applied after a slot's start time before a supplier may
+ * declare a no-show. Mirrors `DEFAULT_GRACE_WINDOW_SECONDS` (900 s = 15 min),
+ * the platform-wide default also used by the no-show detection job.
+ */
+export const DEFAULT_NO_SHOW_GRACE_MS = DEFAULT_GRACE_WINDOW_SECONDS * 1000;
+
+export interface BookingIntentServiceOptions {
+  /** Strike collaborator; defaults to the module-level `strikeService` singleton. */
+  strikeService?: NoShowStrikeService;
+  /**
+   * Explicit grace window (ms) after `intent.startTime`. When omitted, the
+   * per-slot-category window from the injected `GraceWindowService` applies
+   * (admin-configurable, default 15 minutes).
+   */
+  noShowGraceMs?: number;
+  /** Grace-window resolver; defaults to the application singleton. */
+  graceWindowService?: Pick<GraceWindowService, "resolve">;
 }
 
 export class BookingIntentError extends AppError {
@@ -94,6 +136,9 @@ export class BookingIntentService {
   private getPolicyRegistrySync: () => VersionedPolicyRegistry;
   private holdFeePolicyService: HoldFeePolicyService;
   private holdFeeRegistry: HoldFeePolicyRegistry;
+  private readonly strikeService: NoShowStrikeService;
+  private readonly noShowGraceMsOption: number | undefined = undefined;
+  private readonly graceWindowService: Pick<GraceWindowService, "resolve">;
 
   constructor(
     private readonly bookingIntentRepository: BookingIntentRepository,
@@ -103,6 +148,7 @@ export class BookingIntentService {
     policyRegistry?: VersionedPolicyRegistry,
     holdFeeRegistry?: HoldFeePolicyRegistry,
     private readonly fxRateProvider?: import("../../services/fxRateProvider.js").FxRateProvider,
+    options: BookingIntentServiceOptions = {},
   ) {
     const reg = policyRegistry ?? createDefaultRegistry();
     this.getPolicyRegistrySync = () => reg;
@@ -116,6 +162,28 @@ export class BookingIntentService {
       getRegistry: () => this.holdFeeRegistry,
       nowMs: this.nowMs,
     });
+    this.strikeService = options.strikeService ?? strikeService;
+    this.graceWindowService = options.graceWindowService ?? getGraceWindowService();
+
+    if (options.noShowGraceMs !== undefined) {
+      if (!Number.isFinite(options.noShowGraceMs) || options.noShowGraceMs < 0) {
+        throw new RangeError("noShowGraceMs must be a non-negative number.");
+      }
+      this.noShowGraceMsOption = Math.floor(options.noShowGraceMs);
+    }
+  }
+
+  /**
+   * Effective no-show grace window (ms) for a slot: an explicit constructor
+   * override wins, otherwise the admin-configurable per-category window is
+   * used (defaulting to 15 minutes).
+   */
+  private resolveNoShowGraceMs(slotId: string): number {
+    if (this.noShowGraceMsOption !== undefined) {
+      return this.noShowGraceMsOption;
+    }
+    const slot = this.slotRepository.findById(slotId);
+    return this.graceWindowService.resolve(slot?.category) * 1000;
   }
 
   private get schedulingService(): SchedulingService {
@@ -557,6 +625,19 @@ export class BookingIntentService {
     return updated;
   }
 
+  /**
+   * Marks a confirmed booking as a buyer no-show.
+   *
+   * Guards (both return 409):
+   *  - only a `confirmed` intent can be marked — a pending or held booking
+   *    has not been agreed to run yet;
+   *  - the clock must be at or past `startTime + noShowGraceMs`, so a supplier
+   *    cannot forfeit funds (and penalise the buyer) before the appointment
+   *    has actually begun.
+   *
+   * The buyer strike is issued *before* the status transition so a failing
+   * strike service leaves the intent untouched instead of half-applied.
+   */
   async markNoShow(
     intentId: string,
     actor: AuthContext,
@@ -567,7 +648,8 @@ export class BookingIntentService {
     buyerId: string;
     supplierId: string;
     forfeitAmountCents: number;
-    reputationDelta: number;
+    strikeId: string;
+    autoSuspended: boolean;
     reason: string;
   }> {
     const intent = this.bookingIntentRepository.findById(intentId);
@@ -582,14 +664,19 @@ export class BookingIntentService {
       );
     }
 
-    if (
-      intent.status !== "confirmed" &&
-      intent.status !== "pending" &&
-      intent.status !== "hold_placed"
-    ) {
+    if (intent.status !== "confirmed") {
       throw new BookingIntentError(
         409,
         `Cannot mark intent with status "${intent.status}" as a no-show.`,
+      );
+    }
+
+    const graceMs = this.resolveNoShowGraceMs(intent.slotId);
+    const eligibleAtMs = intent.startTime + graceMs;
+    if (this.nowMs() < eligibleAtMs) {
+      throw new BookingIntentError(
+        409,
+        `Cannot mark a no-show before the booked slot has started (start time + ${graceMs}ms grace).`,
       );
     }
 
@@ -603,30 +690,21 @@ export class BookingIntentService {
     const reason = (input.reason ?? "Buyer no-show").trim();
     const normalizedReason = reason.length > 0 ? reason : "Buyer no-show";
 
+    // Issue the strike first: if it throws, the intent keeps its confirmed
+    // status and the slot stays reserved (no half-applied transition).
+    const strikeOutcome = await this.strikeService.issueStrike({
+      buyerId: intent.customerId,
+      intentId: intent.id,
+      slotId: intent.slotId,
+      reason: normalizedReason,
+      issuedAt: this.nowMs(),
+    });
+
     const updated = this.bookingIntentRepository.update(intentId, {
       status: "no_show",
     });
 
     this.releaseSlotBestEffort(intent.slotId);
-
-    const scoreBefore = 0;
-    const scoreAfter = -1;
-    await writeReputationScore({
-      supplierId: intent.customerId,
-      actorId: actor.userId,
-      cause: "no_show",
-      causeId: intent.id,
-      scoreBefore,
-      scoreAfter,
-      metadata: {
-        buyerId: intent.customerId,
-        supplierId: intent.professional,
-        bookingIntentId: intent.id,
-        forfeitRatio: ratio,
-        forfeitAmountCents,
-        reason: normalizedReason,
-      },
-    });
 
     return {
       intent: updated,
@@ -634,7 +712,8 @@ export class BookingIntentService {
       buyerId: intent.customerId,
       supplierId: intent.professional,
       forfeitAmountCents,
-      reputationDelta: scoreAfter - scoreBefore,
+      strikeId: strikeOutcome.strike.id,
+      autoSuspended: strikeOutcome.autoSuspended,
       reason: normalizedReason,
     };
   }

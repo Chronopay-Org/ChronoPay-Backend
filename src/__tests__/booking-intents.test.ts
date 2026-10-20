@@ -180,8 +180,49 @@ describe("booking intents endpoints", () => {
       expect(res.body.success).toBe(true);
       expect(res.body.result.status).toBe("no_show");
       expect(res.body.result.forfeitAmountCents).toBe(300);
-      expect(res.body.result.reputationDelta).toBeLessThan(0);
+      expect(res.body.result.strikeId).toEqual(expect.any(String));
+      expect(res.body.result.autoSuspended).toBe(false);
+      expect(res.body.result).not.toHaveProperty("reputationDelta");
       expect(res.body.result.buyerId).toBe("user1");
+    });
+
+    it("rejects marking a pending intent as a no-show", async () => {
+      const intent = await repo.create({
+        ...BASE_INTENT,
+        professional: "pro-1",
+        customerId: "user1",
+      });
+
+      const res = await request(app)
+        .post(`/api/v1/booking-intents/${intent.id}/no-show`)
+        .send({ reason: "No show" })
+        .set("x-chronopay-user-id", "pro-1")
+        .set("x-chronopay-role", "professional");
+
+      expect(res.status).toBe(409);
+      expect(res.body.success).toBe(false);
+      expect(repo.findById(intent.id)?.status).toBe("pending");
+    });
+
+    it("rejects a no-show before the slot start time plus grace", async () => {
+      const intent = await repo.create({
+        ...BASE_INTENT,
+        professional: "pro-1",
+        customerId: "user1",
+        status: "confirmed",
+        startTime: Date.now() + 60 * 60 * 1000,
+        endTime: Date.now() + 2 * 60 * 60 * 1000,
+      });
+
+      const res = await request(app)
+        .post(`/api/v1/booking-intents/${intent.id}/no-show`)
+        .send({ reason: "Too early" })
+        .set("x-chronopay-user-id", "pro-1")
+        .set("x-chronopay-role", "professional");
+
+      expect(res.status).toBe(409);
+      expect(res.body.success).toBe(false);
+      expect(repo.findById(intent.id)?.status).toBe("confirmed");
     });
 
     it("rejects a customer from marking no-show", async () => {
@@ -206,6 +247,9 @@ describe("booking intents endpoints", () => {
         ...BASE_INTENT,
         professional: "pro-1",
         customerId: "user1",
+        status: "confirmed",
+        startTime: 1000,
+        endTime: 2000,
       });
 
       const res = await request(app)
