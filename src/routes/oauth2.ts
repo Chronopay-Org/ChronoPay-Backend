@@ -17,6 +17,30 @@ const COOKIE_OPTIONS = {
 };
 
 /**
+ * Clear every OAuth2 flow cookie. Called on all callback failure paths so a
+ * failed login cannot leave a half-used state/PKCE/nonce session behind.
+ */
+function clearOAuthCookies(res: Response): void {
+  res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
+  res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
+  res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
+}
+
+/**
+ * Send a callback failure response and clear the OAuth2 cookies. All callback
+ * errors go through here so cookie clearing cannot be forgotten.
+ */
+function failOAuth(
+  res: Response,
+  statusCode: number,
+  error: string,
+  message: string,
+): Response {
+  clearOAuthCookies(res);
+  return res.status(statusCode).json({ success: false, error, message });
+}
+
+/**
  * GET /api/v1/auth/oauth/:provider/start
  * Initiates OAuth2 flow for the given provider
  */
@@ -113,30 +137,28 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
 
     // Check for OAuth2 errors from provider
     if (error) {
-      return res.status(400).json({
-        success: false,
-        error: error || "oauth2_provider_error",
-        message: error_description || "Provider returned an error",
-      });
+      return failOAuth(
+        res,
+        400,
+        error || "oauth2_provider_error",
+        error_description || "Provider returned an error",
+      );
     }
 
     // Validate required parameters
     if (!provider || !code || !state) {
-      return res.status(400).json({
-        success: false,
-        error: "missing_parameters",
-        message: "Missing required OAuth2 parameters",
-      });
+      return failOAuth(
+        res,
+        400,
+        "missing_parameters",
+        "Missing required OAuth2 parameters",
+      );
     }
 
     // Validate provider
     const enabledProviders = oauth2Service.getEnabledProviders();
     if (!enabledProviders.includes(provider)) {
-      return res.status(400).json({
-        success: false,
-        error: "invalid_provider",
-        message: "Provider is not configured",
-      });
+      return failOAuth(res, 400, "invalid_provider", "Provider is not configured");
     }
 
     // Retrieve stored values from cookies
@@ -146,29 +168,17 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
 
     // Validate state - prevent CSRF and replay attacks
     if (!storedState || storedState !== state) {
-      // Clear cookies immediately
-      res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
-
-      return res.status(400).json({
-        success: false,
-        error: "state_mismatch",
-        message: "State parameter mismatch - possible CSRF attack",
-      });
+      return failOAuth(
+        res,
+        400,
+        "state_mismatch",
+        "State parameter mismatch - possible CSRF attack",
+      );
     }
 
     // Validate PKCE data
     if (!pkceData) {
-      res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
-
-      return res.status(400).json({
-        success: false,
-        error: "invalid_session",
-        message: "PKCE challenge not found",
-      });
+      return failOAuth(res, 400, "invalid_session", "PKCE challenge not found");
     }
 
     let codeVerifier: string;
@@ -176,55 +186,56 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
       const parsed = JSON.parse(pkceData);
       codeVerifier = parsed.verifier;
     } catch {
-      res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
-      res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
-
-      return res.status(400).json({
-        success: false,
-        error: "invalid_session",
-        message: "Invalid PKCE data",
-      });
+      return failOAuth(res, 400, "invalid_session", "Invalid PKCE data");
     }
 
     // Exchange code for token
     const tokenResponse = await oauth2Service.exchangeCodeForToken(provider, code, codeVerifier);
 
-    // Fetch user info from provider
-    const userInfo = await oauth2Service.fetchUserInfo(provider, tokenResponse.access_token);
+    // OIDC providers (e.g. Google) are requested with the `openid` scope and
+    // must return an ID token whose nonce matches the one stored before the
+    // redirect. GitHub is plain OAuth2 and does not return an ID token; if one
+    // shows up we still validate it rather than trusting it.
+    const requiresIdToken = oauth2Service.isOidcProvider(provider);
 
-    // Validate nonce if ID token is present (for Google/OIDC)
-    if (tokenResponse.id_token && storedNonce) {
-      try {
-        // Simple JWT decode (no verification needed - we trust the provider via HTTPS)
-        const parts = tokenResponse.id_token.split(".");
-        if (parts.length === 3) {
-          const payload = JSON.parse(
-            Buffer.from(parts[1], "base64").toString("utf-8")
-          ) as Record<string, unknown>;
-          if (!oauth2Service.verifyNonce(storedNonce, payload.nonce as string | undefined)) {
-            res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
-            res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
-            res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
+    if (requiresIdToken && !tokenResponse.id_token) {
+      return failOAuth(
+        res,
+        400,
+        "missing_id_token",
+        "Provider did not return an ID token",
+      );
+    }
 
-            return res.status(400).json({
-              success: false,
-              error: "nonce_mismatch",
-              message: "Nonce validation failed",
-            });
-          }
-        }
-      } catch (_decodeError) {
-        // If ID token can't be decoded, just skip nonce validation
-        // (not all providers send ID tokens)
+    if (requiresIdToken && !storedNonce) {
+      return failOAuth(
+        res,
+        400,
+        "missing_nonce",
+        "Nonce cookie is missing - restart the login flow",
+      );
+    }
+
+    if (tokenResponse.id_token && (requiresIdToken || storedNonce)) {
+      // Decoding is strict: a malformed token is a 400, never a skipped check.
+      const payload = oauth2Service.decodeIdTokenPayload(tokenResponse.id_token);
+      const tokenNonce = typeof payload.nonce === "string" ? payload.nonce : undefined;
+
+      if (!oauth2Service.verifyNonce(storedNonce, tokenNonce)) {
+        return failOAuth(res, 400, "nonce_mismatch", "Nonce validation failed");
       }
     }
 
-    // Generate application JWT
+    // Fetch user info from provider
+    const userInfo = await oauth2Service.fetchUserInfo(provider, tokenResponse.access_token);
+
+    // Generate application JWT. `sub` is namespaced by provider: provider user
+    // ids are only unique per-provider, so a raw id would let e.g. GitHub user
+    // 12345 and Google user 12345 share one ChronoPay identity.
     const jwtSecret = configService.getSecret("JWT_SECRET");
     const appJwt = await signJwt(
       {
-        sub: userInfo.id,
+        sub: oauth2Service.buildAppSubject(userInfo.provider, userInfo.id),
         email: userInfo.email,
         name: userInfo.name,
         provider: userInfo.provider,
@@ -239,9 +250,7 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
     );
 
     // Clear OAuth2 cookies
-    res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
-    res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
-    res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
+    clearOAuthCookies(res);
 
     // Return the JWT to the client (do NOT include provider tokens)
     return res.status(200).json({
@@ -255,6 +264,8 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
+    clearOAuthCookies(res);
+
     if (error instanceof OAuth2Error) {
       return res.status(error.statusCode).json({
         success: false,
