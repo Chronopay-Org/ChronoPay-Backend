@@ -86,10 +86,17 @@ const noteField = z
  * an inline DTSTART without an explicit timezone offset ("Z" or TZID=) is
  * ambiguous across DST boundaries and must be rejected.
  */
+function findDtstartLine(rrule: string): string | undefined {
+  return rrule
+    .split(/\r?\n/)
+    .find((line) => /^DTSTART(?:;[^:]*)?:/.test(line));
+}
+
 function rruleHasExplicitOffset(rrule: string): boolean {
-  const dtstart = rrule.match(/DTSTART(?:;[^:]*)?:(.*)(?:\n|$)/);
-  if (!dtstart) return true;
-  return dtstart[1].endsWith("Z") || rrule.includes("TZID=");
+  const dtstartLine = findDtstartLine(rrule);
+  if (!dtstartLine) return true;
+  const value = dtstartLine.slice(dtstartLine.indexOf(":") + 1);
+  return value.endsWith("Z") || dtstartLine.includes("TZID=");
 }
 
 /**
@@ -126,7 +133,12 @@ export const CreateBookingIntentBodySchema = z
       .optional(),
     note: noteField,
     bookingType: z.enum(["standard", "refundable_hold"]).optional(),
-    holdDeadlineMs: z.number().optional(),
+    holdDeadlineMs: z
+      .number()
+      .int({ message: "holdDeadlineMs must be an integer" })
+      .positive({ message: "holdDeadlineMs must be positive" })
+      .max(Number.MAX_SAFE_INTEGER, { message: "holdDeadlineMs exceeds safe integer range" })
+      .optional(),
   })
   .strip()
   .superRefine((data, ctx) => {
@@ -135,6 +147,13 @@ export const CreateBookingIntentBodySchema = z
         code: "custom",
         path: ["slotId"],
         message: "slotId is required when rrule is not provided",
+      });
+    }
+    if (data.slotId !== undefined && data.rrule !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["rrule"],
+        message: "slotId and rrule are mutually exclusive",
       });
     }
   });

@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "fix/issue-1320-fix-validation-booking-intent-body-accepts",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "fix/issue-1320-fix-validation-booking-intent-body-accepts": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "fix/issue-1320-fix-validation-booking-intent-body-accepts",
+    "origin"
+  ]
+}

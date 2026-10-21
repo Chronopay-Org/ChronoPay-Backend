@@ -218,4 +218,21 @@ describe("parseCreateBookingIntentBody", () => {
       parseCreateBookingIntentBody({ slotId: "abc 123" }),
     ).toThrow(BookingIntentError);
   });
+
+  it("accepts CRLF RRULE with explicit Z offset", () => {
+    const result = parseCreateBookingIntentBody({
+      rrule: "DTSTART:20260101T090000Z\r\nRRULE:FREQ=DAILY;COUNT=2",
+    });
+    expect(result.rrule).toBe(
+      "DTSTART:20260101T090000Z\r\nRRULE:FREQ=DAILY;COUNT=2",
+    );
+  });
+
+  it("rejects floating DTSTART without Z or TZID", () => {
+    expect(() =>
+      parseCreateBookingIntentBody({
+        rrule: "DTSTART:20260101T090000\r\nRRULE:FREQ=DAILY;COUNT=2",
+      }),
+    ).toThrow(BookingIntentError);
+  });
 });

@@ -12,7 +12,7 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
       expect(() => parseCreateBookingIntentBody(ambiguousInput)).toThrow(/offset|timezone/i);
     });
 
-    it("should accept RRULEs with Z offset", () => {
+    it("should accept RRULE with Z offset", () => {
       const validInput = {
         rrule: "DTSTART:20261101T013000Z\nFREQ=DAILY;COUNT=3"
       };
@@ -28,6 +28,24 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
 
       const result = parseCreateBookingIntentBody(validInput);
       expect(result).toHaveProperty("rrule");
+    });
+
+    it("should accept CRLF RRULE with a Z offset", () => {
+      const validInput = {
+        rrule: "DTSTART:20260101T090000Z\r\nRRULE:FREQ=DAILY;COUNT=2"
+      };
+
+      const result = parseCreateBookingIntentBody(validInput);
+      expect(result).toHaveProperty("rrule");
+    });
+
+    it("should reject CRLF RRULEs with a floating DTSTART", () => {
+      const ambiguousInput = {
+        rrule: "DTSTART:20260101T090000\r\nRRULE:FREQ=DAILY;COUNT=2"
+      };
+
+      expect(() => parseCreateBookingIntentBody(ambiguousInput)).toThrow(BookingIntentError);
+      expect(() => parseCreateBookingIntentBody(ambiguousInput)).toThrow(/offset|timezone/i);
     });
   });
 
@@ -62,7 +80,7 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
         expect(dates[0].toISOString()).toBe("2026-10-31T05:30:00.000Z");
         // Nov 1 01:30 should be the first occurrence in the fold (EDT) -> 05:30 UTC
         // or the second occurrence (EST) -> 06:30 UTC. rrule usually preserves wall clock time.
-        // Wall clock time 01:30 on Nov 1 could be 05:30Z or 06:30Z depending on resolution rule.
+        // Wall clock time 01:30 on Nov 1 could be 05:30Z or 06:30depending on resolution rule.
         // Let's assert the behavior is deterministic.
         expect(dates[1].getTime()).toBeGreaterThan(dates[0].getTime());
       });
@@ -95,7 +113,7 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
     describe("Asia/Tokyo", () => {
       it("resolves correctly without DST transitions", () => {
         const rrule = "DTSTART;TZID=Asia/Tokyo:20261101T013000\nFREQ=DAILY;COUNT=2";
-        const dates = expandRRule(rrule);
+        const dates = expandRRUle(rrule);
 
         expect(dates).toHaveLength(2);
         // Nov 1 01:30 JST = Oct 31 16:30 UTC
