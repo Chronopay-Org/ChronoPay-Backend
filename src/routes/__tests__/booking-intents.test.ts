@@ -1,6 +1,10 @@
 import request from "supertest";
 import { createApp } from "../../app.js";
 import { setFeatureFlagsFromEnv } from "../../flags/service.js";
+import { fraudReviewQueue } from "../../services/fraudReviewQueue.js";
+import { signJwt } from "../../utils/jwt.js";
+import { configService } from "../../config/config.service.js";
+import { flushMicrotasks } from "../../test-helpers/fakeMfaRepository.js";
 
 describe("POST /api/v1/booking-intents", () => {
   const app = createApp({
@@ -260,6 +264,151 @@ describe("POST /api/v1/booking-intents", () => {
 
       expect(second.status).toBe(403);
       expect(second.body.reasonCodes).toContain("DEVICE_UNRECOGNIZED");
+    });
+  });
+
+  describe("Fraud challenge retry and HITL review ids (issue #1345)", () => {
+    const DISPOSABLE_EMAIL = "attacker@tempmail.com";
+    const MFA_SECRET = "route-step-up-mfa-secret-12345";
+    const ISSUER = "test-issuer";
+    const AUDIENCE = "test-audience";
+    // Occupied slot (bookable: false) — used to build velocity without ever
+    // consuming the free slot the challenge retry needs for its 201.
+    const OCCUPIED_SLOT = "slot-22222222-2222-4222-8222-222222222222";
+
+    async function mfaToken(sub: string): Promise<string> {
+      const iat = Math.floor(Date.now() / 1000);
+      return signJwt({ sub, iat, mfa_at: iat }, MFA_SECRET, {
+        expiresInSec: 3600,
+        issuer: ISSUER,
+        audience: AUDIENCE,
+      });
+    }
+
+    beforeAll(async () => {
+      process.env.MFA_CHALLENGE_SECRET = MFA_SECRET;
+      process.env.MFA_ISSUER = ISSUER;
+      process.env.JWT_AUDIENCE = AUDIENCE;
+      configService.refresh();
+      await flushMicrotasks(20);
+    });
+
+    afterAll(() => {
+      delete process.env.MFA_CHALLENGE_SECRET;
+      delete process.env.MFA_ISSUER;
+      delete process.env.JWT_AUDIENCE;
+      configService.refresh();
+    });
+
+    beforeEach(() => {
+      fraudReviewQueue._reset();
+    });
+
+    it("queues the HITL review item with the created intent's id (fails on main: placeholder id)", async () => {
+      const freshApp = createApp({ apiKey: "test-api-key" });
+
+      const res = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", validUserId)
+        .set("x-chronopay-role", validRole)
+        .send({ slotId: validSlotId, email: DISPOSABLE_EMAIL });
+
+      expect(res.status).toBe(201);
+      expect(res.body.intent.id).toBeDefined();
+
+      const pending = fraudReviewQueue.getPendingItems();
+      expect(pending).toHaveLength(1);
+      // Acceptance criterion: intentId equals the created intent's id — on
+      // main the middleware enqueues the literal "temp-intent-id" instead.
+      expect(pending[0].intentId).toBe(res.body.intent.id);
+      expect(pending[0].score).toBe(1);
+      expect(pending[0].status).toBe("pending");
+    });
+
+    it("creates the intent when a blocked request is retried with the token plus fresh MFA, and rejects reuse", async () => {
+      const freshApp = createApp({ apiKey: "test-api-key" });
+
+      // Five clean requests build velocity without booking validSlotId.
+      for (let i = 0; i < 5; i += 1) {
+        const warm = await request(freshApp)
+          .post("/api/v1/booking-intents")
+          .set("x-chronopay-user-id", validUserId)
+          .set("x-chronopay-role", validRole)
+          .send({ slotId: OCCUPIED_SLOT });
+        expect([201, 409]).toContain(warm.status);
+      }
+
+      const blocked = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", validUserId)
+        .set("x-chronopay-role", validRole)
+        .send({ slotId: validSlotId, email: DISPOSABLE_EMAIL });
+
+      expect(blocked.status).toBe(403);
+      expect(blocked.body.challengeRequired).toBe(true);
+      expect(typeof blocked.body.challengeToken).toBe("string");
+
+      const retry = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", validUserId)
+        .set("x-chronopay-role", validRole)
+        .set("x-fraud-challenge", blocked.body.challengeToken)
+        .set("x-chronopay-mfa", await mfaToken(validUserId))
+        .send({ slotId: validSlotId, email: DISPOSABLE_EMAIL });
+
+      expect(retry.status).toBe(201);
+      expect(retry.body.success).toBe(true);
+      expect(retry.body.intent.id).toBeDefined();
+
+      const replay = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", validUserId)
+        .set("x-chronopay-role", validRole)
+        .set("x-fraud-challenge", blocked.body.challengeToken)
+        .set("x-chronopay-mfa", await mfaToken(validUserId))
+        .send({ slotId: validSlotId, email: DISPOSABLE_EMAIL });
+
+      expect(replay.status).toBe(403);
+      expect(replay.body).toMatchObject({
+        success: false,
+        error: "Fraud challenge is invalid or has expired.",
+        challengeRequired: true,
+      });
+    });
+
+    it("rejects a challenge token presented by a different actor", async () => {
+      // Threshold 1 so the second actor's very first disposable-email request
+      // is blocked and reaches the challenge branch (their velocity is fresh).
+      process.env.FRAUD_STEP_UP_THRESHOLD = "1";
+      const freshApp = createApp({ apiKey: "test-api-key" });
+
+      for (let i = 0; i < 5; i += 1) {
+        const warm = await request(freshApp)
+          .post("/api/v1/booking-intents")
+          .set("x-chronopay-user-id", validUserId)
+          .set("x-chronopay-role", validRole)
+          .send({ slotId: OCCUPIED_SLOT });
+        expect([201, 409]).toContain(warm.status);
+      }
+      const blocked = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", validUserId)
+        .set("x-chronopay-role", validRole)
+        .send({ slotId: validSlotId, email: DISPOSABLE_EMAIL });
+      expect(blocked.status).toBe(403);
+      expect(typeof blocked.body.challengeToken).toBe("string");
+
+      const otherActor = "user-999";
+      const foreignRetry = await request(freshApp)
+        .post("/api/v1/booking-intents")
+        .set("x-chronopay-user-id", otherActor)
+        .set("x-chronopay-role", validRole)
+        .set("x-fraud-challenge", blocked.body.challengeToken)
+        .set("x-chronopay-mfa", await mfaToken(otherActor))
+        .send({ slotId: validSlotId, email: DISPOSABLE_EMAIL });
+
+      expect(foreignRetry.status).toBe(403);
+      expect(foreignRetry.body.error).toBe("Fraud challenge is invalid or has expired.");
     });
   });
 });

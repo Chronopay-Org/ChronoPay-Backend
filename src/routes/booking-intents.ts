@@ -16,7 +16,11 @@ import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import { validateBody } from "../middleware/validation.js";
-import { antiFraudScoring, captureRequestBody } from "../middleware/fraudScoring.js";
+import {
+  antiFraudScoring,
+  captureRequestBody,
+  enqueueHitlReviewForIntent,
+} from "../middleware/fraudScoring.js";
 import {
   CreateBookingIntentBodySchema,
   type CreateBookingIntentBody,
@@ -95,6 +99,12 @@ export function createBookingIntentsRouter(
             },
             req.auth!,
           );
+          // Borderline fraud scores are queued for HITL here — the middleware
+          // cannot know the ids before creation (issue #1345). One review item
+          // per created intent so reviewers can open the real intent.
+          for (const created of report.successes) {
+            enqueueHitlReviewForIntent(req, created.id);
+          }
           res.status(201).json({
             success: true,
             report,
@@ -109,6 +119,7 @@ export function createBookingIntentsRouter(
             },
             req.auth!,
           );
+          enqueueHitlReviewForIntent(req, intent.id);
           res.status(201).json({
             success: true,
             intent,
