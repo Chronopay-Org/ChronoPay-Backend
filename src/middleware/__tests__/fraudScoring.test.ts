@@ -1,8 +1,12 @@
-import express from "express";
+import express, { type Request } from "express";
 import request from "supertest";
 import { jest } from "@jest/globals";
 import { FraudScorer } from "../../services/fraudScorer.js";
-import { antiFraudScoring, captureRequestBody } from "../fraudScoring.js";
+import {
+  antiFraudScoring,
+  captureRequestBody,
+  enqueuePendingFraudReviews,
+} from "../fraudScoring.js";
 import { getFraudDriftSnapshot, resetFraudDriftState } from "../../metrics/fraudDriftMetrics.js";
 import { fraudReviewQueue } from "../../services/fraudReviewQueue.js";
 import { QuarantineStore } from "../../services/quarantineStore.js";
@@ -144,7 +148,7 @@ describe("antiFraudScoring middleware", () => {
     expect(entry.fraudResult.score).toBe(2);
   });
 
-  it("queues borderline scores (threshold - 1) for HITL review and still allows the intent", async () => {
+  it("defers borderline scores (threshold - 1) for HITL review and still allows the intent", async () => {
     const app = buildApp({ scorer: makeScorer() });
 
     const res = await request(app).post("/").send({ email: DISPOSABLE });
@@ -152,9 +156,19 @@ describe("antiFraudScoring middleware", () => {
     expect(res.status).toBe(200);
     expect(res.body.score).toBe(1);
 
+    // The middleware never enqueues with a placeholder: it records the pending
+    // review on the request and the route reports the created intent id
+    // (issue #1345).
+    expect(fraudReviewQueue.getPendingItems()).toHaveLength(0);
+
+    // The deferred review is only flushed once an intent id exists.
+    enqueuePendingFraudReviews({ fraudReview: { score: 1, reasons: ["disposable_email"] } } as Request, [
+      "intent-42",
+    ]);
     const pending = fraudReviewQueue.getPendingItems();
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({
+      intentId: "intent-42",
       score: 1,
       reasons: ["disposable_email"],
     });
@@ -480,18 +494,17 @@ describe("FraudScoringOptions (issue #1109)", () => {
     expect(codes).toContain("INVALID_CONTACT_INFO");
   });
 
-  it("enqueues borderline scores with the intent reference and never blocks them", async () => {
+  it("never enqueues a placeholder HITL item for borderline scores (issue #1345)", async () => {
     const app = buildApp({ scorer: makeScorer() });
 
     const res = await request(app).post("/").send({ slotId: "slot-hitl", email: DISPOSABLE });
     expect(res.status).toBe(200);
 
-    const pending = fraudReviewQueue.getPendingItems();
-    expect(pending.length).toBeGreaterThan(0);
-    const item = pending[pending.length - 1];
-    expect(item.intentId).toBe("temp-intent-id");
-    expect(item.score).toBeGreaterThan(0);
-    expect(Array.isArray(item.reasons)).toBe(true);
+    // No queue item is created until the route reports a real intent id, and
+    // the helper is a no-op when there is no deferred review to flush.
+    expect(fraudReviewQueue.getPendingItems()).toHaveLength(0);
+    enqueuePendingFraudReviews({} as Request, ["intent-unrelated"]);
+    expect(fraudReviewQueue.getPendingItems()).toHaveLength(0);
   });
 
   it("rejects malformed scoring inputs deterministically (scorer throws -> fail closed)", async () => {
