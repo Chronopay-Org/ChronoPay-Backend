@@ -273,7 +273,7 @@ describe("auth MFA routes", () => {
       for (let attempt = 0; attempt < 5; attempt += 1) {
         const res = await request(app)
           .post("/api/v1/auth/mfa/verify")
-          .set("Authorization", `******
+          .set("Authorization", `Bearer ${token}`)
           .send({ code: invalidCode });
         expect(res.status).toBe(401);
       }
@@ -281,7 +281,7 @@ describe("auth MFA routes", () => {
       const correctCode = codeForSecret(secretBase32);
       const locked = await request(app)
         .post("/api/v1/auth/mfa/verify")
-        .set("Authorization", `******
+        .set("Authorization", `Bearer ${token}`)
         .send({ code: correctCode });
       expect(locked.status).toBe(429);
       expect(locked.body.success).toBe(false);

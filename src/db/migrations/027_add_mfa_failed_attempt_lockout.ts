@@ -2,7 +2,7 @@ import { PoolClient } from "pg";
 import { Migration } from "../migrationRunner.js";
 
 export const migration: Migration = {
-  id: "027",
+  id: "038",
   name: "add_mfa_failed_attempt_lockout",
 
   async up(client: PoolClient): Promise<void> {

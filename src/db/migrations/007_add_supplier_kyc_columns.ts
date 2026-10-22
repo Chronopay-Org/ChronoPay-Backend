@@ -12,8 +12,7 @@ export const migration: Migration = {
     await client.query(`
       ALTER TABLE users
       ADD COLUMN kyc_status kyc_status_type NOT NULL DEFAULT 'pending',
-      ADD COLUMN kyc_ref VARCHAR(255),
-      ADD COLUMN kyc_status_updated_at TIMESTAMP WITH TIME ZONE
+      ADD COLUMN kyc_ref VARCHAR(255)
     `);
   },
 
@@ -21,8 +20,7 @@ export const migration: Migration = {
     await client.query(`
       ALTER TABLE users
       DROP COLUMN IF EXISTS kyc_status,
-      DROP COLUMN IF EXISTS kyc_ref,
-      DROP COLUMN IF EXISTS kyc_status_updated_at
+      DROP COLUMN IF EXISTS kyc_ref
     `);
     await client.query(`
       DROP TYPE IF EXISTS kyc_status_type

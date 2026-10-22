@@ -260,16 +260,16 @@ export class IdempotencyError extends AppError {
   constructor(
     message: string,
     code:
-      | typeof ERROR_CODES.IDEMROTENCY_KEY_INVALID.code
-      | typeof ERROR_CODES.IDEMPOTENCY_IN_PROCRIESS.code
+      | typeof ERROR_CODES.IDEMPOTENCY_KEY_INVALID.code
+      | typeof ERROR_CODES.IDEMPOTENCY_IN_PROGRESS.code
       | typeof ERROR_CODES.IDEMPOTENCY_KEY_MISMATCH.code,
     messageKey?: I18nMessageKey,
   ) {
     const status =
-      code === ERROR_CODES.IDEMROTENCY_KEY_INVALID.code
-        ? ERROR_CODES.IDEMROTENCY_KEY_INVALID.status
-        : code === ERROR_CODES.IDEMROTENCY_IN_PROCRIESS.code
-          ? ERROR_CODES.IDEMROTENCY_IN_PROGRESS.status
+      code === ERROR_CODES.IDEMPOTENCY_KEY_INVALID.code
+        ? ERROR_CODES.IDEMPOTENCY_KEY_INVALID.status
+        : code === ERROR_CODES.IDEMPOTENCY_IN_PROGRESS.code
+          ? ERROR_CODES.IDEMPOTENCY_IN_PROGRESS.status
           : ERROR_CODES.IDEMPOTENCY_KEY_MISMATCH.status;
     super(
       message,

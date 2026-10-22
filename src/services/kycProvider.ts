@@ -2,15 +2,6 @@ export interface KycWebhookPayload {
   supplierId: string;
   kycRef: string;
   status: "pending" | "verified" | "rejected" | "under_review";
-  /**
-   * Unique identifier for this webhook event, used for idempotent delivery.
-   */
-  eventId: string;
-  /**
-   * ISO-8601 timestamp of when the event occurred at the provider,
-   * used for stalemess and ordering checks.
-   */
-  occurredAt: string;
 }
 
 export interface KycProvider {

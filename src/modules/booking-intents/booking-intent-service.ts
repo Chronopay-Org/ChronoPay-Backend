@@ -38,6 +38,12 @@ import {
   type SupplierCancellationOverrideStore,
 } from "../../services/supplierCancellationOverrideStore.js";
 import { CheckoutSessionService } from "../../services/checkout.js";
+import { strikeService } from "../../services/strikeService.js";
+import {
+  DEFAULT_GRACE_WINDOW_SECONDS,
+  GraceWindowService,
+  getGraceWindowService,
+} from "../../services/graceWindowService.js";
 import { writeReputationScore } from "../../services/reputationWriteAudit.js";
 import { defaultAuditLogger } from "../../services/auditLogger.js";
 
@@ -105,6 +111,11 @@ export interface BookingIntentServiceOptions {
   noShowGraceMs?: number;
   /** Grace-window resolver; defaults to the application singleton. */
   graceWindowService?: Pick<GraceWindowService, "resolve">;
+  /**
+   * Supplier cancellation-override store consulted when capturing
+   * `cancellationPolicySnapshot`; defaults to the application singleton.
+   */
+  supplierOverrideStore?: SupplierCancellationOverrideStore;
 }
 
 export class BookingIntentError extends AppError {
@@ -148,7 +159,7 @@ export class BookingIntentService {
     policyRegistry?: VersionedPolicyRegistry,
     holdFeeRegistry?: HoldFeePolicyRegistry,
     private readonly fxRateProvider?: import("../../services/fxRateProvider.js").FxRateProvider,
-    supplierOverrideStore?: SupplierCancellationOverrideStore,
+    options: BookingIntentServiceOptions = {},
   ) {
     const reg = policyRegistry ?? createDefaultRegistry();
     this.getPolicyRegistrySync = () => reg;
@@ -156,7 +167,7 @@ export class BookingIntentService {
       getPolicyRegistrySync: this.getPolicyRegistrySync,
       nowMs: this.nowMs,
       nowIso: this.now,
-      supplierOverrideStore: supplierOverrideStore ?? defaultSupplierCancellationOverrideStore,
+      supplierOverrideStore: options.supplierOverrideStore ?? defaultSupplierCancellationOverrideStore,
     });
     this.holdFeeRegistry = holdFeeRegistry ?? createEmptyHoldFeeRegistry();
     this.holdFeePolicyService = new HoldFeePolicyService({
@@ -273,36 +284,9 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
 
-    let pricingSnapshot: PricingSnapshot | undefined;
-    if (slot.pricingStrategy) {
-      const ps = slot.pricingStrategy;
-      const allIntents = await this.bookingIntentRepository.listAll();
-      const activeBookings = allIntents.filter(
-        (i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"),
-      ).length;
-      const capacity = ps.capacity ?? 1;
-      const currentMs = this.nowMs();
-
-      const result = resolvePrice(ps.strategyId, {
-        basePrice: ps.basePrice,
-        slotStartMs: slot.startTime,
-        nowMs: currentMs,
-        activeBookings,
-        capacity,
-        config: ps.config,
-      });
-
-      pricingSnapshot = {
-        strategyId: result.strategyId,
-        resolvedPrice: result.price,
-        basePrice: ps.basePrice,
-        slotStartMs: slot.startTime,
-        nowMs: currentMs,
-        activeBookings,
-        capacity,
-        config: ps.config,
-      };
-    }
+    const pricingSnapshot = slot.pricingStrategy
+      ? resolvePricingSnapshot(slot, await this.bookingIntentRepository.listAll(), this.nowMs())
+      : undefined;
 
     const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot(slot.professional);
     const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
@@ -547,7 +531,7 @@ export class BookingIntentService {
    *   `CheckoutSessionService.calculateDurationBasedRefund` over the remaining
    *   session time (0 once the slot has fully elapsed).
    */
-  refundIntent(
+  async refundIntent(
     intentId: string,
     actor: AuthContext,
     input: { reason?: string; cancelledAtMs?: number } = {},
@@ -562,8 +546,8 @@ export class BookingIntentService {
     holdFee: number;
     taxReversal: number;
     breakdown: RefundBreakdown;
-  } {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  }> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -619,7 +603,7 @@ export class BookingIntentService {
     let consumedRatio: number;
     let breakdown: RefundBreakdown;
 
-    if (cancelledAtMs < intent.startTime) {
+    if (effectiveCancelledAtMs < intent.startTime) {
       breakdown = this.cancellationPolicyService.calculateRefund(intent);
       refundAmountCents = breakdown.netRefund;
       refundRatio = breakdown.tierApplied?.refundRatio ?? 0;
@@ -630,7 +614,7 @@ export class BookingIntentService {
         amountCents,
         startTimeMs: intent.startTime,
         endTimeMs: intent.endTime,
-        nowMs: cancelledAtMs,
+        nowMs: effectiveCancelledAtMs,
         curve: "linear",
       });
       const policyVersionId =
@@ -641,7 +625,7 @@ export class BookingIntentService {
         netRefund: refundSummary.refundAmountCents,
         policyVersion: policyVersionId,
         tierApplied: null,
-        hoursUntilStart: (intent.startTime - cancelledAtMs) / (1000 * 60 * 60),
+        hoursUntilStart: (intent.startTime - effectiveCancelledAtMs) / (1000 * 60 * 60),
         basePrice: amountCents,
         holdFee: 0,
       };
@@ -785,6 +769,16 @@ export class BookingIntentService {
     const forfeitAmountCents = Math.round(baseAmount * ratio);
     const reason = (input.reason ?? "Buyer no-show").trim();
     const normalizedReason = reason.length > 0 ? reason : "Buyer no-show";
+
+    // Issue the strike first: if it throws, the intent keeps its confirmed
+    // status and the slot stays reserved (no half-applied transition).
+    const strikeOutcome = await this.strikeService.issueStrike({
+      buyerId: intent.customerId,
+      intentId: intent.id,
+      slotId: intent.slotId,
+      reason: normalizedReason,
+      issuedAt: this.nowMs(),
+    });
 
     const updated = await this.bookingIntentRepository.update(intentId, {
       status: "no_show",

@@ -630,7 +630,7 @@ describe("CancellationPolicyService with supplier overrides", () => {
         undefined,
         holdFeeRegistry,
         undefined,
-        store,
+        { supplierOverrideStore: store },
       );
       const policyService = makeService(() => fixedNowMs, store);
       const actor = { userId: "cust-1", role: "customer" as const, claims: {} as any };

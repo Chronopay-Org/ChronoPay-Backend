@@ -20,13 +20,6 @@
  *      exactly once), or a quarantine entry in quarantine mode — instead of
  *      silently dropping.
  *
- * Challenge mode issues a one-time `challengeToken` (persisted in
- * {@link FraudChallengeStore}, bound to the actor and the request body). A
- * blocked client retries the identical request with the token in the
- * `x-fraud-challenge` header *and* a fresh MFA proof in `x-chronopay-mfa`; the
- * block is then bypassed exactly once and any reuse of the token is rejected
- * (issue #1345).
- *
  * Failure semantics are explicit: if the scorer throws (e.g. a broken rule or
  * misconfigured model), the request FAILS CLOSED with a 500 so that an
  * unscored intent can never pass through the wall to the creation path.
@@ -50,16 +43,6 @@ import {
 } from "../services/fraudReasonCodes.js";
 import { assertFreshMfa } from "./requireFreshMfa.js";
 import { logger } from "../utils/logger.js";
-import {
-  FraudChallengeStore,
-  fraudChallengeStore,
-  hashRequestBody,
-  type FraudChallengeRejection,
-} from "../services/fraudChallengeStore.js";
-import {
-  verifyRequestMfaChallenge,
-  type RequireFreshMfaOptions,
-} from "./requireFreshMfa.js";
 
 declare global {
   namespace Express {
@@ -68,13 +51,6 @@ declare global {
       fraudResult?: FraudEvaluationResult;
       /** Final anti-fraud decision, set once the wall has evaluated the request. */
       fraudDecision?: FraudDecision;
-      /**
-       * Borderline (threshold - 1) evaluation awaiting a HITL review item.
-       * Set by the anti-fraud wall; the route handler reports the created
-       * intent id(s) via {@link enqueuePendingFraudReviews} so the queued item
-       * is bound to a real intent instead of a placeholder (issue #1345).
-       */
-      fraudReview?: { score: number; reasons: string[] };
       /**
        * Parsed-but-unvalidated request body, captured before `validateBody`
        * strips unknown fields. Lets the anti-fraud wall inspect fields that
@@ -136,39 +112,6 @@ export function captureRequestBody(
   next();
 }
 
-function readHeader(req: Request, name: string): string {
-  const raw = req.headers[name];
-  const header = Array.isArray(raw) ? raw[0] : raw;
-  return typeof header === "string" ? header.trim() : "";
-}
-
-const FRAUD_CHALLENGE_REJECTIONS: Record<FraudChallengeRejection, string> = {
-  unknown: "Fraud challenge token is not valid.",
-  expired: "Fraud challenge token has expired; please retry to obtain a new one.",
-  actor_mismatch: "Fraud challenge token does not match this request.",
-  body_mismatch: "Fraud challenge token does not match this request.",
-};
-
-/**
- * Reports the HITL review the anti-fraud wall deferred for `req` (borderline
- * score), binding it to the intent id(s) the route actually created. Called by
- * the route handler after creation so a review item never points at a
- * placeholder id (issue #1345). A no-op when the score was not borderline or
- * no intent was created.
- */
-export function enqueuePendingFraudReviews(
-  req: Request,
-  intentIds: readonly string[],
-): void {
-  const pending = req.fraudReview;
-  if (!pending) {
-    return;
-  }
-  for (const intentId of intentIds) {
-    fraudReviewQueue.enqueue(intentId, pending.score, pending.reasons);
-  }
-}
-
 export function antiFraudScoring(options: FraudScoringOptions = {}) {
   const scorer = options.scorer ?? new FraudScorer();
   const auditLogger = options.auditLogger ?? defaultAuditLogger;
@@ -222,6 +165,7 @@ export function antiFraudScoring(options: FraudScoringOptions = {}) {
     next();
   }
 
+  return (req: Request, res: Response, next: NextFunction): void => {
     const intentReference = deriveIntentReference(req);
 
     let result: FraudEvaluationResult;
@@ -250,13 +194,10 @@ export function antiFraudScoring(options: FraudScoringOptions = {}) {
     recordFraudScore(`v${process.env.FRAUD_MODEL_VERSION || "default"}`, result.score);
 
     const threshold = scorer.getThreshold();
-    const borderline = result.score === threshold - 1 && result.score > 0;
     const decision: FraudDecision =
       result.score >= threshold
-        ? challengeBypassed
-          ? "allowed"
-          : "blocked"
-        : borderline
+        ? "blocked"
+        : result.score === threshold - 1 && result.score > 0
           ? "review"
           : "allowed";
     // Published on the request so the route can act on the decision (the HITL
@@ -291,9 +232,7 @@ export function antiFraudScoring(options: FraudScoringOptions = {}) {
         .catch(() => {});
     });
 
-    // A solved step-up challenge bypasses the block exactly once; otherwise a
-    // high score steps the request up instead of dropping it.
-    if (result.score >= threshold && !challengeBypassed) {
+    if (result.score >= threshold) {
       const locale = req.headers["accept-language"]?.split(",")[0]?.split("-")[0] || "en";
       const publicCodes = Array.from(
         new Set(result.reasons.map((reason) => getFraudReasonCode(reason))),
@@ -346,7 +285,7 @@ export function antiFraudScoring(options: FraudScoringOptions = {}) {
         res.status(403).json({
           ...errorPayload,
           challengeRequired: true,
-          challengeToken: issuedToken,
+          challengeToken,
         });
       } else {
         const quarantineId = quarantineStore.add({

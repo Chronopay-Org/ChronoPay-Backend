@@ -164,14 +164,8 @@ function resolvePoolMax(): number | undefined {
  */
 export function getPool(): Pool {
   if (!pool) {
-    const url = process.env.DATABASE_URL;
-    if (!url) {
-      throw new Error(
-        "DATABASE_URL Environment variable is not set. " +
-          "Set it to a PostgreSQL connection string, e.g. " +
-          "postgresql://user:password@localhost:5432/chronopay",
-      );
-    }
+    const url = resolveConnectionUrl();
+    const max = resolvePoolMax();
 
     pool = _poolFactory(url, max !== undefined ? { max } : undefined);
 

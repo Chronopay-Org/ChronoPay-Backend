@@ -2,7 +2,7 @@ import { PoolClient } from "pg";
 import { Migration } from "../migrationRunner.js";
 
 export const migration: Migration = {
-  id: "027",
+  id: "037",
   name: "add_outbox_claim_lease",
 
   async up(client: PoolClient): Promise<void> {

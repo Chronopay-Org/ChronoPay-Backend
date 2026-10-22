@@ -61,7 +61,7 @@ function getCheckoutHmacSecret(): string | undefined {
 function hmacOrAdminAuth(req: Request, res: Response, next: NextFunction): void {
   if (req.headers["x-webhook-signature"]) {
     // Provider callback path — validate HMAC.
-    internalHmacAuth(getCheckoutHmacSecret())(req, res, next);
+    internalHmacAuth({ current: getCheckoutHmacSecret(), secretName: "Checkout" })(req, res, next);
   } else {
     // Human/admin path — validate JWT then enforce admin role.
     authenticateToken(req, res, (err) => {

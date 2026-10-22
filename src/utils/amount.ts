@@ -3,7 +3,7 @@
  * Protects against floating-point precision exploits and enforces integer boundaries natively.
  */
 
-export type SupportedCurrencies = "USD" | "EAR" | "GBP" | "XLM";
+export type SupportedCurrencies = "USD" | "EUR" | "GBP" | "XLM";
 
 export const SUPPORTED_CURRENCIES: readonly SupportedCurrencies[] = ["USD", "EUR", "GBP", "XLM"] as const;
 
@@ -68,7 +68,7 @@ export class AmountUtils {
    * Rounds half-up securely enforcing deterministic returns.
    * 
    * @param amount The base minor unit amount
-   * @param bps The basis minor units for the fee (10000 bps = 100%, 100 = 1%)
+   * @param bps The basis points for the fee (10000 bps = 100%, 100 = 1%)
    */
   static calculateFee(amount: number, bps: number): number {
     if (!this.validate(amount)) throw new Error("Invalid amount for fee calculation");
@@ -92,7 +92,7 @@ export class AmountUtils {
     if (decimals === undefined) throw new Error("Unsupported currency format");
 
     // Avoid parseFloat directly due to JS float mechanics. We split and parse integers manually.
-    const decimalPattern = new RegExp(`^\\d+(\\.\\d{1,${decimals})?$`);
+    const decimalPattern = new RegExp(`^\\d+(\\.\\d{1,${decimals}})?$`);
     if (!decimalPattern.test(value)) {
       throw new Error(`Invalid decimal format string to parse. Max allowed decimals for currency is ${decimals}`);
     }

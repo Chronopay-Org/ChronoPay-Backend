@@ -31,8 +31,10 @@ import {
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { authenticateToken } from "../middleware/auth.middleware.js";
 
+import { subscriptionService } from "../services/subscriptionContainer.js";
+
 // Preserve the existing public export for callers and tests.
-export { subscriptionService } from "../services/subscriptionContainer.js";
+export { subscriptionService };
 
 const router = Router();
 

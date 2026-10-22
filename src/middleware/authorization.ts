@@ -4,6 +4,7 @@ import { sendErrorResponse } from "../errors/sendError.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import type { ChronoPayRole } from "./auth.js";
 import type { VerifiedJwtPayload } from "../utils/jwt.js";
+import { constantTimeEquals } from "../utils/constantTimeEquals.js";
 
 const ADMIN_TOKEN_HEADER = "x-chronopay-admin-token";
 const ADMIN_IDENTITY_HEADER = "x-chronopay-user-id";

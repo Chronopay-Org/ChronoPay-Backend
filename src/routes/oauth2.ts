@@ -18,6 +18,69 @@ const COOKIE_OPTIONS = {
 };
 
 /**
+ * Build the set of exact allowed redirect origins.
+ * APP_URL is always included when parseable; OAUTH_REDIRECT_ALLOWLIST (comma-separated)
+ * adds extra origins.
+ */
+function getAllowedRedirectOrigins(): Set<string> {
+  const origins = new Set<string>();
+
+  const appUrl = process.env.APP_URL;
+  if (appUrl) {
+    try {
+      origins.add(new URL(appUrl).origin);
+    } catch {
+      // Ignore invalid APP_URL
+    }
+  }
+
+  const allowlist = process.env.OAUTH_REDIRECT_ALLOWLIST;
+  if (allowlist) {
+    for (const entry of allowlist.split(",")) {
+      const trimmed = entry.trim();
+      if (!trimmed) continue;
+      try {
+        origins.add(new URL(appUrl ? new URL(trimmed, appUrl) : trimmed).origin);
+      } catch {
+        // Ignore invalid allowlist entries
+      }
+    }
+  }
+
+  return origins;
+}
+
+/**
+ * Validate a redirect target. Relative paths are always accepted.
+ * Absolute URLs must match an allowed origin exactly.
+ * Returns the normalized redirect target or null if invalid.
+ */
+function validateRedirectUrl(raw: string): string | null {
+  // Relative path: must start with a single "/" and not "//" (protocol-relative)
+  if (raw.startsWith("/") && !raw.startsWith("//")) {
+    return raw;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+
+  const allowed = getAllowedRedirectOrigins();
+  if (!allowed.has(parsed.origin)) {
+    return null;
+  }
+
+  return parsed.toString();
+}
+
+/**
  * Clear every OAuth2 flow cookie. Called on all callback failure paths so a
  * failed login cannot leave a half-used state/PKCE/nonce session behind.
  */
@@ -25,6 +88,7 @@ function clearOAuthCookies(res: Response): void {
   res.clearCookie(COOKIE_NAME_STATE, { path: "/" });
   res.clearCookie(COOKIE_NAME_PKCE, { path: "/" });
   res.clearCookie(COOKIE_NAME_NONCE, { path: "/" });
+  res.clearCookie(COOKIE_NAME_REDIRECT, { path: "/" });
 }
 
 /**
@@ -167,7 +231,7 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
     const storedState = req.cookies[COOKIE_NAME_STATE];
     const pkceData = req.cookies[COOKIE_NAME_PKCE];
     const storedNonce = req.cookies[COOKIE_NAME_NONCE];
-    const storedReedirect = req.cookies[COOKIE_NAME_REDIRECT] as string | undefined;
+    const storedRedirect = req.cookies[COOKIE_NAME_REDIRECT] as string | undefined;
 
     // Validate state - prevent CSRF and replay attacks
     if (!storedState || storedState !== state) {
