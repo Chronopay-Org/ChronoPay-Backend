@@ -33,6 +33,10 @@ import {
   HoldFeePolicyRegistry,
   type HoldFeePolicy,
 } from "../../services/holdFeePolicy.js";
+import {
+  defaultSupplierCancellationOverrideStore,
+  type SupplierCancellationOverrideStore,
+} from "../../services/supplierCancellationOverrideStore.js";
 import { CheckoutSessionService } from "../../services/checkout.js";
 import { writeReputationScore } from "../../services/reputationWriteAudit.js";
 import { defaultAuditLogger } from "../../services/auditLogger.js";
@@ -144,7 +148,7 @@ export class BookingIntentService {
     policyRegistry?: VersionedPolicyRegistry,
     holdFeeRegistry?: HoldFeePolicyRegistry,
     private readonly fxRateProvider?: import("../../services/fxRateProvider.js").FxRateProvider,
-    options: BookingIntentServiceOptions = {},
+    supplierOverrideStore?: SupplierCancellationOverrideStore,
   ) {
     const reg = policyRegistry ?? createDefaultRegistry();
     this.getPolicyRegistrySync = () => reg;
@@ -152,6 +156,7 @@ export class BookingIntentService {
       getPolicyRegistrySync: this.getPolicyRegistrySync,
       nowMs: this.nowMs,
       nowIso: this.now,
+      supplierOverrideStore: supplierOverrideStore ?? defaultSupplierCancellationOverrideStore,
     });
     this.holdFeeRegistry = holdFeeRegistry ?? createEmptyHoldFeeRegistry();
     this.holdFeePolicyService = new HoldFeePolicyService({
@@ -190,8 +195,8 @@ export class BookingIntentService {
     return new BundleTransferabilityService(this.slotRepository);
   }
 
-  private captureCancellationPolicySnapshot(): CancellationPolicySnapshot {
-    return this.cancellationPolicyService.snapshotCurrentPolicy();
+  private captureCancellationPolicySnapshot(professionalId?: string): CancellationPolicySnapshot {
+    return this.cancellationPolicyService.snapshotCurrentPolicy(undefined, professionalId);
   }
 
   private captureHoldFeePolicySnapshot(professionalId: string) {
@@ -299,7 +304,7 @@ export class BookingIntentService {
       };
     }
 
-    const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
+    const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot(slot.professional);
     const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
     let fxRateSnapshot:
@@ -383,7 +388,7 @@ export class BookingIntentService {
           claims: {} as import("../../utils/jwt.js").VerifiedJwtPayload,
         }),
       capturePolicySnapshots: (professionalId) => ({
-        cancellationPolicySnapshot: this.captureCancellationPolicySnapshot(),
+        cancellationPolicySnapshot: this.captureCancellationPolicySnapshot(professionalId),
         holdFeePolicySnapshot: this.captureHoldFeePolicySnapshot(professionalId),
       }),
     });
