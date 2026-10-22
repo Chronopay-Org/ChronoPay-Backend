@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { AuthContext } from "../../middleware/auth.js";
 import type { SlotRepository } from "../slots/slot-repository.js";
 import type {
@@ -6,7 +5,6 @@ import type {
   BookingIntentRepository,
   BookingIntentStatus,
   BookingType,
-  PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
 import {
@@ -20,12 +18,14 @@ import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
-import { resolvePrice, type StrategyId } from "../../services/pricingStrategy.js";
+import type { StrategyId } from "../../services/pricingStrategy.js";
+import { resolvePricingSnapshot } from "./pricing-snapshot.js";
 import {
   CancellationPolicyService,
   RefundBreakdown,
   createDefaultRegistry,
   VersionedPolicyRegistry,
+  LEGACY_V1_VERSION,
 } from "../../services/cancellationPolicy.js";
 import {
   HoldFeePolicyService,
@@ -35,6 +35,7 @@ import {
 } from "../../services/holdFeePolicy.js";
 import { CheckoutSessionService } from "../../services/checkout.js";
 import { writeReputationScore } from "../../services/reputationWriteAudit.js";
+import { defaultAuditLogger } from "../../services/auditLogger.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -63,6 +64,43 @@ export interface AutoRefundResult {
 
 export interface SupplierPolicies {
   getHoldPolicy(professionalId: string): HoldFeePolicy;
+}
+
+/**
+ * Narrow structural view of `StrikeService` used by `markNoShow`.
+ *
+ * Declaring only the slice the service depends on keeps the strike
+ * collaborator trivially fakeable in tests while the real singleton
+ * satisfies it structurally.
+ */
+export interface NoShowStrikeService {
+  issueStrike(params: {
+    buyerId: string;
+    intentId?: string;
+    slotId?: string;
+    reason?: string;
+    issuedAt?: number;
+  }): Promise<{ strike: { id: string }; autoSuspended: boolean }>;
+}
+
+/**
+ * Grace window applied after a slot's start time before a supplier may
+ * declare a no-show. Mirrors `DEFAULT_GRACE_WINDOW_SECONDS` (900 s = 15 min),
+ * the platform-wide default also used by the no-show detection job.
+ */
+export const DEFAULT_NO_SHOW_GRACE_MS = DEFAULT_GRACE_WINDOW_SECONDS * 1000;
+
+export interface BookingIntentServiceOptions {
+  /** Strike collaborator; defaults to the module-level `strikeService` singleton. */
+  strikeService?: NoShowStrikeService;
+  /**
+   * Explicit grace window (ms) after `intent.startTime`. When omitted, the
+   * per-slot-category window from the injected `GraceWindowService` applies
+   * (admin-configurable, default 15 minutes).
+   */
+  noShowGraceMs?: number;
+  /** Grace-window resolver; defaults to the application singleton. */
+  graceWindowService?: Pick<GraceWindowService, "resolve">;
 }
 
 export class BookingIntentError extends AppError {
@@ -94,6 +132,9 @@ export class BookingIntentService {
   private getPolicyRegistrySync: () => VersionedPolicyRegistry;
   private holdFeePolicyService: HoldFeePolicyService;
   private holdFeeRegistry: HoldFeePolicyRegistry;
+  private readonly strikeService: NoShowStrikeService;
+  private readonly noShowGraceMsOption: number | undefined = undefined;
+  private readonly graceWindowService: Pick<GraceWindowService, "resolve">;
 
   constructor(
     private readonly bookingIntentRepository: BookingIntentRepository,
@@ -103,6 +144,7 @@ export class BookingIntentService {
     policyRegistry?: VersionedPolicyRegistry,
     holdFeeRegistry?: HoldFeePolicyRegistry,
     private readonly fxRateProvider?: import("../../services/fxRateProvider.js").FxRateProvider,
+    options: BookingIntentServiceOptions = {},
   ) {
     const reg = policyRegistry ?? createDefaultRegistry();
     this.getPolicyRegistrySync = () => reg;
@@ -116,6 +158,28 @@ export class BookingIntentService {
       getRegistry: () => this.holdFeeRegistry,
       nowMs: this.nowMs,
     });
+    this.strikeService = options.strikeService ?? strikeService;
+    this.graceWindowService = options.graceWindowService ?? getGraceWindowService();
+
+    if (options.noShowGraceMs !== undefined) {
+      if (!Number.isFinite(options.noShowGraceMs) || options.noShowGraceMs < 0) {
+        throw new RangeError("noShowGraceMs must be a non-negative number.");
+      }
+      this.noShowGraceMsOption = Math.floor(options.noShowGraceMs);
+    }
+  }
+
+  /**
+   * Effective no-show grace window (ms) for a slot: an explicit constructor
+   * override wins, otherwise the admin-configurable per-category window is
+   * used (defaulting to 15 minutes).
+   */
+  private resolveNoShowGraceMs(slotId: string): number {
+    if (this.noShowGraceMsOption !== undefined) {
+      return this.noShowGraceMsOption;
+    }
+    const slot = this.slotRepository.findById(slotId);
+    return this.graceWindowService.resolve(slot?.category) * 1000;
   }
 
   private get schedulingService(): SchedulingService {
@@ -207,11 +271,10 @@ export class BookingIntentService {
     let pricingSnapshot: PricingSnapshot | undefined;
     if (slot.pricingStrategy) {
       const ps = slot.pricingStrategy;
-      const activeBookings = this.bookingIntentRepository
-        .listAll()
-        .filter(
-          (i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"),
-        ).length;
+      const allIntents = await this.bookingIntentRepository.listAll();
+      const activeBookings = allIntents.filter(
+        (i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"),
+      ).length;
       const capacity = ps.capacity ?? 1;
       const currentMs = this.nowMs();
 
@@ -239,7 +302,9 @@ export class BookingIntentService {
     const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
     const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
-    let fxRateSnapshot: { rate: number; baseCurrency: string; targetCurrency: string; capturedAtMs: number; } | undefined;
+    let fxRateSnapshot:
+      | { rate: number; baseCurrency: string; targetCurrency: string; capturedAtMs: number }
+      | undefined;
     if (slot.currency && input.buyerCurrency && this.fxRateProvider) {
       try {
         const rate = await this.fxRateProvider.getRate(slot.currency, input.buyerCurrency);
@@ -249,8 +314,9 @@ export class BookingIntentService {
           targetCurrency: input.buyerCurrency,
           capturedAtMs: this.nowMs(),
         };
-      } catch (err: any) {
-        throw new BookingIntentError(500, err.message ?? "Failed to fetch FX rate");
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Failed to fetch FX rate";
+        throw new BookingIntentError(500, message);
       }
     }
 
@@ -282,8 +348,8 @@ export class BookingIntentService {
     return intent;
   }
 
-  getIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async getIntent(intentId: string, actor: AuthContext): Promise<BookingIntentRecord> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -295,7 +361,7 @@ export class BookingIntentService {
     return intent;
   }
 
-  listIntents(actor: AuthContext): BookingIntentRecord[] {
+  async listIntents(actor: AuthContext): Promise<BookingIntentRecord[]> {
     if (actor.role === "admin") {
       return this.bookingIntentRepository.listAll();
     }
@@ -311,7 +377,11 @@ export class BookingIntentService {
       bookingIntentRepository: this.bookingIntentRepository,
       now: this.now,
       assertBundleTransferable: (slot, act) =>
-        this.bundleTransferabilityService.assertBundleTransferable(slot, act as AuthContext),
+        this.bundleTransferabilityService.assertBundleTransferable(slot, {
+          userId: String(act.userId),
+          role: (act.role ?? "customer") as AuthContext["role"],
+          claims: {} as import("../../utils/jwt.js").VerifiedJwtPayload,
+        }),
       capturePolicySnapshots: (professionalId) => ({
         cancellationPolicySnapshot: this.captureCancellationPolicySnapshot(),
         holdFeePolicySnapshot: this.captureHoldFeePolicySnapshot(professionalId),
@@ -319,8 +389,13 @@ export class BookingIntentService {
     });
 
     try {
-      const report = await engine.createRecurringBookings(input.rrule, actor as never, {
+      const recurringActor: import("../../services/schedulingService.js").RecurringBookingActor = {
+        ...actor,
+      };
+      const report = await engine.createRecurringBookings(input.rrule, recurringActor, {
         note: input.note,
+        bookingType: input.bookingType,
+        holdDeadlineMs: input.holdDeadlineMs,
       });
       return report;
     } catch (err) {
@@ -331,8 +406,8 @@ export class BookingIntentService {
     }
   }
 
-  confirmIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async confirmIntent(intentId: string, actor: AuthContext): Promise<BookingIntentRecord> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -352,8 +427,8 @@ export class BookingIntentService {
     return this.bookingIntentRepository.updateStatus(intentId, "confirmed");
   }
 
-  cancelIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async cancelIntent(intentId: string, actor: AuthContext): Promise<BookingIntentRecord> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -384,15 +459,15 @@ export class BookingIntentService {
           status: "cancelled",
         };
 
-    const updated = this.bookingIntentRepository.update(intentId, updates);
+    const updated = await this.bookingIntentRepository.update(intentId, updates);
 
     this.releaseSlotBestEffort(intent.slotId);
 
     return updated;
   }
 
-  previewCancel(intentId: string, actor: AuthContext): RefundBreakdown {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async previewCancel(intentId: string, actor: AuthContext): Promise<RefundBreakdown> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -404,8 +479,7 @@ export class BookingIntentService {
       );
     }
 
-    const policy = new CancellationPolicyService();
-    return policy.calculateRefund(intent);
+    return this.cancellationPolicyService.calculateRefund(intent);
   }
 
   /**
@@ -415,7 +489,10 @@ export class BookingIntentService {
    * Applies the same ownership rule as cancelIntent: only the intent owner or
    * an admin may read it.
    */
-  getHoldStatus(intentId: string, actor: AuthContext): {
+  async getHoldStatus(
+    intentId: string,
+    actor: AuthContext,
+  ): Promise<{
     intentId: string;
     bookingType: BookingIntentRecord["bookingType"];
     status: BookingIntentRecord["status"];
@@ -424,8 +501,8 @@ export class BookingIntentService {
     holdPlacedAt: string | undefined;
     refundableNow: boolean;
     refundAmountCents: number;
-  } {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  }> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -449,16 +526,37 @@ export class BookingIntentService {
     };
   }
 
+  /**
+   * Refunds an active booking intent and transitions it to `cancelled`.
+   *
+   * Product rule for refund calculation:
+   * - Pre-start cancellations (`cancelledAtMs < intent.startTime`): computed via
+   *   `this.cancellationPolicyService.calculateRefund(intent)`, which applies
+   *   the grandfathered `cancellationPolicySnapshot` (tiered notice windows,
+   *   flat/percentage fees, tax reversal) and deducts any non-refundable
+   *   `holdFeePolicySnapshot` retention. This guarantees `previewCancel` and
+   *   `refundIntent` produce identical amounts under the same clock and registry.
+   * - In-progress or elapsed sessions (`cancelledAtMs >= intent.startTime`):
+   *   tiered pre-start notice windows no longer apply once the session has
+   *   started; the refund uses linear duration-based proration via
+   *   `CheckoutSessionService.calculateDurationBasedRefund` over the remaining
+   *   session time (0 once the slot has fully elapsed).
+   */
   refundIntent(
     intentId: string,
     actor: AuthContext,
     input: { reason?: string; cancelledAtMs?: number } = {},
-  ): {
+  ): Promise<{
     intent: BookingIntentRecord;
     refundAmountCents: number;
     refundRatio: number;
     consumedRatio: number;
     reason: string;
+    policyVersionId: string;
+    fee: number;
+    holdFee: number;
+    taxReversal: number;
+    breakdown: RefundBreakdown;
   } {
     const intent = this.bookingIntentRepository.findById(intentId);
     if (!intent) {
@@ -469,35 +567,91 @@ export class BookingIntentService {
       throw new BookingIntentError(403, "You are not authorized to refund this booking intent.");
     }
 
+    if (intent.refundMetadata || intent.refundedAt) {
+      throw new BookingIntentError(409, "Intent has already been refunded.");
+    }
+
     if (
       intent.status === "cancelled" ||
       intent.status === "expired" ||
-      intent.status === "hold_refunded"
+      intent.status === "hold_refunded" ||
+      intent.status === "no_show"
     ) {
       throw new BookingIntentError(409, `Cannot refund intent with status "${intent.status}".`);
     }
 
-    const cancelledAtMs = input.cancelledAtMs ?? this.nowMs();
-    if (!Number.isFinite(cancelledAtMs)) {
-      throw new BookingIntentError(400, "cancelledAtMs must be a valid number.");
+    const currentNowMs = this.nowMs();
+    let effectiveCancelledAtMs: number;
+
+    if (actor.role === "admin" && input.cancelledAtMs !== undefined) {
+      if (!Number.isFinite(input.cancelledAtMs)) {
+        throw new BookingIntentError(400, "cancelledAtMs must be a valid number.");
+      }
+      if (input.cancelledAtMs > currentNowMs) {
+        throw new BookingIntentError(400, "Admin override cancelledAtMs cannot be in the future.");
+      }
+      effectiveCancelledAtMs = input.cancelledAtMs;
+
+      defaultAuditLogger
+        .log({
+          action: "booking_intent.admin_override_cancelled_at",
+          status: "success",
+          resource: `booking_intent:${intentId}`,
+          metadata: {
+            bookingIntentId: intentId,
+            adminUserId: actor.userId,
+            overrideCancelledAtMs: effectiveCancelledAtMs,
+            serverNowMs: currentNowMs,
+          },
+        })
+        .catch(() => {});
+    } else {
+      effectiveCancelledAtMs = currentNowMs;
     }
 
-    const amountCents = this.resolveIntentPrice(intent);
-    const refundSummary = CheckoutSessionService.calculateDurationBasedRefund({
-      amountCents,
-      startTimeMs: intent.startTime,
-      endTimeMs: intent.endTime,
-      nowMs: cancelledAtMs,
-      curve: "linear",
-    });
+    let refundAmountCents: number;
+    let refundRatio: number;
+    let consumedRatio: number;
+    let breakdown: RefundBreakdown;
+
+    if (cancelledAtMs < intent.startTime) {
+      breakdown = this.cancellationPolicyService.calculateRefund(intent);
+      refundAmountCents = breakdown.netRefund;
+      refundRatio = breakdown.tierApplied?.refundRatio ?? 0;
+      consumedRatio = 0;
+    } else {
+      const amountCents = this.resolveIntentPrice(intent);
+      const refundSummary = CheckoutSessionService.calculateDurationBasedRefund({
+        amountCents,
+        startTimeMs: intent.startTime,
+        endTimeMs: intent.endTime,
+        nowMs: cancelledAtMs,
+        curve: "linear",
+      });
+      const policyVersionId =
+        intent.cancellationPolicySnapshot?.policyVersionId ?? LEGACY_V1_VERSION.versionId;
+      breakdown = {
+        fee: 0,
+        taxReversal: 0,
+        netRefund: refundSummary.refundAmountCents,
+        policyVersion: policyVersionId,
+        tierApplied: null,
+        hoursUntilStart: (intent.startTime - cancelledAtMs) / (1000 * 60 * 60),
+        basePrice: amountCents,
+        holdFee: 0,
+      };
+      refundAmountCents = refundSummary.refundAmountCents;
+      refundRatio = refundSummary.remainingRatio;
+      consumedRatio = refundSummary.consumedRatio;
+    }
 
     const reason = (input.reason ?? "partial_refund").trim() || "partial_refund";
-    const updated = this.bookingIntentRepository.update(intentId, {
+    const updated = await this.bookingIntentRepository.update(intentId, {
       status: "cancelled",
       refundedAt: this.now(),
       refundMetadata: {
         refundedAt: this.now(),
-        refundedAmountCents: refundSummary.refundAmountCents,
+        refundedAmountCents: refundAmountCents,
         refundReason: reason,
       },
     });
@@ -506,15 +660,20 @@ export class BookingIntentService {
 
     return {
       intent: updated,
-      refundAmountCents: refundSummary.refundAmountCents,
-      refundRatio: refundSummary.remainingRatio,
-      consumedRatio: refundSummary.consumedRatio,
+      refundAmountCents,
+      refundRatio,
+      consumedRatio,
       reason,
+      policyVersionId: breakdown.policyVersion,
+      fee: breakdown.fee,
+      holdFee: breakdown.holdFee,
+      taxReversal: breakdown.taxReversal,
+      breakdown,
     };
   }
 
-  expireIntent(intentId: string): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async expireIntent(intentId: string): Promise<BookingIntentRecord> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -524,7 +683,7 @@ export class BookingIntentService {
       throw new BookingIntentError(409, `Cannot expire intent with status "${intent.status}".`);
     }
 
-    const updated = this.bookingIntentRepository.updateStatus(intentId, "expired");
+    const updated = await this.bookingIntentRepository.updateStatus(intentId, "expired");
 
     this.releaseSlotBestEffort(intent.slotId);
 
@@ -538,13 +697,13 @@ export class BookingIntentService {
     return 0;
   }
 
-  autoRefundHold(intentId: string): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async autoRefundHold(intentId: string): Promise<BookingIntentRecord> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
     const refundAmount = this.resolveIntentPrice(intent);
-    const updated = this.bookingIntentRepository.update(intentId, {
+    const updated = await this.bookingIntentRepository.update(intentId, {
       status: "hold_refunded",
       refundedAt: this.now(),
       refundMetadata: {
@@ -557,6 +716,19 @@ export class BookingIntentService {
     return updated;
   }
 
+  /**
+   * Marks a confirmed booking as a buyer no-show.
+   *
+   * Guards (both return 409):
+   *  - only a `confirmed` intent can be marked — a pending or held booking
+   *    has not been agreed to run yet;
+   *  - the clock must be at or past `startTime + noShowGraceMs`, so a supplier
+   *    cannot forfeit funds (and penalise the buyer) before the appointment
+   *    has actually begun.
+   *
+   * The buyer strike is issued *before* the status transition so a failing
+   * strike service leaves the intent untouched instead of half-applied.
+   */
   async markNoShow(
     intentId: string,
     actor: AuthContext,
@@ -567,10 +739,11 @@ export class BookingIntentService {
     buyerId: string;
     supplierId: string;
     forfeitAmountCents: number;
-    reputationDelta: number;
+    strikeId: string;
+    autoSuspended: boolean;
     reason: string;
   }> {
-    const intent = this.bookingIntentRepository.findById(intentId);
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -582,14 +755,19 @@ export class BookingIntentService {
       );
     }
 
-    if (
-      intent.status !== "confirmed" &&
-      intent.status !== "pending" &&
-      intent.status !== "hold_placed"
-    ) {
+    if (intent.status !== "confirmed") {
       throw new BookingIntentError(
         409,
         `Cannot mark intent with status "${intent.status}" as a no-show.`,
+      );
+    }
+
+    const graceMs = this.resolveNoShowGraceMs(intent.slotId);
+    const eligibleAtMs = intent.startTime + graceMs;
+    if (this.nowMs() < eligibleAtMs) {
+      throw new BookingIntentError(
+        409,
+        `Cannot mark a no-show before the booked slot has started (start time + ${graceMs}ms grace).`,
       );
     }
 
@@ -603,30 +781,11 @@ export class BookingIntentService {
     const reason = (input.reason ?? "Buyer no-show").trim();
     const normalizedReason = reason.length > 0 ? reason : "Buyer no-show";
 
-    const updated = this.bookingIntentRepository.update(intentId, {
+    const updated = await this.bookingIntentRepository.update(intentId, {
       status: "no_show",
     });
 
     this.releaseSlotBestEffort(intent.slotId);
-
-    const scoreBefore = 0;
-    const scoreAfter = -1;
-    await writeReputationScore({
-      supplierId: intent.customerId,
-      actorId: actor.userId,
-      cause: "no_show",
-      causeId: intent.id,
-      scoreBefore,
-      scoreAfter,
-      metadata: {
-        buyerId: intent.customerId,
-        supplierId: intent.professional,
-        bookingIntentId: intent.id,
-        forfeitRatio: ratio,
-        forfeitAmountCents,
-        reason: normalizedReason,
-      },
-    });
 
     return {
       intent: updated,
@@ -634,7 +793,8 @@ export class BookingIntentService {
       buyerId: intent.customerId,
       supplierId: intent.professional,
       forfeitAmountCents,
-      reputationDelta: scoreAfter - scoreBefore,
+      strikeId: strikeOutcome.strike.id,
+      autoSuspended: strikeOutcome.autoSuspended,
       reason: normalizedReason,
     };
   }
@@ -670,8 +830,14 @@ export function parseCreateBookingIntentBody(
 
   let parsedBuyerCurrency: import("../../utils/amount.js").SupportedCurrencies | undefined;
   if (buyerCurrency !== undefined) {
-    if (typeof buyerCurrency !== "string" || !["USD", "EUR", "GBP", "XLM"].includes(buyerCurrency)) {
-      throw new BookingIntentError(400, "Invalid buyerCurrency. Must be one of USD, EUR, GBP, XLM.");
+    if (
+      typeof buyerCurrency !== "string" ||
+      !["USD", "EUR", "GBP", "XLM"].includes(buyerCurrency)
+    ) {
+      throw new BookingIntentError(
+        400,
+        "Invalid buyerCurrency. Must be one of USD, EUR, GBP, XLM.",
+      );
     }
     parsedBuyerCurrency = buyerCurrency as import("../../utils/amount.js").SupportedCurrencies;
   }
@@ -702,16 +868,17 @@ export function parseCreateBookingIntentBody(
     // Assert error for ambiguous inputs without explicit offset. Line-based
     // parsing is linear (avoids a backtracking regex on attacker-controlled
     // rrule text).
-    const dtstartLine = normalizedRRule
-      .split(/\r?\n/)
-      .find((line) => line.startsWith("DTSTART"));
+    const dtstartLine = normalizedRRule.split(/\r?\n/).find((line) => line.startsWith("DTSTART"));
     if (dtstartLine) {
       const valueStart = dtstartLine.indexOf(":");
       const dtstartVal = valueStart >= 0 ? dtstartLine.slice(valueStart + 1) : "";
       const hasZ = dtstartVal.endsWith("Z");
       const hasTzid = normalizedRRule.includes("TZID=");
       if (!hasZ && !hasTzid) {
-        throw new BookingIntentError(400, "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)");
+        throw new BookingIntentError(
+          400,
+          "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)",
+        );
       }
     }
 

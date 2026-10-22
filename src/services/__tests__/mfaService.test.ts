@@ -26,6 +26,19 @@ function makeService() {
   return { service, handle };
 }
 
+function wrongCode(secret: Buffer, nowMs: number): string {
+  const validCodes = new Set(
+    [-1, 0, 1].map((offset) =>
+      generateTotpCode(secret, totpCounter(nowMs) + offset),
+    ),
+  );
+  for (let candidate = 0; candidate < 1_000_000; candidate += 1) {
+    const code = String(candidate).padStart(6, "0");
+    if (!validCodes.has(code)) return code;
+  }
+  throw new Error("Unable to find an invalid TOTP code");
+}
+
 describe("MfaService.enroll", () => {
   it("throws when userId is empty or whitespace", async () => {
     const { service, handle } = makeService();
@@ -146,15 +159,99 @@ describe("MfaService.verifyCode", () => {
 
   it("throws MfaInvalidCodeError for a wrong code", async () => {
     const { service, handle } = makeService();
-    await handle.seedVerified("user-1", generateTotpSecret(), MASTER_KEY);
+    const secret = generateTotpSecret();
+    await handle.seedVerified("user-1", secret, MASTER_KEY);
 
     await expect(
-      service.verifyCode("user-1", "000000", {
+      service.verifyCode("user-1", wrongCode(secret, nowMs), {
         masterKey: MASTER_KEY,
         challengeSecret: CHALLENGE_SECRET,
         nowMs,
       }),
     ).rejects.toThrow(MfaInvalidCodeError);
+    expect(handle.rows.get("user-1")?.failed_attempts).toBe(1);
+  });
+
+  it("allows invalid attempts below the configured threshold", async () => {
+    const { service, handle } = makeService();
+    const secret = generateTotpSecret();
+    await handle.seedVerified("user-1", secret, MASTER_KEY);
+    const opts = {
+      masterKey: MASTER_KEY,
+      challengeSecret: CHALLENGE_SECRET,
+      nowMs,
+      maxFailedAttempts: 5,
+      lockoutDurationMs: 60_000,
+    };
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await expect(service.verifyCode("user-1", wrongCode(secret, nowMs), opts))
+        .rejects.toThrow(MfaInvalidCodeError);
+    }
+    expect(handle.rows.get("user-1")?.failed_attempts).toBe(4);
+    expect(handle.rows.get("user-1")?.locked_until).toBeNull();
+  });
+
+  it("locks after the configured threshold and rejects the sixth attempt", async () => {
+    const { service, handle } = makeService();
+    const secret = generateTotpSecret();
+    await handle.seedVerified("user-1", secret, MASTER_KEY);
+    const opts = {
+      masterKey: MASTER_KEY,
+      challengeSecret: CHALLENGE_SECRET,
+      nowMs,
+      maxFailedAttempts: 5,
+      lockoutDurationMs: 60_000,
+    };
+    const invalidCode = wrongCode(secret, nowMs);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(service.verifyCode("user-1", invalidCode, opts))
+        .rejects.toThrow(MfaInvalidCodeError);
+    }
+    expect(handle.rows.get("user-1")?.failed_attempts).toBe(5);
+    expect(handle.rows.get("user-1")?.locked_until).toBe(new Date(nowMs + 60_000).toISOString());
+
+    const correctCode = generateTotpCode(secret, totpCounter(nowMs));
+    await expect(service.verifyCode("user-1", correctCode, opts)).rejects.toThrow(MfaLockedError);
+  });
+
+  it("expires the lockout using the injected clock and resets failures after successful verification", async () => {
+    const { service, handle } = makeService();
+    const secret = generateTotpSecret();
+    await handle.seedVerified("user-1", secret, MASTER_KEY);
+    const lockoutDurationMs = 60_000;
+    const opts = {
+      masterKey: MASTER_KEY,
+      challengeSecret: CHALLENGE_SECRET,
+      maxFailedAttempts: 1,
+      lockoutDurationMs,
+    };
+
+    await expect(service.verifyCode("user-1", wrongCode(secret, nowMs), { ...opts, nowMs }))
+      .rejects.toThrow(MfaInvalidCodeError);
+    expect(handle.rows.get("user-1")?.failed_attempts).toBe(1);
+
+    const afterExpiry = nowMs + lockoutDurationMs;
+    const correctCode = generateTotpCode(secret, totpCounter(afterExpiry));
+    await expect(service.verifyCode("user-1", correctCode, { ...opts, nowMs: afterExpiry }))
+      .resolves.toMatchObject({ alreadyVerified: true });
+    expect(handle.rows.get("user-1")?.failed_attempts).toBe(0);
+    expect(handle.rows.get("user-1")?.locked_until).toBeNull();
+  });
+
+  it("resets consecutive failures after a successful verification", async () => {
+    const { service, handle } = makeService();
+    const secret = generateTotpSecret();
+    await handle.seedVerified("user-1", secret, MASTER_KEY);
+    const invalidCode = wrongCode(secret, nowMs);
+    const opts = { masterKey: MASTER_KEY, challengeSecret: CHALLENGE_SECRET, nowMs };
+
+    await expect(service.verifyCode("user-1", invalidCode, opts)).rejects.toThrow(MfaInvalidCodeError);
+    expect(handle.rows.get("user-1")?.failed_attempts).toBe(1);
+
+    await service.verifyCode("user-1", generateTotpCode(secret, totpCounter(nowMs)), opts);
+    expect(handle.rows.get("user-1")?.failed_attempts).toBe(0);
   });
 
   it("throws MfaNotEnrolledError when the user has no enrollment", async () => {
