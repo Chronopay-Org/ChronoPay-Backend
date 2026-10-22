@@ -21,11 +21,13 @@ import {
   SLOT_ID_PATTERN,
   parseCreateBookingIntentBody,
   type AutoRefundResult,
+  type BookingIntentServiceOptions,
   type CreateBookingIntentInput,
   type CreateRecurringBookingInput,
 } from "../booking-intent-service.js";
 import {
   InMemoryBookingIntentRepository,
+  type BookingIntentRepository,
   type BookingIntentRecord,
   type BookingIntentStatus,
 } from "../booking-intent-repository.js";
@@ -45,6 +47,12 @@ import {
 } from "../../../services/reputationWriteAudit.js";
 import type { FxRateProvider } from "../../../services/fxRateProvider.js";
 import type { HoldFeePolicyRegistry } from "../../../services/holdFeePolicy.js";
+import {
+  createDefaultRegistry,
+  LEGACY_V1_VERSION,
+  PRORATED_V2_VERSION,
+  type VersionedPolicyRegistry,
+} from "../../../services/cancellationPolicy.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -118,6 +126,7 @@ function createFixture(
   slots: SlotRecord[] = [bookableSlot()],
   fxRateProvider?: FxRateProvider,
   holdFeeRegistry?: HoldFeePolicyRegistry,
+  options?: BookingIntentServiceOptions,
 ) {
   const slotRepo = new InMemorySlotRepository(slots);
   const intentRepo = new InMemoryBookingIntentRepository();
@@ -129,6 +138,7 @@ function createFixture(
     undefined,
     holdFeeRegistry,
     fxRateProvider,
+    options,
   );
   return { slotRepo, intentRepo, service };
 }
@@ -137,7 +147,10 @@ function isBookable(slotRepo: InMemorySlotRepository, slotId: string): boolean {
   return slotRepo.findById(slotId)?.bookable === true;
 }
 
-function statusOf(intentRepo: InMemoryBookingIntentRepository, id: string): BookingIntentStatus | undefined {
+function statusOf(
+  intentRepo: InMemoryBookingIntentRepository,
+  id: string,
+): BookingIntentStatus | undefined {
   return intentRepo.findById(id)?.status;
 }
 
@@ -159,6 +172,69 @@ function captureSyncError(fn: () => unknown): BookingIntentError | undefined {
   } catch (err) {
     return err as BookingIntentError;
   }
+}
+
+/**
+ * Async repository wrapper that wraps every InMemoryBookingIntentRepository
+ * method return value in Promise.resolve(), simulating an async repository
+ * (e.g. a Postgres implementation).
+ */
+class AsyncWrappedBookingIntentRepository implements BookingIntentRepository {
+  constructor(private readonly inner: InMemoryBookingIntentRepository) {}
+
+  create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> {
+    return Promise.resolve(this.inner.create(intent)).then((r) => r);
+  }
+  findById(id: string): Promise<BookingIntentRecord | undefined> {
+    return Promise.resolve(this.inner.findById(id));
+  }
+  findBySlotId(slotId: string): Promise<BookingIntentRecord | undefined> {
+    return Promise.resolve(this.inner.findBySlotId(slotId));
+  }
+  findBySlotIdAndCustomer(slotId: string, customerId: string): Promise<BookingIntentRecord | undefined> {
+    return Promise.resolve(this.inner.findBySlotIdAndCustomer(slotId, customerId));
+  }
+  findLatestBySlotId(slotId: string): Promise<BookingIntentRecord | undefined> {
+    return Promise.resolve(this.inner.findLatestBySlotId?.(slotId));
+  }
+  listByCustomer(customerId: string): Promise<BookingIntentRecord[]> {
+    return Promise.resolve(this.inner.listByCustomer(customerId));
+  }
+  listAll(): Promise<BookingIntentRecord[]> {
+    return Promise.resolve(this.inner.listAll());
+  }
+  updateStatus(id: string, status: BookingIntentStatus): Promise<BookingIntentRecord> {
+    return Promise.resolve(this.inner.updateStatus(id, status));
+  }
+  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): Promise<BookingIntentRecord> {
+    return Promise.resolve(this.inner.update(id, updates));
+  }
+  updateTokenInfo(id: string, tokenAsset: string, mintTxHash: string): Promise<void> {
+    return Promise.resolve(this.inner.updateTokenInfo?.(id, tokenAsset, mintTxHash));
+  }
+  findExpiredHolds(nowMs: number): Promise<BookingIntentRecord[]> {
+    return Promise.resolve(this.inner.findExpiredHolds(nowMs));
+  }
+}
+
+function createAsyncFixture(
+  slots: SlotRecord[] = [bookableSlot()],
+  fxRateProvider?: FxRateProvider,
+  holdFeeRegistry?: HoldFeePolicyRegistry,
+) {
+  const slotRepo = new InMemorySlotRepository(slots);
+  const innerIntentRepo = new InMemoryBookingIntentRepository();
+  const intentRepo = new AsyncWrappedBookingIntentRepository(innerIntentRepo);
+  const service = new BookingIntentService(
+    intentRepo,
+    slotRepo,
+    () => NOW_ISO,
+    () => NOW_MS,
+    undefined,
+    holdFeeRegistry,
+    fxRateProvider,
+  );
+  return { slotRepo, intentRepo: innerIntentRepo, service };
 }
 
 function seedIntent(
@@ -188,6 +264,7 @@ const fxProvider = (rate: number, onError?: () => never): FxRateProvider => ({
 beforeEach(() => {
   jest.spyOn(Date, "now").mockReturnValue(NOW_MS);
   _resetReputationEventStore();
+  strikeService.resetState();
 });
 
 afterEach(() => {
@@ -237,7 +314,10 @@ describe("parseCreateBookingIntentBody — CreateBookingIntentInput", () => {
 
   it("accepts a note of exactly 500 characters (inclusive boundary)", () => {
     const note = "a".repeat(500);
-    const parsed = parseCreateBookingIntentBody({ slotId: SLOT_ALICE, note }) as CreateBookingIntentInput;
+    const parsed = parseCreateBookingIntentBody({
+      slotId: SLOT_ALICE,
+      note,
+    }) as CreateBookingIntentInput;
 
     expect(parsed.note).toHaveLength(500);
   });
@@ -257,14 +337,17 @@ describe("parseCreateBookingIntentBody — CreateBookingIntentInput", () => {
     expect(parseCreateBookingIntentBody({ slotId: upper })).toEqual({ slotId: upper });
   });
 
-  it.each(["USD", "EUR", "GBP", "XLM"] as const)("accepts the supported buyerCurrency %s", (currency) => {
-    const parsed = parseCreateBookingIntentBody({
-      slotId: SLOT_ALICE,
-      buyerCurrency: currency,
-    }) as CreateBookingIntentInput;
+  it.each(["USD", "EUR", "GBP", "XLM"] as const)(
+    "accepts the supported buyerCurrency %s",
+    (currency) => {
+      const parsed = parseCreateBookingIntentBody({
+        slotId: SLOT_ALICE,
+        buyerCurrency: currency,
+      }) as CreateBookingIntentInput;
 
-    expect(parsed.buyerCurrency).toBe(currency);
-  });
+      expect(parsed.buyerCurrency).toBe(currency);
+    },
+  );
 
   it.each([
     ["a non-object body", null, "Booking intent payload must be a JSON object."],
@@ -325,9 +408,9 @@ describe("parseCreateBookingIntentBody — CreateBookingIntentInput", () => {
   });
 
   it("rejects a note longer than 500 characters", () => {
-    expect(() => parseCreateBookingIntentBody({ slotId: SLOT_ALICE, note: "a".repeat(501) })).toThrow(
-      new BookingIntentError(400, "note must be 500 characters or fewer."),
-    );
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: SLOT_ALICE, note: "a".repeat(501) }),
+    ).toThrow(new BookingIntentError(400, "note must be 500 characters or fewer."));
   });
 
   it.each([
@@ -343,7 +426,10 @@ describe("parseCreateBookingIntentBody — CreateBookingIntentInput", () => {
   });
 
   it.each(["standard", "refundable_hold"] as const)("accepts bookingType %s", (bookingType) => {
-    const parsed = parseCreateBookingIntentBody({ slotId: SLOT_ALICE, bookingType }) as CreateBookingIntentInput;
+    const parsed = parseCreateBookingIntentBody({
+      slotId: SLOT_ALICE,
+      bookingType,
+    }) as CreateBookingIntentInput;
     expect(parsed.bookingType).toBe(bookingType);
   });
 
@@ -426,7 +512,9 @@ describe("parseCreateBookingIntentBody — CreateRecurringBookingInput", () => {
   });
 
   it("leaves the optional recurring fields undefined when they are absent", () => {
-    const parsed = parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1 }) as CreateRecurringBookingInput;
+    const parsed = parseCreateBookingIntentBody({
+      rrule: RRULE_DAILY_1,
+    }) as CreateRecurringBookingInput;
 
     expect(parsed.note).toBeUndefined();
     expect(parsed.bookingType).toBeUndefined();
@@ -484,19 +572,24 @@ describe("parseCreateBookingIntentBody — CreateRecurringBookingInput", () => {
     expect(() => parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, note: "   " })).toThrow(
       new BookingIntentError(400, "note cannot be empty when provided."),
     );
-    expect(() => parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, note: "a".repeat(501) })).toThrow(
-      new BookingIntentError(400, "note must be 500 characters or fewer."),
-    );
+    expect(() =>
+      parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, note: "a".repeat(501) }),
+    ).toThrow(new BookingIntentError(400, "note must be 500 characters or fewer."));
   });
 
   it("applies the same bookingType/holdDeadlineMs/buyerCurrency rules in the recurring branch", () => {
-    expect(() => parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, bookingType: "premium" })).toThrow(
-      new BookingIntentError(400, "Invalid bookingType."),
-    );
-    expect(() => parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, holdDeadlineMs: "soon" })).toThrow(
-      new BookingIntentError(400, "holdDeadlineMs must be a valid number."),
-    );
-    expect(() => parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, buyerCurrency: "JPY" })).toThrow(
+    expect(() =>
+      parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, bookingType: "premium" }),
+    ).toThrow(new BookingIntentError(400, "Invalid bookingType."));
+    expect(() =>
+      parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, holdDeadlineMs: "soon" }),
+    ).toThrow(new BookingIntentError(400, "holdDeadlineMs must be a valid number."));
+    expect(() =>
+      parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, holdDeadlineMs: Number.NaN }),
+    ).toThrow(new BookingIntentError(400, "holdDeadlineMs must be a valid number."));
+    expect(() =>
+      parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, buyerCurrency: "JPY" }),
+    ).toThrow(
       new BookingIntentError(400, "Invalid buyerCurrency. Must be one of USD, EUR, GBP, XLM."),
     );
   });
@@ -610,10 +703,16 @@ describe("BookingIntentService.createIntent — CreateBookingIntentInput success
     ]);
     // A confirmed intent on the same slot counts as demand but does not block
     // a new buyer: `findBySlotId` only reports pending / hold_placed intents.
-    const confirmed = await seedIntent(intentRepo, { slotId: SLOT_ALICE, customerId: "someone-else" });
+    const confirmed = await seedIntent(intentRepo, {
+      slotId: SLOT_ALICE,
+      customerId: "someone-else",
+    });
     intentRepo.updateStatus(confirmed.id, "confirmed");
     // A terminal intent on the same slot must not be counted.
-    const expired = await seedIntent(intentRepo, { slotId: SLOT_ALICE, customerId: "someone-else-2" });
+    const expired = await seedIntent(intentRepo, {
+      slotId: SLOT_ALICE,
+      customerId: "someone-else-2",
+    });
     intentRepo.updateStatus(expired.id, "expired");
 
     const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
@@ -841,31 +940,31 @@ describe("BookingIntentService reads", () => {
     const { service } = createFixture();
     const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
 
-    expect(service.getIntent(created.id, customer).id).toBe(created.id);
+    expect((await service.getIntent(created.id, customer)).id).toBe(created.id);
   });
 
   it("returns the intent to an admin", async () => {
     const { service } = createFixture();
     const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
 
-    expect(service.getIntent(created.id, admin).id).toBe(created.id);
+    expect((await service.getIntent(created.id, admin)).id).toBe(created.id);
   });
 
   it("hides the intent from another customer behind a 404", async () => {
     const { service } = createFixture();
     const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
 
-    const error = captureSyncError(() => service.getIntent(created.id, otherCustomer));
+    const error = await captureError(service.getIntent(created.id, otherCustomer));
 
     expect(error).toBeInstanceOf(BookingIntentError);
     expect(error?.status).toBe(404);
     expect(error?.message).toBe("Booking intent not found.");
   });
 
-  it("throws 404 for an unknown intent id", () => {
+  it("throws 404 for an unknown intent id", async () => {
     const { service } = createFixture();
 
-    expect(() => service.getIntent("intent-does-not-exist", customer)).toThrow(
+    await expect(service.getIntent("intent-does-not-exist", customer)).rejects.toThrow(
       new BookingIntentError(404, "Booking intent not found."),
     );
   });
@@ -878,16 +977,22 @@ describe("BookingIntentService reads", () => {
     await service.createIntent({ slotId: SLOT_ALICE }, customer);
     await service.createIntent({ slotId: SLOT_BOB }, otherCustomer);
 
-    expect(service.listIntents(customer).map((i) => i.customerId)).toEqual(["customer-1"]);
-    expect(service.listIntents(otherCustomer).map((i) => i.customerId)).toEqual(["customer-2"]);
-    expect(service.listIntents(admin)).toHaveLength(2);
+    expect((await service.listIntents(customer)).map((i) => i.customerId)).toEqual(["customer-1"]);
+    expect((await service.listIntents(otherCustomer)).map((i) => i.customerId)).toEqual(["customer-2"]);
+    expect(await service.listIntents(admin)).toHaveLength(2);
   });
 });
 
 // ─── Primary state transitions ────────────────────────────────────────────────
 
 describe("BookingIntentService state transitions", () => {
-  const TERMINAL: BookingIntentStatus[] = ["cancelled", "expired", "hold_refunded", "no_show", "firm"];
+  const TERMINAL: BookingIntentStatus[] = [
+    "cancelled",
+    "expired",
+    "hold_refunded",
+    "no_show",
+    "firm",
+  ];
 
   async function pricedFixture() {
     const fixture = createFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
@@ -899,7 +1004,7 @@ describe("BookingIntentService state transitions", () => {
     it("moves pending → confirmed without releasing the slot", async () => {
       const { service, slotRepo, intent } = await pricedFixture();
 
-      const confirmed = service.confirmIntent(intent.id, customer);
+      const confirmed = await service.confirmIntent(intent.id, customer);
 
       expect(confirmed.status).toBe("confirmed");
       expect(isBookable(slotRepo, SLOT_ALICE)).toBe(false);
@@ -912,31 +1017,29 @@ describe("BookingIntentService state transitions", () => {
         customer,
       );
 
-      expect(service.confirmIntent(hold.id, customer).status).toBe("confirmed");
+      expect((await service.confirmIntent(hold.id, customer)).status).toBe("confirmed");
       expect(statusOf(intentRepo, hold.id)).toBe("confirmed");
     });
 
     it("is permitted for an admin who is not the owner", async () => {
       const { service, intent } = await pricedFixture();
 
-      expect(service.confirmIntent(intent.id, admin).status).toBe("confirmed");
+      expect((await service.confirmIntent(intent.id, admin)).status).toBe("confirmed");
     });
 
     it("throws 403 for a non-owner non-admin", async () => {
       const { service, intent } = await pricedFixture();
 
-      const error = captureSyncError(() => service.confirmIntent(intent.id, otherCustomer));
+      const error = await captureError(service.confirmIntent(intent.id, otherCustomer));
 
       expect(error?.status).toBe(403);
-      expect(error?.message).toBe(
-        "Only the intent owner or admin can confirm a booking intent.",
-      );
+      expect(error?.message).toBe("Only the intent owner or admin can confirm a booking intent.");
     });
 
-    it("throws 404 for an unknown intent id", () => {
+    it("throws 404 for an unknown intent id", async () => {
       const { service } = createFixture();
 
-      expect(() => service.confirmIntent("nope", customer)).toThrow(
+      await expect(service.confirmIntent("nope", customer)).rejects.toThrow(
         new BookingIntentError(404, "Booking intent not found."),
       );
     });
@@ -946,7 +1049,7 @@ describe("BookingIntentService state transitions", () => {
       const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
       intentRepo.updateStatus(created.id, terminal);
 
-      const error = captureSyncError(() => service.confirmIntent(created.id, customer));
+      const error = await captureError(service.confirmIntent(created.id, customer));
 
       expect(error?.status).toBe(409);
       expect(error?.message).toBe(`Cannot confirm intent with status "${terminal}".`);
@@ -957,7 +1060,7 @@ describe("BookingIntentService state transitions", () => {
     it("moves pending → cancelled and releases the slot", async () => {
       const { service, slotRepo, intent } = await pricedFixture();
 
-      const cancelled = service.cancelIntent(intent.id, customer);
+      const cancelled = await service.cancelIntent(intent.id, customer);
 
       expect(cancelled.status).toBe("cancelled");
       expect(cancelled.refundedAt).toBeUndefined();
@@ -974,7 +1077,7 @@ describe("BookingIntentService state transitions", () => {
         customer,
       );
 
-      const refunded = service.cancelIntent(hold.id, customer);
+      const refunded = await service.cancelIntent(hold.id, customer);
 
       expect(refunded.status).toBe("hold_refunded");
       expect(refunded.refundedAt).toBe(NOW_ISO);
@@ -994,7 +1097,7 @@ describe("BookingIntentService state transitions", () => {
         customer,
       );
 
-      const refunded = service.cancelIntent(hold.id, admin);
+      const refunded = await service.cancelIntent(hold.id, admin);
 
       expect(refunded.refundMetadata?.refundReason).toBe("admin_action");
     });
@@ -1006,31 +1109,31 @@ describe("BookingIntentService state transitions", () => {
         customer,
       );
 
-      expect(service.cancelIntent(hold.id, customer).refundMetadata?.refundedAmountCents).toBe(0);
+      expect((await service.cancelIntent(hold.id, customer)).refundMetadata?.refundedAmountCents).toBe(0);
     });
 
     it("throws 403 for a non-owner non-admin", async () => {
       const { service, intent } = await pricedFixture();
 
-      const error = captureSyncError(() => service.cancelIntent(intent.id, otherCustomer));
+      const error = await captureError(service.cancelIntent(intent.id, otherCustomer));
 
       expect(error?.status).toBe(403);
       expect(error?.message).toBe("You are not authorized to cancel this booking intent.");
     });
 
-    it("throws 404 for an unknown intent id", () => {
+    it("throws 404 for an unknown intent id", async () => {
       const { service } = createFixture();
 
-      expect(() => service.cancelIntent("nope", customer)).toThrow(
+      await expect(service.cancelIntent("nope", customer)).rejects.toThrow(
         new BookingIntentError(404, "Booking intent not found."),
       );
     });
 
     it("throws 409 when cancelling a confirmed intent", async () => {
       const { service, intent } = await pricedFixture();
-      service.confirmIntent(intent.id, customer);
+      await service.confirmIntent(intent.id, customer);
 
-      const error = captureSyncError(() => service.cancelIntent(intent.id, customer));
+      const error = await captureError(service.cancelIntent(intent.id, customer));
 
       expect(error?.status).toBe(409);
       expect(error?.message).toBe('Cannot cancel intent with status "confirmed".');
@@ -1041,7 +1144,7 @@ describe("BookingIntentService state transitions", () => {
     it("moves pending → expired and releases the slot", async () => {
       const { service, slotRepo, intentRepo, intent } = await pricedFixture();
 
-      const expired = service.expireIntent(intent.id);
+      const expired = await service.expireIntent(intent.id);
 
       expect(expired.status).toBe("expired");
       expect(isBookable(slotRepo, SLOT_ALICE)).toBe(true);
@@ -1055,13 +1158,13 @@ describe("BookingIntentService state transitions", () => {
         customer,
       );
 
-      expect(service.expireIntent(hold.id).status).toBe("expired");
+      expect((await service.expireIntent(hold.id)).status).toBe("expired");
     });
 
-    it("throws 404 for an unknown intent id", () => {
+    it("throws 404 for an unknown intent id", async () => {
       const { service } = createFixture();
 
-      expect(() => service.expireIntent("nope")).toThrow(
+      await expect(service.expireIntent("nope")).rejects.toThrow(
         new BookingIntentError(404, "Booking intent not found."),
       );
     });
@@ -1073,7 +1176,7 @@ describe("BookingIntentService state transitions", () => {
         const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
         intentRepo.updateStatus(created.id, terminal);
 
-        const error = captureSyncError(() => service.expireIntent(created.id));
+        const error = await captureError(service.expireIntent(created.id));
 
         expect(error?.status).toBe(409);
         expect(error?.message).toBe(`Cannot expire intent with status "${terminal}".`);
@@ -1085,17 +1188,30 @@ describe("BookingIntentService state transitions", () => {
     it("refunds in full when cancelled before the slot starts", async () => {
       const { service, slotRepo, intentRepo, intent } = await pricedFixture();
 
-      const result = service.refundIntent(intent.id, customer, { cancelledAtMs: NOW_MS });
+      const result = await service.refundIntent(intent.id, customer, { cancelledAtMs: NOW_MS });
 
-      expect(result.refundAmountCents).toBe(1000);
+      expect(result.refundAmountCents).toBe(1100);
       expect(result.refundRatio).toBe(1);
       expect(result.consumedRatio).toBe(0);
       expect(result.reason).toBe("partial_refund");
+      expect(result.policyVersionId).toBe("v2-prorated");
+      expect(result.fee).toBe(0);
+      expect(result.holdFee).toBe(0);
+      expect(result.taxReversal).toBe(100);
+      expect(result.breakdown).toMatchObject({
+        fee: 0,
+        taxReversal: 100,
+        netRefund: 1100,
+        policyVersion: "v2-prorated",
+        hoursUntilStart: 168,
+        basePrice: 1000,
+        holdFee: 0,
+      });
       expect(result.intent.status).toBe("cancelled");
       expect(result.intent.refundedAt).toBe(NOW_ISO);
       expect(result.intent.refundMetadata).toEqual({
         refundedAt: NOW_ISO,
-        refundedAmountCents: 1000,
+        refundedAmountCents: 1100,
         refundReason: "partial_refund",
       });
       expect(isBookable(slotRepo, SLOT_ALICE)).toBe(true);
@@ -1105,19 +1221,22 @@ describe("BookingIntentService state transitions", () => {
     it("prorates a cancellation issued halfway through the slot", async () => {
       const { service, intent } = await pricedFixture();
 
-      const result = service.refundIntent(intent.id, customer, {
+      const result = await service.refundIntent(intent.id, customer, {
         cancelledAtMs: SLOT_START_MS + HOUR_MS / 2,
       });
 
       expect(result.consumedRatio).toBe(0.5);
       expect(result.refundRatio).toBe(0.5);
       expect(result.refundAmountCents).toBe(500);
+      expect(result.policyVersionId).toBe("v2-prorated");
+      expect(result.fee).toBe(0);
+      expect(result.holdFee).toBe(0);
     });
 
     it("refunds 0 once the slot has fully elapsed", async () => {
       const { service, intent } = await pricedFixture();
 
-      const result = service.refundIntent(intent.id, customer, { cancelledAtMs: SLOT_END_MS });
+      const result = await service.refundIntent(intent.id, customer, { cancelledAtMs: SLOT_END_MS });
 
       expect(result.refundAmountCents).toBe(0);
       expect(result.consumedRatio).toBe(1);
@@ -1127,7 +1246,7 @@ describe("BookingIntentService state transitions", () => {
     it("normalises a blank reason to the partial_refund default", async () => {
       const { service, intent } = await pricedFixture();
 
-      const result = service.refundIntent(intent.id, customer, { reason: "   " });
+      const result = await service.refundIntent(intent.id, customer, { reason: "   " });
 
       expect(result.reason).toBe("partial_refund");
       expect(result.intent.refundMetadata?.refundReason).toBe("partial_refund");
@@ -1136,7 +1255,7 @@ describe("BookingIntentService state transitions", () => {
     it("trims a caller-supplied reason", async () => {
       const { service, intent } = await pricedFixture();
 
-      const result = service.refundIntent(intent.id, customer, { reason: "  buyer_request  " });
+      const result = await service.refundIntent(intent.id, customer, { reason: "  buyer_request  " });
 
       expect(result.reason).toBe("buyer_request");
       expect(result.intent.refundMetadata?.refundReason).toBe("buyer_request");
@@ -1145,9 +1264,209 @@ describe("BookingIntentService state transitions", () => {
     it("defaults cancelledAtMs to the injected clock", async () => {
       const { service, intent } = await pricedFixture();
 
-      const result = service.refundIntent(intent.id, customer);
+      const result = await service.refundIntent(intent.id, customer);
 
-      expect(result.refundAmountCents).toBe(1000);
+      expect(result.refundAmountCents).toBe(1100);
+    });
+
+    it("matches previewCancel amount and breakdown for a fixed injected clock even when ambient Date.now differs", async () => {
+      let clockMs = NOW_MS;
+      const slotRepo = new InMemorySlotRepository([
+        bookableSlot({ pricingStrategy: FIXED_PRICING }),
+      ]);
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(
+        intentRepo,
+        slotRepo,
+        () => new Date(clockMs).toISOString(),
+        () => clockMs,
+      );
+
+      const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+
+      // Advance injected clock to 36h before slot start while ambient Date.now points to 2h before start
+      clockMs = SLOT_START_MS - 36 * HOUR_MS;
+      jest.spyOn(Date, "now").mockReturnValue(SLOT_START_MS - 2 * HOUR_MS);
+
+      const preview = service.previewCancel(intent.id, customer);
+      const refund = service.refundIntent(intent.id, customer);
+
+      expect(preview.netRefund).toBe(610);
+      expect(refund.refundAmountCents).toBe(preview.netRefund);
+      expect(refund.breakdown).toEqual(preview);
+      expect(refund.policyVersionId).toBe(preview.policyVersion);
+      expect(refund.fee).toBe(preview.fee);
+      expect(refund.holdFee).toBe(preview.holdFee);
+      expect(refund.taxReversal).toBe(preview.taxReversal);
+    });
+
+    it("honours grandfathered v1 terms when an intent created under v1 is refunded after the registry switches to v2", async () => {
+      let clockMs = NOW_MS;
+      const registry: VersionedPolicyRegistry = {
+        ...createDefaultRegistry(),
+        currentVersionId: LEGACY_V1_VERSION.versionId,
+      };
+      const slotRepo = new InMemorySlotRepository([
+        bookableSlot({ pricingStrategy: FIXED_PRICING }),
+      ]);
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(
+        intentRepo,
+        slotRepo,
+        () => new Date(clockMs).toISOString(),
+        () => clockMs,
+        registry,
+      );
+
+      // Created under v1
+      const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+      expect(intent.cancellationPolicySnapshot?.policyVersionId).toBe(LEGACY_V1_VERSION.versionId);
+
+      // Switch active registry version to v2 before refunding
+      registry.currentVersionId = PRORATED_V2_VERSION.versionId;
+      // Cancel 36h before start:
+      // Under v1 (≥24h tier): 100% refund (1000) + 10% taxReversal (100) - 5% fee (50) = 1050
+      // Under v2 (24–72h tier): 60% refund (600) + 10% taxReversal (60) - 50 flatFee = 610
+      clockMs = SLOT_START_MS - 36 * HOUR_MS;
+
+      const preview = service.previewCancel(intent.id, customer);
+      const refund = service.refundIntent(intent.id, customer);
+
+      expect(preview.policyVersion).toBe(LEGACY_V1_VERSION.versionId);
+      expect(preview.netRefund).toBe(1050);
+      expect(refund.policyVersionId).toBe(LEGACY_V1_VERSION.versionId);
+      expect(refund.fee).toBe(50);
+      expect(refund.taxReversal).toBe(100);
+      expect(refund.refundAmountCents).toBe(1050);
+      expect(refund.refundAmountCents).toBe(preview.netRefund);
+    });
+
+    it.each([
+      // > 48h tiers: 168h (≥7d, 100% refund, 0 fee, +100 tax = 1100) and 100h (72–168h, 85% refund = 850, 0 fee, +85 tax = 935)
+      [">48h (168h before start, ≥168h tier)", 168, 1, 0, 100, 1100],
+      [">48h (100h before start, 72–168h tier)", 100, 0.85, 0, 85, 935],
+      // 24–48h tier: 36h before start (24–72h tier, 60% refund = 600, 50 flat fee, +60 tax = 610)
+      ["24–48h (36h before start, 24–72h tier)", 36, 0.6, 50, 60, 610],
+      // < 24h tiers: 18h before start (12–24h tier, 30% refund = 300, 100 flat fee, +30 tax = 230) and 6h (<12h tier, 0% = 0)
+      ["<24h (18h before start, 12–24h tier)", 18, 0.3, 100, 30, 230],
+      ["<24h (6h before start, 0–12h tier)", 6, 0, 0, 0, 0],
+    ])(
+      "computes matching preview and refund across tier %s",
+      async (_label, hoursBeforeStart, expectedRatio, expectedFee, expectedTax, expectedNet) => {
+        let clockMs = NOW_MS;
+        const slotRepo = new InMemorySlotRepository([
+          bookableSlot({ pricingStrategy: FIXED_PRICING }),
+        ]);
+        const intentRepo = new InMemoryBookingIntentRepository();
+        const service = new BookingIntentService(
+          intentRepo,
+          slotRepo,
+          () => new Date(clockMs).toISOString(),
+          () => clockMs,
+        );
+
+        const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+        clockMs = SLOT_START_MS - hoursBeforeStart * HOUR_MS;
+
+        const preview = service.previewCancel(intent.id, customer);
+        const refund = service.refundIntent(intent.id, customer);
+
+        expect(preview.netRefund).toBe(expectedNet);
+        expect(refund.refundAmountCents).toBe(expectedNet);
+        expect(refund.refundRatio).toBe(expectedRatio);
+        expect(refund.consumedRatio).toBe(0);
+        expect(refund.fee).toBe(expectedFee);
+        expect(refund.taxReversal).toBe(expectedTax);
+        expect(refund.policyVersionId).toBe("v2-prorated");
+        expect(refund.breakdown).toEqual(preview);
+      },
+    );
+
+    it("deducts snapshotted hold-fee retention in both previewCancel and refundIntent", async () => {
+      let clockMs = NOW_MS;
+      const holdFeeRegistry: HoldFeePolicyRegistry = {
+        entries: {
+          alice: {
+            supplierId: "alice",
+            holdFeeCents: 150,
+            updatedAt: NOW_ISO,
+          },
+        },
+      };
+      const slotRepo = new InMemorySlotRepository([
+        bookableSlot({ pricingStrategy: FIXED_PRICING }),
+      ]);
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(
+        intentRepo,
+        slotRepo,
+        () => new Date(clockMs).toISOString(),
+        () => clockMs,
+        undefined,
+        holdFeeRegistry,
+      );
+
+      const intent = await service.createIntent(
+        { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: HOLD_DEADLINE_MS },
+        customer,
+      );
+      expect(intent.holdFeePolicySnapshot?.holdFeeCents).toBe(150);
+
+      // Mutate supplier hold fee after booking to verify the snapshot is grandfathered
+      holdFeeRegistry.entries.alice.holdFeeCents = 400;
+
+      // At 36h before start: v2 net before hold fee is 610; minus 150 snapshotted hold fee = 460
+      clockMs = SLOT_START_MS - 36 * HOUR_MS;
+
+      const preview = service.previewCancel(intent.id, customer);
+      const refund = service.refundIntent(intent.id, customer);
+
+      expect(preview.holdFee).toBe(150);
+      expect(preview.netRefund).toBe(460);
+      expect(refund.holdFee).toBe(150);
+      expect(refund.fee).toBe(50);
+      expect(refund.refundAmountCents).toBe(460);
+      expect(refund.intent.refundMetadata?.refundedAmountCents).toBe(460);
+      expect(refund.breakdown).toEqual(preview);
+    });
+
+    it("regression: pre-start refundIntent does not pay linear 100% proration when tiered policy and hold fee apply (preview ≠ refund on main)", async () => {
+      // On main, CheckoutSessionService.calculateDurationBasedRefund returned 1000 (100% of basePrice)
+      // for any pre-start timestamp because consumedMs = max(nowMs - startTimeMs, 0) = 0,
+      // ignoring both cancellationPolicySnapshot and holdFeePolicySnapshot while previewCancel returned 460.
+      let clockMs = NOW_MS;
+      const holdFeeRegistry: HoldFeePolicyRegistry = {
+        entries: {
+          alice: {
+            supplierId: "alice",
+            holdFeeCents: 150,
+            updatedAt: NOW_ISO,
+          },
+        },
+      };
+      const slotRepo = new InMemorySlotRepository([
+        bookableSlot({ pricingStrategy: FIXED_PRICING }),
+      ]);
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(
+        intentRepo,
+        slotRepo,
+        () => new Date(clockMs).toISOString(),
+        () => clockMs,
+        undefined,
+        holdFeeRegistry,
+      );
+
+      const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+      clockMs = SLOT_START_MS - 36 * HOUR_MS;
+
+      const preview = service.previewCancel(intent.id, customer);
+      const refund = service.refundIntent(intent.id, customer);
+
+      // Linear duration proration before start would have been 1000; tiered policy + hold fee is 460.
+      expect(refund.refundAmountCents).not.toBe(1000);
+      expect(refund.refundAmountCents).toBe(460);
+      expect(refund.refundAmountCents).toBe(preview.netRefund);
     });
 
     it.each([
@@ -1157,7 +1476,7 @@ describe("BookingIntentService state transitions", () => {
     ])("rejects a %s cancelledAtMs", async (_label, cancelledAtMs) => {
       const { service, intent } = await pricedFixture();
 
-      expect(() => service.refundIntent(intent.id, customer, { cancelledAtMs })).toThrow(
+      await expect(service.refundIntent(intent.id, customer, { cancelledAtMs })).rejects.toThrow(
         new BookingIntentError(400, "cancelledAtMs must be a valid number."),
       );
     });
@@ -1165,15 +1484,15 @@ describe("BookingIntentService state transitions", () => {
     it("throws 403 for a non-owner non-admin", async () => {
       const { service, intent } = await pricedFixture();
 
-      expect(() => service.refundIntent(intent.id, otherCustomer)).toThrow(
+      await expect(service.refundIntent(intent.id, otherCustomer)).rejects.toThrow(
         new BookingIntentError(403, "You are not authorized to refund this booking intent."),
       );
     });
 
-    it("throws 404 for an unknown intent id", () => {
+    it("throws 404 for an unknown intent id", async () => {
       const { service } = createFixture();
 
-      expect(() => service.refundIntent("nope", customer)).toThrow(
+      await expect(service.refundIntent("nope", customer)).rejects.toThrow(
         new BookingIntentError(404, "Booking intent not found."),
       );
     });
@@ -1185,7 +1504,7 @@ describe("BookingIntentService state transitions", () => {
         const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
         intentRepo.updateStatus(created.id, terminal);
 
-        const error = captureSyncError(() => service.refundIntent(created.id, customer));
+        const error = await captureError(service.refundIntent(created.id, customer));
 
         expect(error?.status).toBe(409);
         expect(error?.message).toBe(`Cannot refund intent with status "${terminal}".`);
@@ -1194,10 +1513,28 @@ describe("BookingIntentService state transitions", () => {
   });
 
   describe("markNoShow", () => {
+    // Slot started two hours ago, so the 15-minute grace window has elapsed
+    // and the no-show is eligible. Explicit grace keeps the fixture independent
+    // of the process-wide grace-window singleton.
+    const STARTED_MS = NOW_MS - 2 * HOUR_MS;
+    const ENDED_MS = STARTED_MS + HOUR_MS;
+    const GRACE_MS = 15 * 60 * 1000;
+
     async function confirmedIntent() {
-      const fixture = createFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
+      const fixture = createFixture(
+        [
+          bookableSlot({
+            startTime: STARTED_MS,
+            endTime: ENDED_MS,
+            pricingStrategy: FIXED_PRICING,
+          }),
+        ],
+        undefined,
+        undefined,
+        { noShowGraceMs: GRACE_MS },
+      );
       const intent = await fixture.service.createIntent({ slotId: SLOT_ALICE }, customer);
-      fixture.service.confirmIntent(intent.id, customer);
+      await fixture.service.confirmIntent(intent.id, customer);
       return { ...fixture, intent };
     }
 
@@ -1209,7 +1546,8 @@ describe("BookingIntentService state transitions", () => {
       expect(result.status).toBe("no_show");
       expect(result.intent.status).toBe("no_show");
       expect(result.forfeitAmountCents).toBe(200);
-      expect(result.reputationDelta).toBe(-1);
+      expect(result.strikeId).toEqual(expect.any(String));
+      expect(result.autoSuspended).toBe(false);
       expect(result.reason).toBe("Buyer no-show");
       expect(result.buyerId).toBe("customer-1");
       expect(result.supplierId).toBe("alice");
@@ -1217,29 +1555,25 @@ describe("BookingIntentService state transitions", () => {
       expect(statusOf(intentRepo, intent.id)).toBe("no_show");
     });
 
-    it("appends a no_show reputation event for the booking", async () => {
+    it("issues exactly one buyer strike and writes no supplier reputation event", async () => {
       const { service, intent } = await confirmedIntent();
 
-      await service.markNoShow(intent.id, alice, { forfeitRatio: 0.5 });
+      const result = await service.markNoShow(intent.id, alice, { forfeitRatio: 0.5 });
 
-      const { events, total } = await listReputationEvents({ supplierId: "customer-1" });
-      expect(total).toBe(1);
-      expect(events[0]).toMatchObject({
-        supplierId: "customer-1",
-        actorId: "alice",
-        cause: "no_show",
-        causeId: intent.id,
-        delta: -1,
-        scoreBefore: 0,
-        scoreAfter: -1,
-      });
-      expect(events[0].metadata).toMatchObject({
+      const buyerStrikes = strikeService.getBuyerStrikes("customer-1");
+      expect(buyerStrikes).toHaveLength(1);
+      expect(buyerStrikes[0]).toMatchObject({
         buyerId: "customer-1",
-        supplierId: "alice",
-        bookingIntentId: intent.id,
-        forfeitRatio: 0.5,
-        forfeitAmountCents: 500,
+        intentId: intent.id,
+        slotId: SLOT_ALICE,
+        reason: "Buyer no-show",
       });
+      expect(result.strikeId).toBe(buyerStrikes[0].id);
+
+      // Regression (#1322): the old implementation recorded the buyer as a
+      // supplier with hard-coded scores. No reputation event may be written.
+      expect((await listReputationEvents({ supplierId: "customer-1" })).total).toBe(0);
+      expect((await listReputationEvents({ supplierId: "alice" })).total).toBe(0);
     });
 
     it("accepts a supplier-requested forfeit ratio of 1 (inclusive upper boundary)", async () => {
@@ -1329,7 +1663,7 @@ describe("BookingIntentService state transitions", () => {
     it("applies the ≥7 d tier of the grandfathered policy snapshot", async () => {
       const { service, intent } = await pricedFixture();
 
-      const breakdown = service.previewCancel(intent.id, customer);
+      const breakdown = await service.previewCancel(intent.id, customer);
 
       expect(breakdown).toMatchObject({
         fee: 0,
@@ -1350,7 +1684,7 @@ describe("BookingIntentService state transitions", () => {
     it("does not mutate the intent (preview is read-only)", async () => {
       const { service, intent, intentRepo } = await pricedFixture();
 
-      service.previewCancel(intent.id, customer);
+      await service.previewCancel(intent.id, customer);
 
       expect(statusOf(intentRepo, intent.id)).toBe("pending");
     });
@@ -1358,7 +1692,7 @@ describe("BookingIntentService state transitions", () => {
     it("throws 403 for a non-owner non-admin", async () => {
       const { service, intent } = await pricedFixture();
 
-      expect(() => service.previewCancel(intent.id, otherCustomer)).toThrow(
+      await expect(service.previewCancel(intent.id, otherCustomer)).rejects.toThrow(
         new BookingIntentError(
           403,
           "You are not authorized to preview cancel this booking intent.",
@@ -1366,19 +1700,19 @@ describe("BookingIntentService state transitions", () => {
       );
     });
 
-    it("throws 404 for an unknown intent id", () => {
+    it("throws 404 for an unknown intent id", async () => {
       const { service } = createFixture();
 
-      expect(() => service.previewCancel("nope", customer)).toThrow(
+      await expect(service.previewCancel("nope", customer)).rejects.toThrow(
         new BookingIntentError(404, "Booking intent not found."),
       );
     });
 
     it("throws 409 for an already-cancelled intent", async () => {
       const { service, intent } = await pricedFixture();
-      service.cancelIntent(intent.id, customer);
+      await service.cancelIntent(intent.id, customer);
 
-      const error = captureSyncError(() => service.previewCancel(intent.id, customer));
+      const error = await captureError(service.previewCancel(intent.id, customer));
 
       expect(error?.status).toBe(409);
       expect(error?.message).toBe("Already cancelled");
@@ -1398,7 +1732,7 @@ describe("autoRefundHold — AutoRefundResult", () => {
       customer,
     );
 
-    const refunded = service.autoRefundHold(hold.id);
+    const refunded = await service.autoRefundHold(hold.id);
 
     expect(refunded.status).toBe("hold_refunded");
     expect(refunded.refundedAt).toBe(NOW_ISO);
@@ -1418,7 +1752,7 @@ describe("autoRefundHold — AutoRefundResult", () => {
       customer,
     );
 
-    const refunded = service.autoRefundHold(hold.id);
+    const refunded = await service.autoRefundHold(hold.id);
     const result: AutoRefundResult = {
       intentId: refunded.id,
       success: true,
@@ -1440,7 +1774,7 @@ describe("autoRefundHold — AutoRefundResult", () => {
       customer,
     );
 
-    const refunded = service.autoRefundHold(hold.id);
+    const refunded = await service.autoRefundHold(hold.id);
     const result: AutoRefundResult = {
       intentId: refunded.id,
       success: true,
@@ -1454,9 +1788,9 @@ describe("autoRefundHold — AutoRefundResult", () => {
     const { service } = createFixture();
 
     const intentId = "intent-missing";
-    const result: AutoRefundResult = (() => {
+    const result: AutoRefundResult = await (async () => {
       try {
-        const refunded = service.autoRefundHold(intentId);
+        const refunded = await service.autoRefundHold(intentId);
         return {
           intentId: refunded.id,
           success: true,
@@ -1480,10 +1814,10 @@ describe("autoRefundHold — AutoRefundResult", () => {
     });
   });
 
-  it("throws 404 for an unknown intent id", () => {
+  it("throws 404 for an unknown intent id", async () => {
     const { service } = createFixture();
 
-    expect(() => service.autoRefundHold("intent-missing")).toThrow(
+    await expect(service.autoRefundHold("intent-missing")).rejects.toThrow(
       new BookingIntentError(404, "Booking intent not found."),
     );
   });
@@ -1492,7 +1826,7 @@ describe("autoRefundHold — AutoRefundResult", () => {
     const { service } = createFixture();
     const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
 
-    const refunded = service.autoRefundHold(created.id);
+    const refunded = await service.autoRefundHold(created.id);
 
     expect(refunded.status).toBe("hold_refunded");
     expect(refunded.refundMetadata?.refundReason).toBe("hold_auto_refund");
@@ -1513,6 +1847,8 @@ describe("BookingIntentService.createRecurringIntents — CreateRecurringBooking
     const created = report.successes[0];
     expect(created.status).toBe("pending");
     expect(created.bookingType).toBe("standard");
+    expect(created.holdPlacedAt).toBeUndefined();
+    expect(created.holdUntilMs).toBeUndefined();
     expect(created.note).toBe("weekly session");
     expect(created.customerId).toBe("customer-1");
     expect(created.slotId).toBe(SLOT_ALICE);
@@ -1543,6 +1879,93 @@ describe("BookingIntentService.createRecurringIntents — CreateRecurringBooking
 
     expect(report.successes).toHaveLength(2);
     expect(report.failures).toEqual([]);
+  });
+
+  it("materializes each refundable occurrence with its own price snapshot", async () => {
+    const { service } = createFixture([
+      occurrenceSlot(OCC_1_MS, { pricingStrategy: FIXED_PRICING }),
+      occurrenceSlot(OCC_2_MS, {
+        id: SLOT_BOB,
+        professional: "bob",
+        pricingStrategy: { ...FIXED_PRICING, basePrice: 1500 },
+      }),
+    ]);
+
+    const report = await service.createRecurringIntents(
+      {
+        rrule: RRULE_DAILY_2,
+        bookingType: "refundable_hold",
+        holdDeadlineMs: HOLD_DEADLINE_MS,
+      },
+      customer,
+    );
+
+    expect(report.failures).toEqual([]);
+    expect(report.successes).toHaveLength(2);
+    expect(report.successes).toEqual([
+      expect.objectContaining({
+        bookingType: "refundable_hold",
+        status: "hold_placed",
+        holdPlacedAt: NOW_ISO,
+        holdUntilMs: HOLD_DEADLINE_MS,
+        pricingSnapshot: {
+          strategyId: "fixed",
+          resolvedPrice: 1000,
+          basePrice: 1000,
+          slotStartMs: OCC_1_MS,
+          nowMs: NOW_MS,
+          activeBookings: 0,
+          capacity: 1,
+          config: { strategy: "fixed" },
+        },
+      }),
+      expect.objectContaining({
+        bookingType: "refundable_hold",
+        status: "hold_placed",
+        holdPlacedAt: NOW_ISO,
+        holdUntilMs: HOLD_DEADLINE_MS,
+        pricingSnapshot: {
+          strategyId: "fixed",
+          resolvedPrice: 1500,
+          basePrice: 1500,
+          slotStartMs: OCC_2_MS,
+          nowMs: NOW_MS,
+          activeBookings: 0,
+          capacity: 1,
+          config: { strategy: "fixed" },
+        },
+      }),
+    ]);
+
+    expect(service.getHoldStatus(report.successes[0].id, customer)).toMatchObject({
+      bookingType: "refundable_hold",
+      status: "hold_placed",
+      refundableNow: true,
+      refundAmountCents: 1000,
+    });
+
+    const refunded = service.cancelIntent(report.successes[0].id, customer);
+    expect(refunded.refundMetadata?.refundedAmountCents).toBe(1000);
+    await expect(
+      service.markNoShow(report.successes[1].id, actor("bob", "professional")),
+    ).resolves.toMatchObject({ forfeitAmountCents: 300 });
+  });
+
+  it("does not create a pricing snapshot when a recurring slot has no pricing strategy", async () => {
+    const { service } = createFixture([occurrenceSlot(OCC_1_MS)]);
+
+    const report = await service.createRecurringIntents(
+      {
+        rrule: RRULE_DAILY_1,
+        bookingType: "refundable_hold",
+        holdDeadlineMs: HOLD_DEADLINE_MS,
+      },
+      customer,
+    );
+
+    expect(report.successes).toHaveLength(1);
+    expect(report.successes[0].pricingSnapshot).toBeUndefined();
+    expect(service.getHoldStatus(report.successes[0].id, customer).refundAmountCents).toBe(0);
   });
 
   it("records a failure for a non-transferable bundle without aborting the batch", async () => {
@@ -1641,5 +2064,120 @@ describe("BookingIntentService.createRecurringIntents — CreateRecurringBooking
     expect(error).toBeInstanceOf(BookingIntentError);
     expect(error?.status).toBe(400);
     expect((error as Error).message).toMatch(/Ambiguous DTSTART/i);
+  });
+});
+
+// ─── Async repository wrapper ─────────────────────────────────────────────────
+
+describe("AsyncWrappedBookingIntentRepository — service suite parity", () => {
+  it("getIntent returns the intent to its owner via an async repository", async () => {
+    const { service } = createAsyncFixture();
+    const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+    const fetched = await service.getIntent(created.id, customer);
+    expect(fetched.id).toBe(created.id);
+    expect(fetched.customerId).toBe("customer-1");
+  });
+
+  it("getIntent hides the intent from another customer via async repository", async () => {
+    const { service } = createAsyncFixture();
+    const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+    const error = await captureError(service.getIntent(created.id, otherCustomer));
+    expect(error).toBeInstanceOf(BookingIntentError);
+    expect(error?.status).toBe(404);
+  });
+
+  it("listIntents scopes results correctly via async repository", async () => {
+    const { service } = createAsyncFixture([
+      bookableSlot(),
+      bookableSlot({ id: SLOT_BOB, professional: "bob" }),
+    ]);
+    await service.createIntent({ slotId: SLOT_ALICE }, customer);
+    await service.createIntent({ slotId: SLOT_BOB }, otherCustomer);
+    const customerIntents = await service.listIntents(customer);
+    const adminIntents = await service.listIntents(admin);
+    expect(customerIntents.map((i) => i.customerId)).toEqual(["customer-1"]);
+    expect(adminIntents).toHaveLength(2);
+  });
+
+  it("confirmIntent transitions pending → confirmed via async repository", async () => {
+    const { service } = createAsyncFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
+    const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+    const confirmed = await service.confirmIntent(intent.id, customer);
+    expect(confirmed.status).toBe("confirmed");
+  });
+
+  it("cancelIntent transitions pending → cancelled via async repository", async () => {
+    const { service, slotRepo } = createAsyncFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
+    const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+    const cancelled = await service.cancelIntent(intent.id, customer);
+    expect(cancelled.status).toBe("cancelled");
+    expect(isBookable(slotRepo, SLOT_ALICE)).toBe(true);
+  });
+
+  it("refundIntent produces the correct refund amount via async repository", async () => {
+    const { service } = createAsyncFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
+    const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+    const result = await service.refundIntent(intent.id, customer, { cancelledAtMs: NOW_MS });
+    expect(result.refundAmountCents).toBe(1000);
+    expect(result.intent.status).toBe("cancelled");
+  });
+
+  it("markNoShow transitions confirmed → no_show via async repository", async () => {
+    const { service } = createAsyncFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
+    const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+    await service.confirmIntent(intent.id, customer);
+    const result = await service.markNoShow(intent.id, alice);
+    expect(result.status).toBe("no_show");
+    expect(result.forfeitAmountCents).toBe(200);
+  });
+
+  it("autoRefundHold transitions hold_placed → hold_refunded via async repository", async () => {
+    const { service } = createAsyncFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
+    const hold = await service.createIntent(
+      { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: HOLD_DEADLINE_MS },
+      customer,
+    );
+    const refunded = await service.autoRefundHold(hold.id);
+    expect(refunded.status).toBe("hold_refunded");
+    expect(refunded.refundMetadata?.refundedAmountCents).toBe(1000);
+  });
+});
+
+// ─── Regression: getIntent ownership check with async repository ──────────────
+
+describe("regression: getIntent ownership check with async repository (issue #1316)", () => {
+  it("returns the correct intent to its owner (not a spurious 404)", async () => {
+    const { service } = createAsyncFixture();
+    const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+    // Before the fix: findById returned a Promise; intent.customerId was undefined
+    // on the Promise object, so ownership check always failed → spurious 404.
+    const intent = await service.getIntent(created.id, customer);
+    expect(intent.id).toBe(created.id);
+    expect(intent.customerId).toBe("customer-1");
+  });
+
+  it("returns 404 for a truly non-existent id (genuine 404, not a spurious one)", async () => {
+    const { service } = createAsyncFixture();
+    const error = await captureError(service.getIntent("intent-does-not-exist", customer));
+    expect(error).toBeInstanceOf(BookingIntentError);
+    expect(error?.status).toBe(404);
+  });
+
+  it("returns 404 for a non-owner (correct ownership check after fix)", async () => {
+    const { service } = createAsyncFixture();
+    const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+    const error = await captureError(service.getIntent(created.id, otherCustomer));
+    expect(error).toBeInstanceOf(BookingIntentError);
+    expect(error?.status).toBe(404);
+    expect(error?.message).toBe("Booking intent not found.");
+  });
+
+  it("admin can read any intent via async repository (no spurious 403/404)", async () => {
+    const { service } = createAsyncFixture();
+    const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+    const intent = await service.getIntent(created.id, admin);
+    expect(intent.id).toBe(created.id);
+    expect(intent.customerId).toBe("customer-1");
+    expect(intent.status).toBe("pending");
   });
 });

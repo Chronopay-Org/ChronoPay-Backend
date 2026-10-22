@@ -6,26 +6,7 @@ ChronoPay API implements a comprehensive authentication and authorization system
 
 ## Authentication Methods
 
-### 1. Header-Based Authentication (Primary)
-**Scheme**: `chronoPayAuth`
-
-**Headers Required**:
-- `x-chronopay-user-id`: User identifier (UUID or alphanumeric)
-- `x-chronopay-role`: User role (`customer`, `admin`, `professional`)
-
-**Usage**:
-```http
-GET /api/v1/slots
-x-chronopay-user-id: user-123
-x-chronopay-role: customer
-```
-
-**Security Notes**:
-- Assumes authentication is terminated upstream (API gateway, auth service)
-- Headers must be validated by trusted upstream service
-- Role-based access control enforced per endpoint
-
-### 2. JWT Bearer Token Authentication
+### 1. JWT Bearer Authentication
 **Scheme**: `bearerAuth`
 
 **Header Required**:
@@ -42,7 +23,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 - Tokens must be validated for signature and expiration
 - Supports stateless authentication
 
-### 3. API Key Authentication (Service-to-Service)
+### 2. API Key Authentication (Service-to-Service)
 **Scheme**: `apiKeyAuth`
 
 **Header Required**:
@@ -59,7 +40,7 @@ x-api-key: sk_live_1234567890abcdef
 - API keys should be stored securely and rotated regularly
 - Each service should have unique API keys
 
-### 4. Admin Token Authentication
+### 3. Admin Token Authentication
 **Scheme**: `adminTokenAuth`
 
 **Header Required**:
@@ -107,7 +88,7 @@ x-chronopay-admin-token: admin-secret-token
 ```
 
 **Causes**:
-- Missing authentication headers
+- Missing bearer token
 - Invalid or expired tokens
 - Missing API key
 

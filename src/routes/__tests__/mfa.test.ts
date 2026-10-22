@@ -9,6 +9,7 @@ import { signJwt } from "../../utils/jwt.js";
 import { createFakeMfaRepository } from "../../test-helpers/fakeMfaRepository.js";
 import { setMfaRepositoryForTests } from "../../repositories/mfaRepository.js";
 import {
+  base32Encode,
   base32Decode,
   generateTotpCode,
   generateTotpSecret,
@@ -31,6 +32,18 @@ async function accessToken(sub: string): Promise<string> {
 
 function codeForSecret(secretBase32: string, nowMs: number = Date.now()): string {
   return generateTotpCode(base32Decode(secretBase32), totpCounter(nowMs));
+}
+
+function wrongCodeForSecret(secretBase32: string, nowMs: number = Date.now()): string {
+  const secret = base32Decode(secretBase32);
+  const validCodes = new Set(
+    [-1, 0, 1].map((offset) => generateTotpCode(secret, totpCounter(nowMs) + offset)),
+  );
+  for (let candidate = 0; candidate < 1_000_000; candidate += 1) {
+    const code = String(candidate).padStart(6, "0");
+    if (!validCodes.has(code)) return code;
+  }
+  throw new Error("Unable to find an invalid TOTP code");
 }
 
 describe("auth MFA routes", () => {
@@ -79,6 +92,41 @@ describe("auth MFA routes", () => {
     it("requires authentication", async () => {
       const res = await request(app).post("/api/v1/auth/mfa/enroll").send({});
       expect(res.status).toBe(401);
+    });
+
+    it("rejects a validly signed JWT without sub or id with 401 Token subject missing", async () => {
+      const handle = createFakeMfaRepository();
+      setMfaRepositoryForTests(handle.repo);
+
+      const sublessToken = await signJwt(
+        { role: "customer", iat: Math.floor(Date.now() / 1000) },
+        ACCESS_SECRET,
+        { expiresInSec: 3600, issuer: ISSUER, audience: AUDIENCE },
+      );
+
+      const res = await request(app)
+        .post("/api/v1/auth/mfa/enroll")
+        .set("Authorization", `Bearer ${sublessToken}`)
+        .send({});
+
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ success: false, error: "Token subject missing" });
+      expect(handle.rows.size).toBe(0);
+    });
+
+    it("rejects a validly signed JWT with whitespace-only sub with 401 Token subject missing", async () => {
+      const handle = createFakeMfaRepository();
+      setMfaRepositoryForTests(handle.repo);
+
+      const whitespaceSubToken = await accessToken("   ");
+      const res = await request(app)
+        .post("/api/v1/auth/mfa/enroll")
+        .set("Authorization", `Bearer ${whitespaceSubToken}`)
+        .send({});
+
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ success: false, error: "Token subject missing" });
+      expect(handle.rows.size).toBe(0);
     });
 
     it("enrols a user and returns the base32 secret + otpauth URI", async () => {
@@ -130,6 +178,22 @@ describe("auth MFA routes", () => {
     it("requires authentication", async () => {
       const res = await request(app).post("/api/v1/auth/mfa/verify").send({ code: "123456" });
       expect(res.status).toBe(401);
+    });
+
+    it("rejects a validly signed JWT without sub or id with 401 Token subject missing", async () => {
+      const sublessToken = await signJwt(
+        { role: "customer", iat: Math.floor(Date.now() / 1000) },
+        ACCESS_SECRET,
+        { expiresInSec: 3600, issuer: ISSUER, audience: AUDIENCE },
+      );
+
+      const res = await request(app)
+        .post("/api/v1/auth/mfa/verify")
+        .set("Authorization", `Bearer ${sublessToken}`)
+        .send({ code: "123456" });
+
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ success: false, error: "Token subject missing" });
     });
 
     it("rejects a request with no body payload", async () => {
@@ -195,6 +259,33 @@ describe("auth MFA routes", () => {
         .send({ code: "000000" });
       expect(res.status).toBe(401);
       expect(res.body).toEqual({ success: false, error: "Invalid or expired MFA code" });
+    });
+
+    it("returns 429 on verification after five consecutive invalid codes", async () => {
+      const handle = createFakeMfaRepository();
+      const rawSecret = generateTotpSecret();
+      await handle.seedVerified("user-123", rawSecret, MASTER_KEY);
+      setMfaRepositoryForTests(handle.repo);
+      const token = await accessToken("user-123");
+      const secretBase32 = base32Encode(rawSecret);
+      const invalidCode = wrongCodeForSecret(secretBase32);
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const res = await request(app)
+          .post("/api/v1/auth/mfa/verify")
+          .set("Authorization", `******
+          .send({ code: invalidCode });
+        expect(res.status).toBe(401);
+      }
+
+      const correctCode = codeForSecret(secretBase32);
+      const locked = await request(app)
+        .post("/api/v1/auth/mfa/verify")
+        .set("Authorization", `******
+        .send({ code: correctCode });
+      expect(locked.status).toBe(429);
+      expect(locked.body.success).toBe(false);
+      expect(handle.rows.get("user-123")?.failed_attempts).toBe(5);
     });
 
     it("rejects replaying the same code", async () => {

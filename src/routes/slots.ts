@@ -221,12 +221,29 @@ router.post(
         }
       }
 
-      const ownerId = (slot as any)?.ownerId ?? (slot as any)?.buyerId ?? (slot as any)?.professional ?? actorId;
+      const ownerId = [(slot as any)?.ownerId, (slot as any)?.buyerId].find(
+        (value) => typeof value === "string" && value.trim().length > 0,
+      );
+
+      if (typeof ownerId !== "string" || ownerId.trim().length === 0) {
+        return res.status(403).json({
+          success: false,
+          error: "This slot has no transferable owner.",
+        });
+      }
 
       if (req.auth?.role !== "admin" && ownerId !== actorId) {
         return res.status(403).json({
           success: false,
           error: "Only the current slot owner may create a secondary listing.",
+        });
+      }
+
+      const body = (req.body ?? {}) as Partial<SecondaryListingInput>;
+      if (Object.prototype.hasOwnProperty.call(body, "supplierConsent")) {
+        return res.status(400).json({
+          success: false,
+          error: "supplierConsent must not be provided; supplier consent is determined from the slot.",
         });
       }
 
@@ -237,10 +254,9 @@ router.post(
         });
       }
 
-      const body = req.body as Partial<SecondaryListingInput>;
       const priceFloorCents = Number(body.priceFloorCents);
       const expiresAt = Number(body.expiresAt);
-      const supplierConsent = body.supplierConsent === true;
+      const supplierConsent = (slot as any)?.resaleConsent === true || (slot as any)?.transferable === true;
 
       if (!Number.isInteger(priceFloorCents) || priceFloorCents <= 0) {
         return res.status(400).json({

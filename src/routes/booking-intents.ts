@@ -9,14 +9,20 @@
  *   Requires JWT authentication via the Authorization Bearer token.
  */
 
-import { Router, type Request, Response } from "express";
+import { Router, type Request, Response, type NextFunction } from "express";
+import { configService } from "../config/config.service.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { requireFeatureFlag } from "../middleware/featureFlags.js";
+import { requireFreshMfa } from "../middleware/requireFreshMfa.js";
 import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import { validateBody } from "../middleware/validation.js";
-import { antiFraudScoring, captureRequestBody } from "../middleware/fraudScoring.js";
+import {
+  antiFraudScoring,
+  captureRequestBody,
+  enqueueHitlReviewForIntent,
+} from "../middleware/fraudScoring.js";
 import {
   CreateBookingIntentBodySchema,
   type CreateBookingIntentBody,
@@ -30,6 +36,7 @@ import { InMemoryBookingIntentRepository } from "../modules/booking-intents/book
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { FraudScorer } from "../services/fraudScorer.js";
+import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../middleware/payloadLimit.js";
 
 export function createBookingIntentsRouter(
   options: {
@@ -66,9 +73,26 @@ export function createBookingIntentsRouter(
 
   const fraudScorer = new FraudScorer();
 
+  // Step-up MFA gate for customer refunds. Active only when
+  // MFA_REQUIRED_FOR_REFUNDS is enabled (default: on in production, off in
+  // development/test). Mounted directly after authentication so
+  // `req.auth.userId` is populated before the challenge subject check.
+  const freshMfaForRefund = requireFreshMfa();
+  const requireMfaForRefund = (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    if (!configService.mfaRequiredForRefunds) {
+      return next();
+    }
+    return freshMfaForRefund(req, res, next);
+  };
+
   router.post(
     "/",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    ...payloadLimit(ROUTE_PAYLOAD_LIMITS.bookingIntent),
     requireAuthenticatedActor(["customer", "admin"]),
     // Preserve the pre-validation body so the fraud wall (below) can still see
     // client-supplied fields the body schema strips (e.g. email) without
@@ -95,6 +119,12 @@ export function createBookingIntentsRouter(
             },
             req.auth!,
           );
+          // Borderline fraud scores are queued for HITL here — the middleware
+          // cannot know the ids before creation (issue #1345). One review item
+          // per created intent so reviewers can open the real intent.
+          for (const created of report.successes) {
+            enqueueHitlReviewForIntent(req, created.id);
+          }
           res.status(201).json({
             success: true,
             report,
@@ -109,6 +139,7 @@ export function createBookingIntentsRouter(
             },
             req.auth!,
           );
+          enqueueHitlReviewForIntent(req, intent.id);
           res.status(201).json({
             success: true,
             intent,
@@ -129,9 +160,9 @@ export function createBookingIntentsRouter(
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const intents = bookingIntentService.listIntents(req.auth!);
+        const intents = await bookingIntentService.listIntents(req.auth!);
         res.status(200).json({
           success: true,
           intents,
@@ -147,9 +178,9 @@ export function createBookingIntentsRouter(
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const intent = bookingIntentService.getIntent(req.params.id, req.auth!);
+        const intent = await bookingIntentService.getIntent(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           intent,
@@ -166,9 +197,9 @@ export function createBookingIntentsRouter(
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
     auditMiddleware("CONFIRM_BOOKING_INTENT"),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const intent = bookingIntentService.confirmIntent(req.params.id, req.auth!);
+        const intent = await bookingIntentService.confirmIntent(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           intent,
@@ -185,9 +216,9 @@ export function createBookingIntentsRouter(
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
     auditMiddleware("CANCEL_BOOKING_INTENT"),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const intent = bookingIntentService.cancelIntent(req.params.id, req.auth!);
+        const intent = await bookingIntentService.cancelIntent(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           intent,
@@ -198,10 +229,64 @@ export function createBookingIntentsRouter(
     },
   );
 
+  /**
+   * @route POST /api/v1/booking-intents/:id/refund
+   * @desc Refund a booking intent, prorated by consumption.
+   * @header x-chronopay-mfa — fresh MFA challenge token (from POST /api/v1/auth/mfa/verify).
+   *       Enforced when MFA_REQUIRED_FOR_REFUNDS is enabled (default in
+   *       production): 401 when missing/expired, 403 when bound to another subject.
+   * @access Private (customer or admin + conditional MFA step-up)
+   */
+  /**
+   * @openapi
+   * /api/v1/booking-intents/{id}/refund:
+   *   post:
+   *     summary: Refund a booking intent
+   *     description: >
+   *       Refunds a booking intent, prorated by consumption. When
+   *       MFA_REQUIRED_FOR_REFUNDS is enabled (default in production) the
+   *       caller must present a fresh MFA step-up challenge bound to the
+   *       authenticated subject.
+   *     tags: [BookingIntents]
+   *     security:
+   *       - chronoPayAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *       - in: header
+   *         name: x-chronopay-mfa
+   *         required: false
+   *         schema:
+   *           type: string
+   *         description: >
+   *           Fresh MFA challenge token from POST /api/v1/auth/mfa/verify.
+   *           Required when MFA_REQUIRED_FOR_REFUNDS is enabled (default in
+   *           production): 401 when missing or older than the freshness
+   *           window, 403 when issued for a different subject.
+   *     responses:
+   *       200:
+   *         description: Refund calculated and recorded
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success:
+   *                   type: boolean
+   *                   example: true
+   *       401:
+   *         description: Missing identity, or missing/expired MFA challenge
+   *       403:
+   *         description: MFA challenge issued for a different subject
+   */
   router.post(
     "/:id/refund",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "admin"]),
+    requireMfaForRefund,
     createAuthAwareRateLimiter(),
     auditMiddleware("REFUND_BOOKING_INTENT"),
     async (req: Request, res: Response): Promise<void> => {
@@ -265,9 +350,9 @@ export function createBookingIntentsRouter(
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const preview = bookingIntentService.previewCancel(req.params.id, req.auth!);
+        const preview = await bookingIntentService.previewCancel(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           preview,
@@ -283,9 +368,9 @@ export function createBookingIntentsRouter(
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "professional", "admin"]),
     createAuthAwareRateLimiter(),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const status = bookingIntentService.getHoldStatus(req.params.id, req.auth!);
+        const status = await bookingIntentService.getHoldStatus(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           holdStatus: status,
@@ -302,9 +387,9 @@ export function createBookingIntentsRouter(
     requireAuthenticatedActor(["admin"]),
     createAuthAwareRateLimiter(),
     auditMiddleware("AUTO_REFUND_HOLD"),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const intent = bookingIntentService.autoRefundHold(req.params.id);
+        const intent = await bookingIntentService.autoRefundHold(req.params.id);
         res.status(200).json({
           success: true,
           intent,

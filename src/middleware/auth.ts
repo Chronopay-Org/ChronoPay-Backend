@@ -2,8 +2,14 @@ import type { NextFunction, Request, Response } from "express";
 
 
 import { defaultAuditLogger } from "../services/auditLogger.js";
-import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
+import type { VerifiedJwtPayload } from "../utils/jwt.js";
 import { configService } from "../config/config.service.js";
+import {
+  getUserId,
+  readBearerToken,
+  verifyRequestJwt,
+  MissingBearerTokenError,
+} from "./jwtIdentity.js";
 import {
   auditRoleDenied,
   isKnownRole,
@@ -18,6 +24,8 @@ export interface AuthContext {
   role: ChronoPayRole;
   claims: VerifiedJwtPayload;
 }
+
+export { getUserId, readBearerToken };
 
 declare global {
   namespace Express {
@@ -41,21 +49,6 @@ export function parseJwtRole(value: unknown): ChronoPayRole {
   return parseRole(value) ?? "customer";
 }
 
-export function getUserId(claims: VerifiedJwtPayload): string {
-  const candidate = claims.sub ?? claims.id;
-  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate.trim() : "";
-}
-
-export function readBearerToken(req: Request): string | null {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return null;
-  }
-
-  const token = authHeader.slice("Bearer ".length).trim();
-  return token.length > 0 ? token : null;
-}
-
 export function requireAuth(expectedIssuer?: string) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -65,10 +58,15 @@ export function requireAuth(expectedIssuer?: string) {
       }
 
       const payload = await verifyJwt(token, { issuer: expectedIssuer ?? configService.jwtIssuer ?? undefined });
+      const userId = getUserId(payload);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: "Token subject missing" });
+      }
+
       // @ts-expect-error - Auto-fixed by script
       req.user = payload;
       req.auth = {
-        userId: getUserId(payload),
+        userId,
         role: parseJwtRole(payload.role),
         claims: payload,
       };
@@ -80,7 +78,7 @@ export function requireAuth(expectedIssuer?: string) {
   };
 }
 
-// Named export for the header-based auth used by booking-intents
+// Named export retained for booking-intents JWT authentication.
 export { requireAuthenticatedActor as authenticateToken };
 
 export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
@@ -91,31 +89,20 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
     }
   }
 
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const userId = req.headers["x-chronopay-user-id"] as string | undefined;
-      const roleHeader = req.headers["x-chronopay-role"] as string | undefined;
-
+      const claims = await verifyRequestJwt(req);
+      const userId = getUserId(claims);
       if (!userId) {
         return res.status(401).json({ success: false, error: "Authentication required." });
       }
 
-      if (!userId.trim()) {
-        return res.status(401).json({ success: false, error: "Authentication required." });
-      }
-
-      const role = parseRole(roleHeader);
-      if (!role) {
-        auditRoleDenied(req, roleHeader ? "RBAC_INVALID_ROLE" : "RBAC_MISSING", roleHeader ? 400 : 401);
-        return res
-          .status(roleHeader ? 400 : 401)
-          .json({ success: false, error: "Role is not authorized for this action." });
-      }
+      const role = parseJwtRole(claims.role);
 
       req.auth = {
-        userId: userId.trim(),
+        userId,
         role,
-        claims: {} as VerifiedJwtPayload,
+        claims,
       };
 
       if (!requiredRoles.some((requiredRole) => roleSatisfies(req.auth!.role, requiredRole))) {
@@ -127,8 +114,12 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
       }
 
       next();
-    } catch {
-      return res.status(401).json({ success: false, error: "Invalid or expired token" });
+    } catch (error) {
+      const message =
+        error instanceof MissingBearerTokenError
+          ? "Authentication required."
+          : "Invalid or expired token";
+      return res.status(401).json({ success: false, error: message });
     }
   };
 }

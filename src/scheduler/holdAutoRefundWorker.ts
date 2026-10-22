@@ -80,7 +80,7 @@ export async function processHoldAutoRefundOnce(
 
   for (const hold of batch) {
     try {
-      const refunded = dependencies.bookingIntentService.autoRefundHold(hold.id);
+      const refunded = await dependencies.bookingIntentService.autoRefundHold(hold.id);
       results.push({
         intentId: refunded.id,
         success: true,

@@ -28,6 +28,11 @@ declare global {
   }
 }
 
+function extractUserId(claims: { sub?: unknown; id?: unknown }): string {
+  const candidate = claims.sub ?? claims.id;
+  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate.trim() : "";
+}
+
 /**
  * Authentication middleware
  *
@@ -78,8 +83,16 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
     });
   }
 
-  verifyJwt(token)
+  return verifyJwt(token)
     .then((decoded) => {
+      const userId = extractUserId(decoded);
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          error: "Token subject missing",
+        });
+      }
+
       // `Express.Request["user"]` is declared twice in src/types/express.d.ts
       // (a pre-existing conflict), and the surviving shape requires a string
       // `id` while the JWT payload types it as optional. The payload is the
@@ -168,12 +181,16 @@ export function authorizeOwnerOrAdmin(getResourceUserId: (req: Request) => strin
       return next();
     }
 
+    const userId = extractUserId(req.user);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Token subject missing" });
+    }
+
     const resourceUserId = getResourceUserId(req);
     if (!resourceUserId) {
       return res.status(404).json({ success: false, error: "Resource not found" });
     }
 
-    const userId = req.user.sub || req.user.id;
     if (userId !== resourceUserId) {
       return res.status(403).json({ success: false, error: "Access denied" });
     }
