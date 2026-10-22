@@ -5,6 +5,7 @@ import express, { type Request, type Response } from "express";
 import { getCORSConfig } from "./config/cors.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
+import { parseCookies } from "./middleware/cookieParser.js";
 import { authenticateTokenIfPresent } from "./middleware/auth.middleware.js";
 import {
   genericErrorHandler,
@@ -22,23 +23,6 @@ import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
 import { ContractService } from "./services/contract.service.js";
-
-// Simple cookie parser middleware
-function parseCookies(req: Request, _res: Response, next: any): void {
-  const cookieHeader = req.headers.cookie;
-  req.cookies = {};
-
-  if (cookieHeader) {
-    cookieHeader.split(";").forEach((cookie) => {
-      const [key, val] = cookie.split("=");
-      if (key && val) {
-        req.cookies[key.trim()] = decodeURIComponent(val.trim());
-      }
-    });
-  }
-
-  next();
-}
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   if (value === undefined) return false;
