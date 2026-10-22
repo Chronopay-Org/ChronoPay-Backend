@@ -47,7 +47,12 @@ import {
 } from "../../../services/reputationWriteAudit.js";
 import type { FxRateProvider } from "../../../services/fxRateProvider.js";
 import type { HoldFeePolicyRegistry } from "../../../services/holdFeePolicy.js";
-import { strikeService } from "../../../services/strikeService.js";
+import {
+  createDefaultRegistry,
+  LEGACY_V1_VERSION,
+  PRORATED_V2_VERSION,
+  type VersionedPolicyRegistry,
+} from "../../../services/cancellationPolicy.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -1185,15 +1190,28 @@ describe("BookingIntentService state transitions", () => {
 
       const result = await service.refundIntent(intent.id, customer, { cancelledAtMs: NOW_MS });
 
-      expect(result.refundAmountCents).toBe(1000);
+      expect(result.refundAmountCents).toBe(1100);
       expect(result.refundRatio).toBe(1);
       expect(result.consumedRatio).toBe(0);
       expect(result.reason).toBe("partial_refund");
+      expect(result.policyVersionId).toBe("v2-prorated");
+      expect(result.fee).toBe(0);
+      expect(result.holdFee).toBe(0);
+      expect(result.taxReversal).toBe(100);
+      expect(result.breakdown).toMatchObject({
+        fee: 0,
+        taxReversal: 100,
+        netRefund: 1100,
+        policyVersion: "v2-prorated",
+        hoursUntilStart: 168,
+        basePrice: 1000,
+        holdFee: 0,
+      });
       expect(result.intent.status).toBe("cancelled");
       expect(result.intent.refundedAt).toBe(NOW_ISO);
       expect(result.intent.refundMetadata).toEqual({
         refundedAt: NOW_ISO,
-        refundedAmountCents: 1000,
+        refundedAmountCents: 1100,
         refundReason: "partial_refund",
       });
       expect(isBookable(slotRepo, SLOT_ALICE)).toBe(true);
@@ -1210,6 +1228,9 @@ describe("BookingIntentService state transitions", () => {
       expect(result.consumedRatio).toBe(0.5);
       expect(result.refundRatio).toBe(0.5);
       expect(result.refundAmountCents).toBe(500);
+      expect(result.policyVersionId).toBe("v2-prorated");
+      expect(result.fee).toBe(0);
+      expect(result.holdFee).toBe(0);
     });
 
     it("refunds 0 once the slot has fully elapsed", async () => {
@@ -1245,7 +1266,207 @@ describe("BookingIntentService state transitions", () => {
 
       const result = await service.refundIntent(intent.id, customer);
 
-      expect(result.refundAmountCents).toBe(1000);
+      expect(result.refundAmountCents).toBe(1100);
+    });
+
+    it("matches previewCancel amount and breakdown for a fixed injected clock even when ambient Date.now differs", async () => {
+      let clockMs = NOW_MS;
+      const slotRepo = new InMemorySlotRepository([
+        bookableSlot({ pricingStrategy: FIXED_PRICING }),
+      ]);
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(
+        intentRepo,
+        slotRepo,
+        () => new Date(clockMs).toISOString(),
+        () => clockMs,
+      );
+
+      const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+
+      // Advance injected clock to 36h before slot start while ambient Date.now points to 2h before start
+      clockMs = SLOT_START_MS - 36 * HOUR_MS;
+      jest.spyOn(Date, "now").mockReturnValue(SLOT_START_MS - 2 * HOUR_MS);
+
+      const preview = service.previewCancel(intent.id, customer);
+      const refund = service.refundIntent(intent.id, customer);
+
+      expect(preview.netRefund).toBe(610);
+      expect(refund.refundAmountCents).toBe(preview.netRefund);
+      expect(refund.breakdown).toEqual(preview);
+      expect(refund.policyVersionId).toBe(preview.policyVersion);
+      expect(refund.fee).toBe(preview.fee);
+      expect(refund.holdFee).toBe(preview.holdFee);
+      expect(refund.taxReversal).toBe(preview.taxReversal);
+    });
+
+    it("honours grandfathered v1 terms when an intent created under v1 is refunded after the registry switches to v2", async () => {
+      let clockMs = NOW_MS;
+      const registry: VersionedPolicyRegistry = {
+        ...createDefaultRegistry(),
+        currentVersionId: LEGACY_V1_VERSION.versionId,
+      };
+      const slotRepo = new InMemorySlotRepository([
+        bookableSlot({ pricingStrategy: FIXED_PRICING }),
+      ]);
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(
+        intentRepo,
+        slotRepo,
+        () => new Date(clockMs).toISOString(),
+        () => clockMs,
+        registry,
+      );
+
+      // Created under v1
+      const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+      expect(intent.cancellationPolicySnapshot?.policyVersionId).toBe(LEGACY_V1_VERSION.versionId);
+
+      // Switch active registry version to v2 before refunding
+      registry.currentVersionId = PRORATED_V2_VERSION.versionId;
+      // Cancel 36h before start:
+      // Under v1 (≥24h tier): 100% refund (1000) + 10% taxReversal (100) - 5% fee (50) = 1050
+      // Under v2 (24–72h tier): 60% refund (600) + 10% taxReversal (60) - 50 flatFee = 610
+      clockMs = SLOT_START_MS - 36 * HOUR_MS;
+
+      const preview = service.previewCancel(intent.id, customer);
+      const refund = service.refundIntent(intent.id, customer);
+
+      expect(preview.policyVersion).toBe(LEGACY_V1_VERSION.versionId);
+      expect(preview.netRefund).toBe(1050);
+      expect(refund.policyVersionId).toBe(LEGACY_V1_VERSION.versionId);
+      expect(refund.fee).toBe(50);
+      expect(refund.taxReversal).toBe(100);
+      expect(refund.refundAmountCents).toBe(1050);
+      expect(refund.refundAmountCents).toBe(preview.netRefund);
+    });
+
+    it.each([
+      // > 48h tiers: 168h (≥7d, 100% refund, 0 fee, +100 tax = 1100) and 100h (72–168h, 85% refund = 850, 0 fee, +85 tax = 935)
+      [">48h (168h before start, ≥168h tier)", 168, 1, 0, 100, 1100],
+      [">48h (100h before start, 72–168h tier)", 100, 0.85, 0, 85, 935],
+      // 24–48h tier: 36h before start (24–72h tier, 60% refund = 600, 50 flat fee, +60 tax = 610)
+      ["24–48h (36h before start, 24–72h tier)", 36, 0.6, 50, 60, 610],
+      // < 24h tiers: 18h before start (12–24h tier, 30% refund = 300, 100 flat fee, +30 tax = 230) and 6h (<12h tier, 0% = 0)
+      ["<24h (18h before start, 12–24h tier)", 18, 0.3, 100, 30, 230],
+      ["<24h (6h before start, 0–12h tier)", 6, 0, 0, 0, 0],
+    ])(
+      "computes matching preview and refund across tier %s",
+      async (_label, hoursBeforeStart, expectedRatio, expectedFee, expectedTax, expectedNet) => {
+        let clockMs = NOW_MS;
+        const slotRepo = new InMemorySlotRepository([
+          bookableSlot({ pricingStrategy: FIXED_PRICING }),
+        ]);
+        const intentRepo = new InMemoryBookingIntentRepository();
+        const service = new BookingIntentService(
+          intentRepo,
+          slotRepo,
+          () => new Date(clockMs).toISOString(),
+          () => clockMs,
+        );
+
+        const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+        clockMs = SLOT_START_MS - hoursBeforeStart * HOUR_MS;
+
+        const preview = service.previewCancel(intent.id, customer);
+        const refund = service.refundIntent(intent.id, customer);
+
+        expect(preview.netRefund).toBe(expectedNet);
+        expect(refund.refundAmountCents).toBe(expectedNet);
+        expect(refund.refundRatio).toBe(expectedRatio);
+        expect(refund.consumedRatio).toBe(0);
+        expect(refund.fee).toBe(expectedFee);
+        expect(refund.taxReversal).toBe(expectedTax);
+        expect(refund.policyVersionId).toBe("v2-prorated");
+        expect(refund.breakdown).toEqual(preview);
+      },
+    );
+
+    it("deducts snapshotted hold-fee retention in both previewCancel and refundIntent", async () => {
+      let clockMs = NOW_MS;
+      const holdFeeRegistry: HoldFeePolicyRegistry = {
+        entries: {
+          alice: {
+            supplierId: "alice",
+            holdFeeCents: 150,
+            updatedAt: NOW_ISO,
+          },
+        },
+      };
+      const slotRepo = new InMemorySlotRepository([
+        bookableSlot({ pricingStrategy: FIXED_PRICING }),
+      ]);
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(
+        intentRepo,
+        slotRepo,
+        () => new Date(clockMs).toISOString(),
+        () => clockMs,
+        undefined,
+        holdFeeRegistry,
+      );
+
+      const intent = await service.createIntent(
+        { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: HOLD_DEADLINE_MS },
+        customer,
+      );
+      expect(intent.holdFeePolicySnapshot?.holdFeeCents).toBe(150);
+
+      // Mutate supplier hold fee after booking to verify the snapshot is grandfathered
+      holdFeeRegistry.entries.alice.holdFeeCents = 400;
+
+      // At 36h before start: v2 net before hold fee is 610; minus 150 snapshotted hold fee = 460
+      clockMs = SLOT_START_MS - 36 * HOUR_MS;
+
+      const preview = service.previewCancel(intent.id, customer);
+      const refund = service.refundIntent(intent.id, customer);
+
+      expect(preview.holdFee).toBe(150);
+      expect(preview.netRefund).toBe(460);
+      expect(refund.holdFee).toBe(150);
+      expect(refund.fee).toBe(50);
+      expect(refund.refundAmountCents).toBe(460);
+      expect(refund.intent.refundMetadata?.refundedAmountCents).toBe(460);
+      expect(refund.breakdown).toEqual(preview);
+    });
+
+    it("regression: pre-start refundIntent does not pay linear 100% proration when tiered policy and hold fee apply (preview ≠ refund on main)", async () => {
+      // On main, CheckoutSessionService.calculateDurationBasedRefund returned 1000 (100% of basePrice)
+      // for any pre-start timestamp because consumedMs = max(nowMs - startTimeMs, 0) = 0,
+      // ignoring both cancellationPolicySnapshot and holdFeePolicySnapshot while previewCancel returned 460.
+      let clockMs = NOW_MS;
+      const holdFeeRegistry: HoldFeePolicyRegistry = {
+        entries: {
+          alice: {
+            supplierId: "alice",
+            holdFeeCents: 150,
+            updatedAt: NOW_ISO,
+          },
+        },
+      };
+      const slotRepo = new InMemorySlotRepository([
+        bookableSlot({ pricingStrategy: FIXED_PRICING }),
+      ]);
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(
+        intentRepo,
+        slotRepo,
+        () => new Date(clockMs).toISOString(),
+        () => clockMs,
+        undefined,
+        holdFeeRegistry,
+      );
+
+      const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
+      clockMs = SLOT_START_MS - 36 * HOUR_MS;
+
+      const preview = service.previewCancel(intent.id, customer);
+      const refund = service.refundIntent(intent.id, customer);
+
+      // Linear duration proration before start would have been 1000; tiered policy + hold fee is 460.
+      expect(refund.refundAmountCents).not.toBe(1000);
+      expect(refund.refundAmountCents).toBe(460);
+      expect(refund.refundAmountCents).toBe(preview.netRefund);
     });
 
     it.each([
