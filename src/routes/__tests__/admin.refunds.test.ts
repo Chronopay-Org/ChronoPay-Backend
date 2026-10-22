@@ -1,12 +1,16 @@
 // @ts-nocheck
 import request from "supertest";
 import { createApp } from "../../app.js";
+import { configService } from "../../config/config.service.js";
+import { mfaService } from "../../services/mfaService.js";
 import { setRefundRepository, setSessionRepositoryForRefund } from "../../services/refund.js";
 import { setCheckoutRepository } from "../../services/checkout.js";
 import { CheckoutSessionStatus } from "../../types/checkout.js";
 
 const app = createApp({ enableContentNegotiation: false });
-const adminHeaders = { "x-chronopay-admin-token": "test-admin-token" };
+const ADMIN_ACTOR = "admin-1";
+const CHALLENGE_SECRET = "refunds-route-challenge-secret-12345";
+let adminHeaders: Record<string, string> = {};
 
 class InMemoryRefundRepo {
   private store: Map<string, any> = new Map();
@@ -82,8 +86,26 @@ describe("Refund Routes", () => {
   let refundRepo: InMemoryRefundRepo;
   let sessionRepo: InMemorySessionRepo;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env.CHRONOPAY_ADMIN_TOKEN = "test-admin-token";
+    process.env.MFA_CHALLENGE_SECRET = CHALLENGE_SECRET;
+    configService.refresh();
+    // refresh() loads secrets asynchronously — drain the queue before issuing.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // POST /refunds now requires a fresh MFA step-up challenge
+    // (subject bound via x-chronopay-user-id).
+    const { mfaToken } = await mfaService.issueChallenge(ADMIN_ACTOR, {
+      challengeSecret: CHALLENGE_SECRET,
+      nowMs: Date.now(),
+      challengeTtlSec: 3600,
+    });
+    adminHeaders = {
+      "x-chronopay-admin-token": "test-admin-token",
+      "x-chronopay-user-id": ADMIN_ACTOR,
+      "x-chronopay-mfa": mfaToken,
+    };
+
     refundRepo = new InMemoryRefundRepo();
     sessionRepo = new InMemorySessionRepo();
     setRefundRepository(refundRepo);
@@ -93,6 +115,7 @@ describe("Refund Routes", () => {
 
   afterEach(() => {
     delete process.env.CHRONOPAY_ADMIN_TOKEN;
+    delete process.env.MFA_CHALLENGE_SECRET;
   });
 
   describe("POST /api/v1/admin/refunds", () => {

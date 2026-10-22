@@ -18,6 +18,8 @@ export interface MfaEnrollmentRow {
   period: number;
   verified: boolean;
   last_used_counter: number | null;
+  failed_attempts: number;
+  locked_until: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +45,11 @@ export interface CounterAdvanceResult {
   enrollment: MfaEnrollmentRow | null;
 }
 
+export interface MfaFailedAttemptResult {
+  failedAttempts: number;
+  lockedUntil: string | null;
+}
+
 export interface MfaRepository {
   /** Creates or replaces a pending (unverified) enrollment. */
   upsertEnrollment(input: NewMfaEnrollment): Promise<MfaEnrollmentRow>;
@@ -55,5 +62,15 @@ export interface MfaRepository {
    * `{ advanced: false }` when the step is a replay / concurrent duplicate.
    */
   advanceLastUsedCounter(userId: string, step: number): Promise<CounterAdvanceResult>;
+  /** Atomically records a failed code and starts lockout once the threshold is reached. */
+  recordFailedAttempt(
+    userId: string,
+    threshold: number,
+    lockedUntil: Date,
+  ): Promise<MfaFailedAttemptResult | null>;
+  /** Clears an expired lockout and its associated consecutive-failure count. */
+  clearExpiredLockout(userId: string, now: Date): Promise<boolean>;
+  /** Clears lockout state after successful verification. */
+  resetFailedAttempts(userId: string): Promise<void>;
   deleteByUserId(userId: string): Promise<boolean>;
 }

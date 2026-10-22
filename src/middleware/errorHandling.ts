@@ -28,12 +28,32 @@ export function jsonParseErrorHandler(
   res: Response,
   next: NextFunction,
 ) {
-  if (err.type !== "entity.parse.failed") {
-    return next(err);
+  if (err.type === "entity.parse.failed") {
+    const wrapped = new MalformedJsonError();
+    return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
   }
 
-  const wrapped = new MalformedJsonError();
-  return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
+  if (err.type === "entity.too.large") {
+    const wrapped = new AppError(
+      "Request body exceeds the maximum allowed size.",
+      413,
+      "PAYLOAD_TOO_LARGE",
+      true,
+    );
+    return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
+  }
+
+  if (err.type === "charset.unsupported" || err.type === "encoding.unsupported") {
+    const wrapped = new AppError(
+      "Unsupported request body encoding.",
+      ERROR_CODES.UNSUPPORTED_MEDIA_TYPE.status,
+      ERROR_CODES.UNSUPPORTED_MEDIA_TYPE.code,
+      true,
+    );
+    return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
+  }
+
+  return next(err);
 }
 
 export function genericErrorHandler(

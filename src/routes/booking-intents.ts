@@ -9,9 +9,11 @@
  *   Requires JWT authentication via the Authorization Bearer token.
  */
 
-import { Router, type Request, Response } from "express";
+import { Router, type Request, Response, type NextFunction } from "express";
+import { configService } from "../config/config.service.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { requireFeatureFlag } from "../middleware/featureFlags.js";
+import { requireFreshMfa } from "../middleware/requireFreshMfa.js";
 import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
@@ -34,6 +36,7 @@ import { InMemoryBookingIntentRepository } from "../modules/booking-intents/book
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { FraudScorer } from "../services/fraudScorer.js";
+import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../middleware/payloadLimit.js";
 
 export function createBookingIntentsRouter(
   options: {
@@ -70,9 +73,26 @@ export function createBookingIntentsRouter(
 
   const fraudScorer = new FraudScorer();
 
+  // Step-up MFA gate for customer refunds. Active only when
+  // MFA_REQUIRED_FOR_REFUNDS is enabled (default: on in production, off in
+  // development/test). Mounted directly after authentication so
+  // `req.auth.userId` is populated before the challenge subject check.
+  const freshMfaForRefund = requireFreshMfa();
+  const requireMfaForRefund = (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    if (!configService.mfaRequiredForRefunds) {
+      return next();
+    }
+    return freshMfaForRefund(req, res, next);
+  };
+
   router.post(
     "/",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    ...payloadLimit(ROUTE_PAYLOAD_LIMITS.bookingIntent),
     requireAuthenticatedActor(["customer", "admin"]),
     // Preserve the pre-validation body so the fraud wall (below) can still see
     // client-supplied fields the body schema strips (e.g. email) without
@@ -209,10 +229,64 @@ export function createBookingIntentsRouter(
     },
   );
 
+  /**
+   * @route POST /api/v1/booking-intents/:id/refund
+   * @desc Refund a booking intent, prorated by consumption.
+   * @header x-chronopay-mfa — fresh MFA challenge token (from POST /api/v1/auth/mfa/verify).
+   *       Enforced when MFA_REQUIRED_FOR_REFUNDS is enabled (default in
+   *       production): 401 when missing/expired, 403 when bound to another subject.
+   * @access Private (customer or admin + conditional MFA step-up)
+   */
+  /**
+   * @openapi
+   * /api/v1/booking-intents/{id}/refund:
+   *   post:
+   *     summary: Refund a booking intent
+   *     description: >
+   *       Refunds a booking intent, prorated by consumption. When
+   *       MFA_REQUIRED_FOR_REFUNDS is enabled (default in production) the
+   *       caller must present a fresh MFA step-up challenge bound to the
+   *       authenticated subject.
+   *     tags: [BookingIntents]
+   *     security:
+   *       - chronoPayAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *       - in: header
+   *         name: x-chronopay-mfa
+   *         required: false
+   *         schema:
+   *           type: string
+   *         description: >
+   *           Fresh MFA challenge token from POST /api/v1/auth/mfa/verify.
+   *           Required when MFA_REQUIRED_FOR_REFUNDS is enabled (default in
+   *           production): 401 when missing or older than the freshness
+   *           window, 403 when issued for a different subject.
+   *     responses:
+   *       200:
+   *         description: Refund calculated and recorded
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success:
+   *                   type: boolean
+   *                   example: true
+   *       401:
+   *         description: Missing identity, or missing/expired MFA challenge
+   *       403:
+   *         description: MFA challenge issued for a different subject
+   */
   router.post(
     "/:id/refund",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "admin"]),
+    requireMfaForRefund,
     createAuthAwareRateLimiter(),
     auditMiddleware("REFUND_BOOKING_INTENT"),
     async (req: Request, res: Response): Promise<void> => {

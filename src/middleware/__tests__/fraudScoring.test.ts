@@ -1,4 +1,4 @@
-import express from "express";
+import express, { type Request } from "express";
 import request from "supertest";
 import { jest } from "@jest/globals";
 import { FraudScorer } from "../../services/fraudScorer.js";

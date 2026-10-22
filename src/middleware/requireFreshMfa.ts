@@ -109,5 +109,6 @@ export function requireFreshMfa(options: RequireFreshMfaOptions = {}) {
         res.status(500).json({ success: false, error: "Failed to verify MFA challenge" });
       }
     }
+    next();
   };
 }
