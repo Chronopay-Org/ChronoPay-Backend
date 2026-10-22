@@ -281,6 +281,30 @@ describe("optional fields", () => {
   });
 });
 
+// ─── MFA_REQUIRED_FOR_REFUNDS ────────────────────────────────────────────────
+
+describe("MFA_REQUIRED_FOR_REFUNDS", () => {
+  it("defaults to on in production", () => {
+    expect(load({ NODE_ENV: "production" }).mfaRequiredForRefunds).toBe(true);
+  });
+
+  it("defaults to off outside production", () => {
+    expect(load().mfaRequiredForRefunds).toBe(false);
+    expect(load({ NODE_ENV: "test" }).mfaRequiredForRefunds).toBe(false);
+  });
+
+  it("honours an explicit override", () => {
+    expect(
+      load({ NODE_ENV: "production", MFA_REQUIRED_FOR_REFUNDS: "false" }).mfaRequiredForRefunds,
+    ).toBe(false);
+    expect(load({ MFA_REQUIRED_FOR_REFUNDS: "true" }).mfaRequiredForRefunds).toBe(true);
+  });
+
+  it("rejects invalid values", () => {
+    expectIssue({ ...VALID, MFA_REQUIRED_FOR_REFUNDS: "yes" }, "MFA_REQUIRED_FOR_REFUNDS");
+  });
+});
+
 // ─── EnvValidationError shape ─────────────────────────────────────────────────
 
 describe("EnvValidationError", () => {

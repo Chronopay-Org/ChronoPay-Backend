@@ -3,6 +3,10 @@ import express from "express";
 import request from "supertest";
 import { registerWebhookRoutes } from "../webhooks.js";
 import adminRouter from "../admin.js";
+import { configService } from "../../config/config.service.js";
+import { mfaService } from "../../services/mfaService.js";
+
+const CHALLENGE_SECRET = "webhook-rotate-challenge-secret-12345";
 
 function signWithSecret(body: object, secret: string) {
     const raw = JSON.stringify(body);
@@ -25,6 +29,7 @@ describe("webhook key rotation and admin promote", () => {
         delete process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS;
         delete process.env.SETTLEMENTS_WEBHOOK_SECRET_NEXT;
         delete process.env.CHRONOPAY_ADMIN_TOKEN;
+        delete process.env.MFA_CHALLENGE_SECRET;
     });
 
     it("accepts previous secret during overlap window and rejects it after window closes", async () => {
@@ -70,6 +75,16 @@ describe("webhook key rotation and admin promote", () => {
         process.env.SETTLEMENTS_WEBHOOK_SECRET = "old-current";
         process.env.SETTLEMENTS_WEBHOOK_SECRET_NEXT = "new-current";
         process.env.CHRONOPAY_ADMIN_TOKEN = "admintoken";
+        process.env.MFA_CHALLENGE_SECRET = CHALLENGE_SECRET;
+        configService.refresh();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        // Secret rotation requires a fresh MFA step-up challenge.
+        const { mfaToken } = await mfaService.issueChallenge("admin-1", {
+            challengeSecret: CHALLENGE_SECRET,
+            nowMs: Date.now(),
+            challengeTtlSec: 3600,
+        });
 
         const adminApp = express();
         adminApp.use(express.json());
@@ -78,6 +93,8 @@ describe("webhook key rotation and admin promote", () => {
         const res = await request(adminApp)
             .post("/api/v1/admin/webhooks/rotate")
             .set("x-chronopay-admin-token", "admintoken")
+            .set("x-chronopay-user-id", "admin-1")
+            .set("x-chronopay-mfa", mfaToken)
             .send();
 
         expect(res.status).toBe(200);

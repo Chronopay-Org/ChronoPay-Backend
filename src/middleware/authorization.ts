@@ -2,9 +2,12 @@ import { NextFunction, Request, Response } from "express";
 import { ConfigurationError, ForbiddenError, UnauthorizedError } from "../errors/AppError.js";
 import { sendErrorResponse } from "../errors/sendError.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
-import { constantTimeEquals } from "../utils/constantTimeEquals.js";
+import type { ChronoPayRole } from "./auth.js";
+import type { VerifiedJwtPayload } from "../utils/jwt.js";
 
 const ADMIN_TOKEN_HEADER = "x-chronopay-admin-token";
+const ADMIN_IDENTITY_HEADER = "x-chronopay-user-id";
+const FALLBACK_ADMIN_ACTOR_ID = "admin";
 
 type AdminTokenAuditAction = "AUTHZ_UNCONFIGURED" | "AUTHZ_MISSING" | "AUTHZ_FORBIDDEN";
 
@@ -58,6 +61,42 @@ export function requireAdminToken(req: Request, res: Response, next: NextFunctio
     emitAdminTokenDeniedAudit(req, "AUTHZ_FORBIDDEN", 403);
     return sendErrorResponse(res, new ForbiddenError("Invalid admin token"), req);
   }
+
+  return next();
+}
+
+/**
+ * Populates `req.auth` on admin-token routes so that step-up middleware
+ * mounted afterwards (notably `requireFreshMfa`) has a subject to bind the
+ * MFA challenge to. Admin-token routes authenticate with
+ * `x-chronopay-admin-token` only and never set `req.auth` themselves, so
+ * without this middleware the MFA check would reject every request with
+ * "Authentication required".
+ *
+ * The subject comes from the same `x-chronopay-user-id` header used by
+ * `requireAuthenticatedActor`, so admins present a challenge issued to their
+ * own account via `POST /api/v1/auth/mfa/verify`. Admin-token calls without
+ * the identity header fall back to a stable `admin` subject.
+ *
+ * Mount order: `requireAdminToken`, `populateAdminActor`, `requireFreshMfa()`.
+ * Only mount it on routes that actually need the actor; it deliberately does
+ * not run inside `requireAdminToken` so other admin routes keep their
+ * existing `req.auth === undefined` behaviour.
+ */
+export function populateAdminActor(req: Request, _res: Response, next: NextFunction) {
+  if (req.auth?.userId) {
+    return next();
+  }
+
+  const raw = req.headers[ADMIN_IDENTITY_HEADER];
+  const headerValue = Array.isArray(raw) ? raw[0] : raw;
+  const userId = typeof headerValue === "string" ? headerValue.trim() : "";
+
+  req.auth = {
+    userId: userId.length > 0 ? userId : FALLBACK_ADMIN_ACTOR_ID,
+    role: "admin" as ChronoPayRole,
+    claims: {} as VerifiedJwtPayload,
+  };
 
   return next();
 }

@@ -58,8 +58,11 @@ export interface EnvConfig {
   mfaWindowPeriods: number;
   /** Lifetime (seconds) of an issued MFA challenge token. Default 300. */
   mfaChallengeTtlSec: number;
-  /** TTL (seconds) for the idempotency processing lock. Default 60. */
-  idempotencyProcessingLockTtlSeconds?: number;
+  /**
+   * Require a fresh MFA challenge on customer booking refunds.
+   * Default: enabled when NODE_ENV=production, disabled otherwise.
+   */
+  mfaRequiredForRefunds: boolean;
 }
 
 export class EnvValidationError extends Error {
@@ -141,6 +144,12 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     300,
     issues,
   );
+  const mfaRequiredForRefunds = parseBoolean(
+    env.MFA_REQUIRED_FOR_REFUNDS,
+    "MFA_REQUIRED_FOR_REFUNDS",
+    nodeEnv === "production",
+    issues,
+  );
 
   const idempotencyProcessingLockTtlSeconds = parseOptionalPositiveInteger(
     env.IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS,
@@ -175,7 +184,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     mfaFreshnessMs,
     mfaWindowPeriods,
     mfaChallengeTtlSec,
-    idempotencyProcessingLockTtlSeconds,
+    mfaRequiredForRefunds,
   };
 }
 
