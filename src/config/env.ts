@@ -53,6 +53,10 @@ export interface EnvConfig {
   mfaWindowPeriods: number;
   /** Lifetime (seconds) of an issued MFA challenge token. Default 300. */
   mfaChallengeTtlSec: number;
+  /** Base application URL used to build the OAuth redirect allowlist. */
+  appUrl?: string;
+  /** Additional exact origins allowed as OAuth redirect targets. */
+  oauthRedirectAllowlist?: string[];
 }
 
 export class EnvValidationError extends Error {
@@ -129,6 +133,9 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
 
+  const appUrl = parseOptionalUrl(env.APP_URL, "APP_URL", issues);
+  const oauthRedirectAllowlist = parseUrlList(env.OAUTH_REDIRECT_ALLOWLIST ?? "", "OAUTH_REDIRECT_ALLOWLIST", issues);
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -155,6 +162,8 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     mfaFreshnessMs,
     mfaWindowPeriods,
     mfaChallengeTtlSec,
+    appUrl,
+    oauthRedirectAllowlist,
   };
 }
 

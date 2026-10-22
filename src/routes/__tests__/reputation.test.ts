@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../../test/auth.js";
 import { describe, it, expect, beforeEach, jest } from "@jest/globals";
 import request from "supertest";
 import express from "express";
@@ -62,8 +63,7 @@ describe("Reputation Transparency API - GET /api/v1/suppliers/:supplierId/reputa
   it("should allow admin role access to view any supplier's reputation signals", async () => {
     const res = await request(app)
       .get("/api/v1/suppliers/supplier-101/reputation/signals")
-      .set("x-chronopay-user-id", "admin-user")
-      .set("x-chronopay-role", "admin");
+      .set("Authorization", createTestAuthorization("admin-user", "admin"));
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);

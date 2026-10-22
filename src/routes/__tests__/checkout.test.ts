@@ -10,7 +10,11 @@ import request from "supertest";
 import { createApp } from "../../app.js";
 import { setFeatureFlagsFromEnv } from "../../flags/service.js";
 import { CheckoutSession, CheckoutSessionStatus } from "../../types/checkout.js";
-import { CheckoutSessionService, setCheckoutRepository } from "../../services/checkout.js";
+import {
+  CheckoutSessionService,
+  setCheckoutPaymentProvider,
+  setCheckoutRepository,
+} from "../../services/checkout.js";
 import { PgCheckoutSessionRepository } from "../../modules/checkout/pg-checkout-session-repository.js";
 import { signJwt } from "../../utils/jwt.js";
 import { createHmac } from "node:crypto";
@@ -398,7 +402,8 @@ describe("POST /api/v1/checkout/sessions/:sessionId/pay", () => {
     const res = await postOwner(`/api/v1/checkout/sessions/${id}/pay`);
 
     expect(res.status).toBe(200);
-    expect(["completed", "failed"]).toContain(res.body.session.status);
+    expect(res.body.session.status).toBe(CheckoutSessionStatus.COMPLETED);
+    expect(res.body.session.paymentToken).toBe("route_test_ref");
   });
 
   it("returns 409 when paying a completed session (owner then admin complete)", async () => {
