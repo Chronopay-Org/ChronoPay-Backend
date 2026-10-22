@@ -49,6 +49,7 @@ import fraudModelsRouter from "./routes/fraudModels.js";
 import flagRolloutsRouter from "./routes/flagRollouts.js";
 import redactionPolicyRouter from "./routes/redactionPolicy.js";
 import { gdprExportRouter } from "./routes/gdprExport.js";
+import { createNotificationsRouter } from "./routes/notifications.js";
 import reputationRouter from "./routes/reputation.js";
 import partnerQuotaRouter from "./routes/partnerQuota.js";
 import subscriptionRouter from "./routes/subscriptions.js";
@@ -501,27 +502,26 @@ export function createApp(options: AppFactoryOptions = {}) {
   registerWebhookRoutes(app);
   app.use("/api/v1", webhookRoutes);
 
-  // 6. SMS Routes
-  app.post("/api/v1/notifications/sms", validateRequiredFields(["to", "message"]), (req, res) => {
-    // eslint-disable-next-line unused-imports/no-unused-vars
-    const { to, message } = req.body;
-    if (message === "FAIL") {
-      return res.status(502).json({ success: false, error: "Simulated failure" });
-    }
-    res.json({ success: true, provider: "in-memory" });
-  });
-
-  // 7. Test Auth Routes (for config rotation tests)
-  app.post("/api/v1/test/auth", (req, res) => {
-    const { token } = req.body;
-    if (token === "invalid-token") return res.status(401).json({ success: false });
-    if (token === "valid-token-for-primary-secret" || token === "valid-token-for-previous-secret") {
-      return res.json({ success: true });
-    }
-    res.status(401).json({ success: false });
-  });
+  // 6. Notification Routes (SMS)
+  // The router enforces its own authentication (requireAuthenticatedActor),
+  // feature flag, rate limiting and validation — never bypass it with an
+  // unauthenticated app-level handler.
+  app.use("/api/v1/notifications", createNotificationsRouter());
 
   if (options.enableTestRoutes) {
+    // 7. Test Routes — only ever registered behind enableTestRoutes so that
+    // staging/production deployments cannot expose them by default.
+    //
+    // Test Auth Routes (for config rotation tests)
+    app.post("/api/v1/test/auth", (req, res) => {
+      const { token } = req.body;
+      if (token === "invalid-token") return res.status(401).json({ success: false });
+      if (token === "valid-token-for-primary-secret" || token === "valid-token-for-previous-secret") {
+        return res.json({ success: true });
+      }
+      res.status(401).json({ success: false });
+    });
+
     app.get("/__test__/explode", () => {
       throw new Error("Intentional test fault");
     });
