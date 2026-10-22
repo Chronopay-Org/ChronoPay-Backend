@@ -569,11 +569,37 @@ export class BookingIntentService {
     return 0;
   }
 
-  autoRefundHold(intentId: string): BookingIntentRecord {
+  autoRefundHold(intentId: string, options: { force?: boolean } = {}): BookingIntentRecord {
     const intent = this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
+
+    if (intent.bookingType !== "refundable_hold") {
+      throw new BookingIntentError(
+        409,
+        `Cannot auto-refund intent with booking type "${intent.bookingType ?? "standard"}"; only refundable holds are eligible.`,
+      );
+    }
+
+    if (intent.status !== "hold_placed") {
+      throw new BookingIntentError(
+        409,
+        `Cannot auto-refund intent with status "${intent.status}".`,
+      );
+    }
+
+    if (!options.force) {
+      const isExpired =
+        intent.holdUntilMs !== undefined && intent.holdUntilMs <= this.nowMs();
+      if (!isExpired) {
+        throw new BookingIntentError(
+          409,
+          "Refundable hold has not reached its holdUntilMs deadline yet.",
+        );
+      }
+    }
+
     const refundAmount = this.resolveIntentPrice(intent);
     const updated = this.bookingIntentRepository.update(intentId, {
       status: "hold_refunded",

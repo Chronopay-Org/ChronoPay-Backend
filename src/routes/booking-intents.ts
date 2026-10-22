@@ -291,7 +291,14 @@ export function createBookingIntentsRouter(
     auditMiddleware("AUTO_REFUND_HOLD"),
     (req: Request, res: Response): void => {
       try {
-        const intent = bookingIntentService.autoRefundHold(req.params.id);
+        // Admin-only endpoint: allow an explicit `force: true` body flag to
+        // refund a hold before its holdUntilMs deadline. The worker path never
+        // passes force, so it keeps the strict expiry guard.
+        const force =
+          req.body !== null &&
+          typeof req.body === "object" &&
+          (req.body as { force?: unknown }).force === true;
+        const intent = bookingIntentService.autoRefundHold(req.params.id, { force });
         res.status(200).json({
           success: true,
           intent,
