@@ -61,6 +61,8 @@ Copy `.env.example` to `.env`. Variables listed there:
 
 `src/config/env.ts` additionally reads (not all in `.env.example`): `NODE_ENV`, `REDIS_URL` (required), `HORIZON_URL`/`HORIZON_URLS`, `STELLAR_NETWORK_PASSPHRASE`, `ESCROW_CONTRACT_HASH`, `JWT_ISSUER`, `JWT_AUDIENCE`, `WEBHOOK_SECRET`, `INTERNAL_OVERRIDE_SECRET(_PREV)`, `INTERNAL_BYPASS_TOLERANCE_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, `REQUEST_TIMEOUT_MS`, `TRUST_PROXY`. See [docs/environment-validation.md](docs/environment-validation.md) for validation rules. A database connection is configured in `src/db/` (see [docs/database/migrations.md](docs/database/migrations.md)).
 
+Partner API keys resolve to `basic` by default. Set `PARTNER_API_KEY_TIERS` to a JSON object mapping the derived API key ID (`apiKey_` followed by the key's SHA-256 hex digest) to a tier, for example `{"apiKey_<sha256-hex>":"premium"}`. Tier names use the allowlists in `src/config/partner-tiers.json`. Both the mapping and allowlist are loaded and validated at startup; restart the service after changing them. `reloadPartnerTierMap` and `reloadPartnerTiersConfig` are exported for explicit reloads in tests.
+
 ## Running locally
 
 Requires Node.js 20+ (CI uses 22), npm, and a Redis instance.
@@ -76,6 +78,25 @@ npm run build && npm start
 Docker: `docker-compose.yml`, `docker-compose.override.yml` (dev) and `docker-compose.prod.yml` are provided, along with `scripts/docker-health.sh`.
 
 Useful scripts: `npm run migrate <status|validate|drift-check|up|down>`, `npm run generate-openapi`, `npm run generate:error-docs`, `npm run pii-scan`, `npm run sbom`, `npm run canary`, `npm run lint`, `npm run typecheck`.
+
+### Graceful shutdown
+
+The executable handles `SIGTERM` and `SIGINT` with one shared shutdown sequence.
+It stops accepting HTTP connections and stops background workers, waits for
+existing HTTP requests, then closes both PostgreSQL pools and the slot-cache
+Redis client. Worker initializers that finish importing after shutdown starts
+do not start new work. Importing the entry point under `NODE_ENV=test` neither
+binds a port nor installs process signal handlers.
+
+`SHUTDOWN_TIMEOUT_MS` is a positive integer (default `30000`, at most `2147483647`)
+covering worker stops, HTTP draining and resource closure. At the deadline,
+remaining HTTP connections are forcibly closed and resource cleanup is attempted;
+a signal-triggered shutdown exits unsuccessfully on timeout/close failure.
+The signal handler has a hard exit fallback if cleanup never resolves. Ordinary
+shutdown exits with code 0. Driver/worker failures are logged with structured
+resource names without request or credential contents. Already-running external
+calls remain subject to their worker's existing cancellation support and the
+shutdown deadline; this does not redesign those workers or merge the DB pools.
 
 ## Testing
 
