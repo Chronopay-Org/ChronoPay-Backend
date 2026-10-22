@@ -65,6 +65,7 @@ import { isValidIANATimezone } from "./validation/reminderValidation.js";
 
 
 export interface AppFactoryOptions {
+  requestTracker?: express.RequestHandler;
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
@@ -246,6 +247,8 @@ export function createApp(options: AppFactoryOptions = {}) {
   }
 
   const app = express();
+
+  if (options.requestTracker) app.use(options.requestTracker);
 
   if (isTruthyEnvValue(process.env.TRUST_PROXY)) {
     app.set("trust proxy", 1);
