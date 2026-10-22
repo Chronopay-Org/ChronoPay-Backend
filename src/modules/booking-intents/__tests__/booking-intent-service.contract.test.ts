@@ -21,6 +21,7 @@ import {
   SLOT_ID_PATTERN,
   parseCreateBookingIntentBody,
   type AutoRefundResult,
+  type BookingIntentServiceOptions,
   type CreateBookingIntentInput,
   type CreateRecurringBookingInput,
 } from "../booking-intent-service.js";
@@ -45,6 +46,7 @@ import {
 } from "../../../services/reputationWriteAudit.js";
 import type { FxRateProvider } from "../../../services/fxRateProvider.js";
 import type { HoldFeePolicyRegistry } from "../../../services/holdFeePolicy.js";
+import { strikeService } from "../../../services/strikeService.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -118,6 +120,7 @@ function createFixture(
   slots: SlotRecord[] = [bookableSlot()],
   fxRateProvider?: FxRateProvider,
   holdFeeRegistry?: HoldFeePolicyRegistry,
+  options?: BookingIntentServiceOptions,
 ) {
   const slotRepo = new InMemorySlotRepository(slots);
   const intentRepo = new InMemoryBookingIntentRepository();
@@ -129,6 +132,7 @@ function createFixture(
     undefined,
     holdFeeRegistry,
     fxRateProvider,
+    options,
   );
   return { slotRepo, intentRepo, service };
 }
@@ -191,6 +195,7 @@ const fxProvider = (rate: number, onError?: () => never): FxRateProvider => ({
 beforeEach(() => {
   jest.spyOn(Date, "now").mockReturnValue(NOW_MS);
   _resetReputationEventStore();
+  strikeService.resetState();
 });
 
 afterEach(() => {
@@ -1223,8 +1228,26 @@ describe("BookingIntentService state transitions", () => {
   });
 
   describe("markNoShow", () => {
+    // Slot started two hours ago, so the 15-minute grace window has elapsed
+    // and the no-show is eligible. Explicit grace keeps the fixture independent
+    // of the process-wide grace-window singleton.
+    const STARTED_MS = NOW_MS - 2 * HOUR_MS;
+    const ENDED_MS = STARTED_MS + HOUR_MS;
+    const GRACE_MS = 15 * 60 * 1000;
+
     async function confirmedIntent() {
-      const fixture = createFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
+      const fixture = createFixture(
+        [
+          bookableSlot({
+            startTime: STARTED_MS,
+            endTime: ENDED_MS,
+            pricingStrategy: FIXED_PRICING,
+          }),
+        ],
+        undefined,
+        undefined,
+        { noShowGraceMs: GRACE_MS },
+      );
       const intent = await fixture.service.createIntent({ slotId: SLOT_ALICE }, customer);
       fixture.service.confirmIntent(intent.id, customer);
       return { ...fixture, intent };
@@ -1238,7 +1261,8 @@ describe("BookingIntentService state transitions", () => {
       expect(result.status).toBe("no_show");
       expect(result.intent.status).toBe("no_show");
       expect(result.forfeitAmountCents).toBe(200);
-      expect(result.reputationDelta).toBe(-1);
+      expect(result.strikeId).toEqual(expect.any(String));
+      expect(result.autoSuspended).toBe(false);
       expect(result.reason).toBe("Buyer no-show");
       expect(result.buyerId).toBe("customer-1");
       expect(result.supplierId).toBe("alice");
@@ -1246,29 +1270,25 @@ describe("BookingIntentService state transitions", () => {
       expect(statusOf(intentRepo, intent.id)).toBe("no_show");
     });
 
-    it("appends a no_show reputation event for the booking", async () => {
+    it("issues exactly one buyer strike and writes no supplier reputation event", async () => {
       const { service, intent } = await confirmedIntent();
 
-      await service.markNoShow(intent.id, alice, { forfeitRatio: 0.5 });
+      const result = await service.markNoShow(intent.id, alice, { forfeitRatio: 0.5 });
 
-      const { events, total } = await listReputationEvents({ supplierId: "customer-1" });
-      expect(total).toBe(1);
-      expect(events[0]).toMatchObject({
-        supplierId: "customer-1",
-        actorId: "alice",
-        cause: "no_show",
-        causeId: intent.id,
-        delta: -1,
-        scoreBefore: 0,
-        scoreAfter: -1,
-      });
-      expect(events[0].metadata).toMatchObject({
+      const buyerStrikes = strikeService.getBuyerStrikes("customer-1");
+      expect(buyerStrikes).toHaveLength(1);
+      expect(buyerStrikes[0]).toMatchObject({
         buyerId: "customer-1",
-        supplierId: "alice",
-        bookingIntentId: intent.id,
-        forfeitRatio: 0.5,
-        forfeitAmountCents: 500,
+        intentId: intent.id,
+        slotId: SLOT_ALICE,
+        reason: "Buyer no-show",
       });
+      expect(result.strikeId).toBe(buyerStrikes[0].id);
+
+      // Regression (#1322): the old implementation recorded the buyer as a
+      // supplier with hard-coded scores. No reputation event may be written.
+      expect((await listReputationEvents({ supplierId: "customer-1" })).total).toBe(0);
+      expect((await listReputationEvents({ supplierId: "alice" })).total).toBe(0);
     });
 
     it("accepts a supplier-requested forfeit ratio of 1 (inclusive upper boundary)", async () => {
