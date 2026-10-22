@@ -28,6 +28,11 @@ export interface EnvConfig {
   rateLimitWindowMs: number;
   rateLimitMax: number;
   trustProxy: boolean;
+  /**
+   * Explicit opt-in for test-only routes (e.g. /__test__/explode, /api/v1/test/auth).
+   * Always false unless ENABLE_TEST_ROUTES is set to a truthy value.
+   */
+  enableTestRoutes: boolean;
   timeoutMs?: number;
   webhookSecret?: string;
   jwtIssuer?: string;
@@ -47,12 +52,14 @@ export interface EnvConfig {
   internalBypassToleranceMs: number;
   /** Issuer label embedded in TOTP otpauth URIs and QR code labels. */
   mfaIssuer?: string;
-  /** Max age (ms) of an MFA challenge before `requireFreshMfa` rejects it. Default 15 min. */
+  /** Max age (ms) of an MFA Challenge before `requireFreshMfa` rejects it. Default 15 min. */
   mfaFreshnessMs: number;
   /** Clock-skew windows accepted around the current TOTP step on verification. Default 1. */
   mfaWindowPeriods: number;
   /** Lifetime (seconds) of an issued MFA challenge token. Default 300. */
   mfaChallengeTtlSec: number;
+  /** TTL (seconds) for the idempotency processing lock. Default 60. */
+  idempotencyProcessingLockTtlSeconds?: number;
 }
 
 export class EnvValidationError extends Error {
@@ -81,6 +88,12 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   );
   const rateLimitMax = parsePositiveInteger(env.RATE_LIMIT_MAX, "RATE_LIMIT_MAX", 100, issues);
   const trustProxy = parseBoolean(env.TRUST_PROXY, "TRUST_PROXY", false, issues);
+  const enableTestRoutes = parseBoolean(
+    env.ENABLE_TEST_ROUTES,
+    "ENABLE_TEST_ROUTES",
+    false,
+    issues,
+  );
 
   const webhookSecret = parseOptionalString(env.WEBHOOK_SECRET);
   const jwtIssuer = parseOptionalString(env.JWT_ISSUER);
@@ -129,6 +142,12 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
 
+  const idempotencyProcessingLockTtlSeconds = parseOptionalPositiveInteger(
+    env.IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS,
+    "IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS",
+    issues,
+  );
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -140,6 +159,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     rateLimitWindowMs,
     rateLimitMax,
     trustProxy,
+    enableTestRoutes,
     timeoutMs,
     webhookSecret,
     jwtIssuer,
@@ -155,6 +175,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     mfaFreshnessMs,
     mfaWindowPeriods,
     mfaChallengeTtlSec,
+    idempotencyProcessingLockTtlSeconds,
   };
 }
 
@@ -188,6 +209,33 @@ function parsePositiveInteger(
   issues: string[],
 ): number {
   return parseIntegerInRange(rawValue, key, defaultValue, 1, Number.MAX_SAFE_INTEGER, issues);
+}
+
+function parseOptionalPositiveInteger(
+  rawValue: string | undefined,
+  key: string,
+  issues: string[],
+): number | undefined {
+  if (rawValue === undefined) return undefined;
+
+  const value = rawValue.trim();
+  if (value.length === 0) {
+    issues.push(`${key} must be a non-empty integer when provided.`);
+    return undefined;
+  }
+
+  if (!/^\d+$/.test(value)) {
+    issues.push(`${key} must be a whole number between 1 and ${Number.MAX_SAFE_INTEGER}.`);
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > Number.MAX_SAFE_INTEGER) {
+    issues.push(`${key} must be a whole number between 1 and ${Number.MAX_SAFE_INTEGER}.`);
+    return undefined;
+  }
+
+  return parsed;
 }
 
 function parseIntegerInRange(
@@ -229,7 +277,7 @@ function parseRedisUrl(rawValue: string | undefined, issues: string[]): string {
   const value = rawValue.trim();
 
   if (value.length === 0) {
-    issues.push("REDIS_URL must be a non-empty value.");
+    issues.push("REDIS_ULL must be a non-empty value.");
     return "redis://localhost:6379";
   }
 
@@ -243,7 +291,7 @@ function parseRedisUrl(rawValue: string | undefined, issues: string[]): string {
     }
 
     if (!url.hostname) {
-      issues.push("REDIS_URL must include a host.");
+      issues.push("REDIS_ULL must include a host.");
       return "redis://localhost:6379";
     }
 
@@ -302,7 +350,7 @@ function parseOptionalUrl(rawValue: string | undefined, key: string, issues: str
   if (value.length === 0) return undefined;
   try {
     const url = new URL(value);
-    if (!["http:", "https:"].includes(url.protocol)) {
+    if (!["http:", "https::"].includes(url.protocol)) {
       issues.push(`${key} must use http or https scheme.`);
       return undefined;
     }

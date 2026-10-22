@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../test/auth.js";
 import { jest } from "@jest/globals";
 import express from "express";
 import request from "supertest";
@@ -42,7 +43,7 @@ describe("RBAC role hierarchy", () => {
   it("allows an admin through a route that declares support", async () => {
     const res = await request(appWithRoleDeclaration("support"))
       .get("/declared-route")
-      .set("x-user-role", "admin")
+      .set("Authorization", createTestAuthorization("test-user", "admin"))
       .expect(200);
 
     expect(res.body).toEqual({ success: true });
@@ -52,19 +53,19 @@ describe("RBAC role hierarchy", () => {
   it("allows support through a support route and auditor through an auditor route", async () => {
     await request(appWithRoleDeclaration("support"))
       .get("/declared-route")
-      .set("x-user-role", "support")
+      .set("Authorization", createTestAuthorization("test-user", "support"))
       .expect(200);
 
     await request(appWithRoleDeclaration("auditor"))
       .get("/declared-route")
-      .set("x-user-role", "auditor")
+      .set("Authorization", createTestAuthorization("test-user", "auditor"))
       .expect(200);
   });
 
   it("denies auditor on a support route and emits a bounded audit event", async () => {
     const res = await request(appWithRoleDeclaration("support"))
       .get("/declared-route")
-      .set("x-user-role", "auditor")
+      .set("Authorization", createTestAuthorization("test-user", "auditor"))
       .expect(403);
 
     expect(res.body).toMatchObject({
@@ -107,7 +108,7 @@ describe("RBAC role hierarchy", () => {
     expect(() => requireRole("superuser")).toThrow(/unknown role superuser/);
   });
 
-  it("uses the same hierarchy for header-authenticated actors", async () => {
+  it("uses the same hierarchy for JWT-authenticated actors", async () => {
     const app = express();
     app.get("/support-action", requireAuthenticatedActor(["support"]), (_req, res) =>
       res.json({ success: true }),
@@ -115,14 +116,12 @@ describe("RBAC role hierarchy", () => {
 
     await request(app)
       .get("/support-action")
-      .set("x-chronopay-user-id", "admin-1")
-      .set("x-chronopay-role", "admin")
+      .set("Authorization", createTestAuthorization("admin-1", "admin"))
       .expect(200);
 
     await request(app)
       .get("/support-action")
-      .set("x-chronopay-user-id", "auditor-1")
-      .set("x-chronopay-role", "auditor")
+      .set("Authorization", createTestAuthorization("auditor-1", "auditor"))
       .expect(403);
 
     expect(auditSpy).toHaveBeenCalledWith(
@@ -133,7 +132,7 @@ describe("RBAC role hierarchy", () => {
     );
   });
 
-  it("does not downgrade unknown header roles to customer", async () => {
+  it("ignores forged role headers and derives the role from the JWT", async () => {
     const app = express();
     app.get("/customer-action", requireAuthenticatedActor(["customer"]), (_req, res) =>
       res.json({ success: true }),
@@ -141,19 +140,14 @@ describe("RBAC role hierarchy", () => {
 
     await request(app)
       .get("/customer-action")
-      .set("x-chronopay-user-id", "user-1")
-      .set("x-chronopay-role", "hacker")
-      .expect(400);
-
-    expect(auditSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "RBAC_INVALID_ROLE",
-        status: 400,
-      }),
-    );
+      .set("Authorization", createTestAuthorization("user-1", "customer"))
+      .set("x-chronopay-role", "admin")
+      .set("x-user-role", "admin")
+      .expect(200);
+    expect(auditSpy).not.toHaveBeenCalled();
   });
 
-  it("returns 401 with an RBAC_MISSING audit when the role header is absent", async () => {
+  it("returns 401 with an RBAC_MISSING audit when the bearer token is absent", async () => {
     const res = await request(appWithRoleDeclaration("support")).get("/declared-route").expect(401);
 
     expect(res.body).toMatchObject({
@@ -168,37 +162,37 @@ describe("RBAC role hierarchy", () => {
     });
   });
 
-  it("returns 400 with an RBAC_INVALID_ROLE audit for an unknown role header", async () => {
+  it("fails closed to customer permissions for an unknown JWT role", async () => {
     const res = await request(appWithRoleDeclaration("support"))
       .get("/declared-route")
-      .set("x-user-role", "root")
-      .expect(400);
+      .set("Authorization", createTestAuthorization("test-user", "root"))
+      .expect(403);
 
     expect(res.body).toMatchObject({
       success: false,
-      code: "BAD_REQUEST",
+      code: "INSUFFICIENT_PERMISSIONS",
     });
     expect(auditSpy).toHaveBeenCalledTimes(1);
     expect(auditSpy.mock.calls[0][0]).toMatchObject({
-      action: "RBAC_INVALID_ROLE",
-      status: 400,
+      action: "RBAC_FORBIDDEN",
+      status: 403,
     });
   });
 
   it("accepts any role in a multi-role declaration through the hierarchy", async () => {
     await request(appWithRoleListDeclaration(["support", "auditor"]))
       .get("/declared-route")
-      .set("x-user-role", "support")
+      .set("Authorization", createTestAuthorization("test-user", "support"))
       .expect(200);
 
     await request(appWithRoleListDeclaration(["support", "auditor"]))
       .get("/declared-route")
-      .set("x-user-role", "admin")
+      .set("Authorization", createTestAuthorization("test-user", "admin"))
       .expect(200);
 
     await request(appWithRoleListDeclaration(["support", "auditor"]))
       .get("/declared-route")
-      .set("x-user-role", "customer")
+      .set("Authorization", createTestAuthorization("test-user", "customer"))
       .expect(403);
   });
 
@@ -207,17 +201,17 @@ describe("RBAC role hierarchy", () => {
 
     await request(appWithRoleListDeclaration(["supplier", "admin"]))
       .get("/declared-route")
-      .set("x-user-role", "supplier")
+      .set("Authorization", createTestAuthorization("test-user", "supplier"))
       .expect(200);
 
     await request(appWithRoleListDeclaration(["supplier", "admin"]))
       .get("/declared-route")
-      .set("x-user-role", "admin")
+      .set("Authorization", createTestAuthorization("test-user", "admin"))
       .expect(200);
 
     await request(appWithRoleListDeclaration(["supplier", "admin"]))
       .get("/declared-route")
-      .set("x-user-role", "customer")
+      .set("Authorization", createTestAuthorization("test-user", "customer"))
       .expect(403);
   });
 
@@ -259,7 +253,7 @@ describe("RBAC role hierarchy", () => {
 
     await request(appWithRoleListDeclaration(["SUPPORT"]))
       .get("/declared-route")
-      .set("x-user-role", "admin")
+      .set("Authorization", createTestAuthorization("test-user", "admin"))
       .expect(200);
   });
 
@@ -268,7 +262,7 @@ describe("RBAC role hierarchy", () => {
 
     const res = await request(appWithRoleDeclaration("support"))
       .get("/declared-route")
-      .set("x-user-role", "auditor")
+      .set("Authorization", createTestAuthorization("test-user", "auditor"))
       .expect(403);
 
     expect(res.body).toMatchObject({
@@ -277,17 +271,18 @@ describe("RBAC role hierarchy", () => {
     });
   });
 
-  it("returns 500 when the middleware catches an unexpected failure", () => {
+  it("returns 500 when the middleware catches an unexpected failure", async () => {
     const middleware = requireRole(["admin"]);
     const req = {
-      header: () => {
+      headers: { authorization: createTestAuthorization("admin-1", "admin") },
+      set auth(_value: unknown) {
         throw new Error("boom");
       },
     };
     const res = {
       status: (s: number) => ({ json: (j: unknown) => ({ s, j }) }),
     };
-    const result = middleware(req as any, res as any, () => {
+    const result = await middleware(req as any, res as any, () => {
       throw new Error("next should not be called");
     });
     expect((result as { s?: number }).s).toBe(500);
@@ -366,7 +361,7 @@ describe("RBAC role hierarchy", () => {
   it("falls back to the socket address for audit events when req.ip is absent", async () => {
     const middleware = requireRole(["support"]);
     const req = {
-      header: (name: string) => (name === "x-user-role" ? "auditor" : undefined),
+      headers: { authorization: createTestAuthorization("auditor-1", "auditor") },
       ip: undefined,
       socket: { remoteAddress: "10.0.0.7" },
       originalUrl: "/declared-route",
@@ -376,7 +371,7 @@ describe("RBAC role hierarchy", () => {
       status: (s: number) => ({ json: (j: unknown) => ({ s, j }) }),
     };
 
-    middleware(req as any, res as any, () => {});
+    await middleware(req as any, res as any, () => {});
 
     expect(auditSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -390,7 +385,7 @@ describe("RBAC role hierarchy", () => {
   it("handles audit events when both req.ip and req.socket are absent", async () => {
     const middleware = requireRole(["support"]);
     const req = {
-      header: (name: string) => (name === "x-user-role" ? "auditor" : undefined),
+      headers: { authorization: createTestAuthorization("auditor-1", "auditor") },
       ip: undefined,
       socket: undefined,
       originalUrl: "/declared-route",
@@ -400,7 +395,7 @@ describe("RBAC role hierarchy", () => {
       status: (s: number) => ({ json: (j: unknown) => ({ s, j }) }),
     };
 
-    middleware(req as any, res as any, () => {});
+    await middleware(req as any, res as any, () => {});
 
     expect(auditSpy).toHaveBeenCalledWith(
       expect.objectContaining({

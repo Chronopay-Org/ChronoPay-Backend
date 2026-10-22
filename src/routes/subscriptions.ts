@@ -15,31 +15,16 @@
 
 import { Router, Request, Response } from "express";
 import {
-  SubscriptionService,
   SubscriptionProductNotFoundError,
   SubscriptionNotFoundError,
   DuplicateSubscriptionError,
   SubscriptionCapacityExceededError,
   InvalidSubscriptionStateError,
 } from "../services/subscriptionService.js";
-import {
-  InMemorySubscriptionProductRepository,
-} from "../modules/subscriptions/subscription-product-repository.js";
-import {
-  InMemorySubscriptionRepository,
-} from "../modules/subscriptions/subscription-repository.js";
-import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
+import { subscriptionService } from "../services/subscriptionContainer.js";
 
-// Singleton repositories (in production these would be SQL-backed)
-const productRepo = new InMemorySubscriptionProductRepository();
-const subscriptionRepo = new InMemorySubscriptionRepository();
-const slotRepo = new InMemorySlotRepository();
-
-export const subscriptionService = new SubscriptionService(
-  productRepo,
-  subscriptionRepo,
-  slotRepo,
-);
+// Preserve the existing public export for callers and tests.
+export { subscriptionService } from "../services/subscriptionContainer.js";
 
 const router = Router();
 

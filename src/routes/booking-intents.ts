@@ -30,6 +30,7 @@ import { InMemoryBookingIntentRepository } from "../modules/booking-intents/book
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { logger } from "../utils/logger.js";
 import { FraudScorer } from "../services/fraudScorer.js";
+import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../middleware/payloadLimit.js";
 
 export function createBookingIntentsRouter(
   options: {
@@ -69,6 +70,7 @@ export function createBookingIntentsRouter(
   router.post(
     "/",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
+    ...payloadLimit(ROUTE_PAYLOAD_LIMITS.bookingIntent),
     requireAuthenticatedActor(["customer", "admin"]),
     // Preserve the pre-validation body so the fraud wall (below) can still see
     // client-supplied fields the body schema strips (e.g. email) without
@@ -198,6 +200,14 @@ export function createBookingIntentsRouter(
     },
   );
 
+  /**
+   * Refund a booking intent.
+   *
+   * Note on `cancelledAtMs`: Non-admin callers (such as customers) cannot override
+   * the cancellation timestamp; any `cancelledAtMs` supplied by non-admins is ignored
+   * in favor of the authoritative server clock (`nowMs()`). Admins may provide a
+   * backdated `cancelledAtMs` (which must be <= server now) and such overrides are audited.
+   */
   router.post(
     "/:id/refund",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),

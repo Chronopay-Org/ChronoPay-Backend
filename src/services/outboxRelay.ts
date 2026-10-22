@@ -9,16 +9,16 @@
  *  - insertIntoOutbox is a plain SQL helper designed to be called within the
  *    same database transaction as the domain write so that the event and the
  *    business data are committed atomically.
- *  - The relay polls for un-acked rows, invokes the user-supplied publish
- *    callback, then marks the row as acked — all without a distributed
- *    transaction.  If the process crashes after publish but before the ack
- *    mark, the next poll cycle picks up the same row (at-least-once).
+ *  - The relay atomically claims un-acked rows with a short lease, invokes the
+ *    user-supplied publish callback, then marks each row as acked — all without
+ *    a distributed transaction. Expired claims become eligible again if a
+ *    worker crashes.
  *  - Publish callers are expected to be idempotent (e.g. Kafka produces
  *    with the outbox row id as the message key).
  *  - The relay respects an AbortSignal for clean shutdown.
  */
 
-import { type PoolClient } from "pg";
+import { type Pool, type PoolClient } from "pg";
 import { logger } from "../utils/logger.js";
 import {
   outboxRelayPublished,
@@ -44,6 +44,8 @@ export interface OutboxEvent {
  * has acknowledged receipt (or throw on failure).
  */
 export type PublishFn = (event: OutboxEvent) => Promise<void>;
+
+export const OUTBOX_CLAIM_LEASE_MS = 5 * 60 * 1_000;
 
 // ─── Insert helper ─────────────────────────────────────────────────────────────
 
@@ -76,7 +78,7 @@ export async function insertIntoOutbox(
 // ─── OutboxStore interface (production = SQL, tests = in-memory) ───────────────
 
 export interface OutboxStore {
-  /** Fetch the next batch of un-acked events, oldest first. */
+  /** Atomically claim the next batch of un-acked events, oldest first. */
   fetchUnacked(limit: number): Promise<OutboxEvent[]>;
   /** Mark a single event as acknowledged by its id. */
   markAcked(id: string): Promise<void>;
@@ -86,24 +88,37 @@ export interface OutboxStore {
  * Production SQL-backed outbox store.
  */
 export class SqlOutboxStore implements OutboxStore {
-  constructor(private readonly pool: { query: Function }) {}
+  constructor(private readonly pool: Pick<Pool, "query">) {}
 
   async fetchUnacked(limit: number): Promise<OutboxEvent[]> {
-    const result = await this.pool.query(
-      `SELECT id, event_type, aggregate_id, payload, created_at, acked_at
-       FROM outbox_events
-       WHERE acked_at IS NULL
-       ORDER BY created_at ASC
-       LIMIT $1
-       FOR UPDATE SKIP LOCKED`,
-      [limit],
+    const result = await this.pool.query<OutboxEvent>(
+      `WITH candidates AS (
+         SELECT id
+         FROM outbox_events
+         WHERE acked_at IS NULL
+           AND (claimed_until IS NULL OR claimed_until <= NOW())
+         ORDER BY created_at ASC
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED
+       )
+       UPDATE outbox_events AS events
+       SET claimed_until = NOW() + ($2 * INTERVAL '1 millisecond')
+       FROM candidates
+       WHERE events.id = candidates.id
+       RETURNING events.id, events.event_type, events.aggregate_id,
+                 events.payload, events.created_at, events.acked_at`,
+      [limit, OUTBOX_CLAIM_LEASE_MS],
     );
-    return result.rows;
+    return result.rows.sort(
+      (a, b) => a.created_at.getTime() - b.created_at.getTime(),
+    );
   }
 
   async markAcked(id: string): Promise<void> {
     await this.pool.query(
-      `UPDATE outbox_events SET acked_at = NOW() WHERE id = $1 AND acked_at IS NULL`,
+      `UPDATE outbox_events
+       SET acked_at = NOW(), claimed_until = NULL
+       WHERE id = $1 AND acked_at IS NULL`,
       [id],
     );
   }
@@ -114,16 +129,31 @@ export class SqlOutboxStore implements OutboxStore {
  */
 export class InMemoryOutboxStore {
   private readonly rows = new Map<string, OutboxEvent>();
+  private readonly claimedUntil = new Map<string, number>();
+
+  constructor(
+    private readonly claimLeaseMs: number = OUTBOX_CLAIM_LEASE_MS,
+  ) {}
 
   upsert(row: OutboxEvent): void {
     this.rows.set(row.id, { ...row });
+    this.claimedUntil.delete(row.id);
   }
 
   async fetchUnacked(limit: number): Promise<OutboxEvent[]> {
+    const now = Date.now();
     const unacked = [...this.rows.values()]
-      .filter((r) => r.acked_at === null)
+      .filter(
+        (row) =>
+          row.acked_at === null &&
+          (this.claimedUntil.get(row.id) ?? 0) <= now,
+      )
       .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())
       .slice(0, limit);
+    const claimedUntil = now + this.claimLeaseMs;
+    for (const row of unacked) {
+      this.claimedUntil.set(row.id, claimedUntil);
+    }
     return unacked;
   }
 
@@ -131,6 +161,7 @@ export class InMemoryOutboxStore {
     const row = this.rows.get(id);
     if (row) {
       row.acked_at = new Date();
+      this.claimedUntil.delete(id);
     }
   }
 
@@ -140,10 +171,12 @@ export class InMemoryOutboxStore {
 
   delete(id: string): void {
     this.rows.delete(id);
+    this.claimedUntil.delete(id);
   }
 
   clear(): void {
     this.rows.clear();
+    this.claimedUntil.clear();
   }
 
   size(): number {
@@ -200,7 +233,7 @@ export interface OutboxRelayResult {
 /**
  * Perform a single relay sweep synchronously against the provided store.
  *
- * 1. Fetch up to `batchSize` un-acked events (oldest first).
+ * 1. Atomically claim up to `batchSize` un-acked events (oldest first).
  * 2. For each event, invoke the publish callback.
  * 3. On success, mark the event as acked.
  * 4. On failure, log the error and continue to the next event so a single
