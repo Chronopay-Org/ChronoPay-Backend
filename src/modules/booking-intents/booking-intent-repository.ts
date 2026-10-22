@@ -1,6 +1,13 @@
 import type { StrategyId, StrategyConfig } from "../../services/pricingStrategy.js";
 import type { HoldFeePolicySnapshot } from "../../services/holdFeePolicy.js";
 
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConflictError";
+  }
+}
+
 export type BookingIntentStatus =
   | "pending"
   | "confirmed"
@@ -127,6 +134,24 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
   private sequence = 1;
 
   async create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> {
+    // Uniqueness guard mirroring the partial unique index on active intents per slot
+    // (migration 019_add_active_booking_intent_unique_idx): at most one active
+    // intent may exist for a given slot. This check and the push below are
+    // synchronous (no await between them), so two concurrent calls cannot both
+    // pass the guard.
+    if (ACTIVE_HOLD_STATUSES.includes(intent.status)) {
+      const existing = this.intents.find(
+        (entry) =>
+          entry.slotId === intent.slotId &&
+          ACTIVE_HOLD_STATUSES.includes(entry.status),
+      );
+      if (existing) {
+        throw new ConflictError(
+          `BookingIntent already exists for slot "${intent.slotId}"`,
+        );
+      }
+    }
+
     const created: BookingIntentRecord = {
       id: `intent-${this.sequence++}`,
       bookingType: "standard",

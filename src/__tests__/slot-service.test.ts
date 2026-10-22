@@ -36,6 +36,27 @@ describe("SlotService", () => {
     expect((service.listSlots() as any)[0].professional).toBe("alice");
   });
 
+  it("returns the second slot for page 2 of a paginated list", () => {
+    const first = service.createSlot({
+      professional: "alice",
+      startTime: 1000,
+      endTime: 2000,
+    });
+
+    currentTime += 1000;
+
+    const second = service.createSlot({
+      professional: "bob",
+      startTime: 3000,
+      endTime: 4000,
+    });
+
+    const page2 = service.listSlots({ page: 2, limit: 1 });
+
+    expect(page2.map((slot: Slot) => slot.id)).toEqual([second.id]);
+    expect(page2.map((slot: Slot) => slot.id)).not.toContain(first.id);
+  });
+
   it("throws when updating with invalid payload type", () => {
     const slot = service.createSlot({
       professional: "alice",
@@ -74,6 +95,18 @@ describe("SlotService", () => {
 
   it("throws not found for unknown slot", () => {
     expect(() => service.updateSlot(999, { endTime: 1000 })).toThrow(SlotNotFoundError);
+  });
+
+  it("removes a slot by id", () => {
+    const slot = service.createSlot({
+      professional: "alice",
+      startTime: 1000,
+      endTime: 2000,
+    });
+
+    service.deleteSlot(slot.id);
+
+    expect(service.listSlots()).toEqual([]);
   });
 
   it("resets all state", () => {

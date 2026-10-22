@@ -21,7 +21,7 @@ import { Migration } from "../migrationRunner.js";
  *   `created_at` is the DB insertion time.
  */
 export const migration: Migration = {
-  id: "020",
+  id: "032",
   name: "create_gdpr_erasure_events",
 
   async up(client: PoolClient): Promise<void> {
