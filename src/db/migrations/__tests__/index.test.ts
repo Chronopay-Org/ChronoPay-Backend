@@ -6,6 +6,9 @@
  * failure branch can be asserted directly instead of importing a broken registry.
  */
 
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   migrations,
   findDuplicateMigrationIds,
@@ -23,6 +26,54 @@ function fakeMigration(id: string): Migration {
 }
 
 describe("migrations registry", () => {
+  it("registers every migration source file exactly once", () => {
+    const migrationsDirectory = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const migrationFiles = readdirSync(migrationsDirectory).filter(
+      (file) => file.endsWith(".ts") && file !== "index.ts" && !file.endsWith(".test.ts"),
+    );
+    const registrySource = readFileSync(join(migrationsDirectory, "index.ts"), "utf8");
+    const importAliases = new Map<string, string>();
+    const importCounts = new Map<string, number>();
+    const aliasImportCounts = new Map<string, number>();
+    const importPattern =
+      /^import\s+\{\s*migration\s+as\s+(\w+)\s*\}\s+from\s+"\.\/([^"]+)\.js";$/gm;
+
+    for (const match of registrySource.matchAll(importPattern)) {
+      const [, alias, file] = match;
+      const migrationFile = `${file}.ts`;
+      importAliases.set(migrationFile, alias);
+      importCounts.set(migrationFile, (importCounts.get(migrationFile) ?? 0) + 1);
+      aliasImportCounts.set(alias, (aliasImportCounts.get(alias) ?? 0) + 1);
+    }
+
+    const registryArray = registrySource.match(
+      /export const migrations: Migration\[\] = \[([\s\S]*?)\];/,
+    )?.[1];
+    expect(registryArray).toBeDefined();
+
+    const registeredAliases = registryArray?.match(/^\s*(migration\w+),?\s*$/gm) ?? [];
+    const registeredAliasCounts = new Map<string, number>();
+    for (const line of registeredAliases) {
+      const alias = line.trim().replace(/,$/, "");
+      registeredAliasCounts.set(alias, (registeredAliasCounts.get(alias) ?? 0) + 1);
+    }
+
+    const unregisteredFiles = migrationFiles.filter(
+      (file) => importCounts.get(file) !== 1 || registeredAliasCounts.get(importAliases.get(file)!) !== 1,
+    );
+    const unexpectedImports = [...importAliases.keys()].filter((file) => !migrationFiles.includes(file));
+    const importedAliases = new Set(importAliases.values());
+    const unexpectedRegistrations = [...registeredAliasCounts.keys()].filter((alias) => !importedAliases.has(alias));
+    const incorrectlyRegisteredAliases = [...importedAliases].filter(
+      (alias) => aliasImportCounts.get(alias) !== 1 || registeredAliasCounts.get(alias) !== 1,
+    );
+
+    expect(unregisteredFiles).toEqual([]);
+    expect(unexpectedImports).toEqual([]);
+    expect(unexpectedRegistrations).toEqual([]);
+    expect(incorrectlyRegisteredAliases).toEqual([]);
+  });
+
   it("registers a non-empty, well-formed ordered list", () => {
     expect(Array.isArray(migrations)).toBe(true);
     expect(migrations.length).toBeGreaterThan(0);
