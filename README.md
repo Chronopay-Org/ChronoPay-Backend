@@ -24,6 +24,27 @@ Other dependencies in `package.json`: ethers, `@stellar/stellar-sdk`, zod, prom-
 
 ## API surface
 
+### Subscription service composition (#1339)
+
+The subscription router and the slot-generator worker share the process-wide
+`subscriptionService` from `src/services/subscriptionContainer.ts`. The router
+continues to re-export that service for compatibility. The entry point must not
+construct a second set of in-memory repositories: subscriptions created through
+the API must be visible to the worker, and generated metadata/cursor updates
+must be visible through the same service and subscription GET endpoint.
+
+Tests can use `createSubscriptionContainer()` for independent state or inject
+product/subscription/slot repositories into that factory. The default container
+is still in-memory and local to one application process; this does not add
+database persistence or cross-instance coordination. Existing generator batch,
+recurrence, conflict and cursor-idempotency behavior is unchanged.
+
+Existing limitation: `SubscriptionService.mintSlot` returns slot metadata, and
+the generator updates `slotsMinted` and `nextSlotStartMs`; it does not insert a
+new bookable slot record into `SlotRepository`. This composition fix verifies
+those actual existing effects rather than claiming SQL/on-chain slot creation.
+Persistent/bookable slot insertion and route authentication remain separate work.
+
 All business routes are under `/api/v1`. Interactive docs are served at `/api-docs` and the generated spec is in `openapi-spec.json` (`npm run generate-openapi`). The list below is derived from the router files; consult the OpenAPI spec and `docs/api/` for request/response shapes.
 
 **Operational (unversioned):** `GET /health`, `/health/horizon`, `/health/ready`, `/ready`, `/live`, `/metrics`.

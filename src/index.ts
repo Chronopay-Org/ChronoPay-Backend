@@ -110,24 +110,9 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   const { createSubscriptionSlotGenerator } = await import(
     "./scheduler/subscriptionSlotGenerator.js"
   );
-  const { SubscriptionService } = await import("./services/subscriptionService.js");
-
-  // In production, use SQL-backed repositories; here we use in-memory for the
-  // standalone worker. The app.ts routes use their own repository instances.
-  const { InMemorySubscriptionProductRepository } = await import(
-    "./modules/subscriptions/subscription-product-repository.js"
+  const { subscriptionService: service } = await import(
+    "./services/subscriptionContainer.js"
   );
-  const { InMemorySubscriptionRepository } = await import(
-    "./modules/subscriptions/subscription-repository.js"
-  );
-  const { InMemorySlotRepository } = await import(
-    "./modules/slots/slot-repository.js"
-  );
-
-  const productRepo = new InMemorySubscriptionProductRepository();
-  const subscriptionRepo = new InMemorySubscriptionRepository();
-  const slotRepo = new InMemorySlotRepository();
-  const service = new SubscriptionService(productRepo, subscriptionRepo, slotRepo);
 
   const generator = createSubscriptionSlotGenerator(service, {
     intervalMs: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_INTERVAL_MS) || undefined,
