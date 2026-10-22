@@ -38,7 +38,6 @@ checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
  *       tracking and user association.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - [] # Optional authentication
  *     requestBody:
@@ -80,11 +79,13 @@ checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
  *               successUrl:
  *                 type: string
  *                 format: uri
- *                 description: Optional redirect URL on successful payment
+ *                 maxLength: 2048
+ *                 description: Optional absolute HTTPS redirect URL on an exact configured host; HTTP allowed only outside production. Invalid values return 400 INVALID_REDIRECT_URL with details.field.
  *               cancelUrl:
  *                 type: string
  *                 format: uri
- *                 description: Optional redirect URL on cancelled payment
+ *                 maxLength: 2048
+ *                 description: Optional cancel redirect, subject to the same configured host and scheme policy as successUrl.
  *     responses:
  *       201:
  *         description: Checkout session created successfully
@@ -104,7 +105,7 @@ checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
  *                   format: uri
  *                   description: Direct payment URL
  *       400:
- *         description: Invalid input data
+ *         description: Invalid input data; redirect failures use the checkout envelope with code INVALID_REDIRECT_URL and details.field identifying successUrl or cancelUrl.
  *         content:
  *           application/json:
  *             schema:
@@ -159,7 +160,6 @@ checkoutRouter.post(
  *       session details. No authentication required for basic session lookup.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - [] # Optional authentication
  *     parameters:
@@ -243,7 +243,6 @@ checkoutRouter.get(
  *       authentication to prevent unauthorized completion attempts.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - adminTokenAuth: []
  *     parameters:
@@ -345,7 +344,6 @@ checkoutRouter.post(
  *       to COMPLETED or FAILED based on payment result.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *     parameters:
  *       - in: path
@@ -397,6 +395,12 @@ checkoutRouter.post(
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorEnvelope'
+ *       503:
+ *         description: Payment provider unavailable
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorEnvelope'
  *       500:
  *         description: Internal server error
  *         content:
@@ -434,7 +438,6 @@ checkoutRouter.post(
  *       to prevent unauthorized status changes.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - adminTokenAuth: []
  *     parameters:
@@ -535,7 +538,6 @@ checkoutRouter.post(
  *       authenticated admin users.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - adminTokenAuth: []
  *     parameters:

@@ -2,9 +2,14 @@
 import { jest } from "@jest/globals";
 import request from "supertest";
 import { createApp } from "../app.js";
-import { setCheckoutRepository, CheckoutSessionService } from "../services/checkout.js";
+import {
+  setCheckoutPaymentProvider,
+  setCheckoutRepository,
+  CheckoutSessionService,
+} from "../services/checkout.js";
 import { setFeatureFlagsFromEnv } from "../flags/index.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
+import { MockPaymentProvider } from "../services/paymentProvider.js";
 import { CheckoutSession, CheckoutSessionStatus } from "../types/checkout.js";
 import { randomUUID } from "crypto";
 
@@ -18,6 +23,7 @@ beforeEach(() => {
 
 afterAll(() => {
   delete process.env.FF_CHECKOUT;
+  setCheckoutPaymentProvider(undefined);
   setFeatureFlagsFromEnv(process.env);
   CheckoutSessionService.clearAllSessions();
 });
@@ -56,12 +62,14 @@ describe("POST /api/v1/checkout/sessions/:sessionId/pay", () => {
   beforeEach(() => {
     repo = makeMockRepo();
     setCheckoutRepository(repo);
+    setCheckoutPaymentProvider({
+      charge: async () => ({ status: "succeeded", providerRef: "provider_ref_123" }),
+    });
   });
 
   it("should process payment for a pending session (completed path)", async () => {
-    jest.spyOn(Math, "random").mockReturnValue(0.5); // success
     const session = makeSession();
-    const completed = makeSession({ id: session.id, status: CheckoutSessionStatus.COMPLETED, paymentToken: "mock_token_123" });
+    const completed = makeSession({ id: session.id, status: CheckoutSessionStatus.COMPLETED, paymentToken: "provider_ref_123" });
 
     (repo.findById as jest.Mock)
       .mockResolvedValueOnce(session)  // paySession → getSession
@@ -74,13 +82,25 @@ describe("POST /api/v1/checkout/sessions/:sessionId/pay", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.session.status).toBe(CheckoutSessionStatus.COMPLETED);
-    jest.restoreAllMocks();
+    expect(repo.updateSession).toHaveBeenCalledWith(session.id, expect.objectContaining({
+      paymentToken: "provider_ref_123",
+    }));
   });
 
   it("should process payment for a pending session (failed path)", async () => {
-    jest.spyOn(Math, "random").mockReturnValue(0.05); // failure
+    setCheckoutPaymentProvider({
+      charge: async () => ({
+        status: "declined",
+        providerRef: "declined_ref_123",
+        reason: "Insufficient funds",
+      }),
+    });
     const session = makeSession();
-    const failed = makeSession({ id: session.id, status: CheckoutSessionStatus.FAILED });
+    const failed = makeSession({
+      id: session.id,
+      status: CheckoutSessionStatus.FAILED,
+      metadata: { failureReason: "Insufficient funds" },
+    });
 
     (repo.findById as jest.Mock)
       .mockResolvedValueOnce(session)
@@ -93,7 +113,38 @@ describe("POST /api/v1/checkout/sessions/:sessionId/pay", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.session.status).toBe(CheckoutSessionStatus.FAILED);
-    jest.restoreAllMocks();
+    expect(repo.updateSession).toHaveBeenCalledWith(session.id, expect.objectContaining({
+      metadata: { failureReason: "Insufficient funds" },
+    }));
+  });
+
+  it("returns 503 in production without a provider and leaves the session pending", async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    setCheckoutPaymentProvider(undefined);
+    expect(() => setCheckoutPaymentProvider(new MockPaymentProvider())).toThrow(
+      "Mock payment provider cannot be used in production",
+    );
+    const session = makeSession();
+    (repo.findById as jest.Mock).mockResolvedValueOnce(session);
+
+    try {
+      const res = await request(app)
+        .post(`/api/v1/checkout/sessions/${session.id}/pay`)
+        .set("Content-Type", "application/json");
+
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe("PAYMENT_PROVIDER_UNAVAILABLE");
+      expect(JSON.stringify(res.body)).not.toContain("mock_token_123");
+      expect(repo.updateSession).not.toHaveBeenCalled();
+      expect(session.status).toBe(CheckoutSessionStatus.PENDING);
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+    }
   });
 
   it("should return 400 for invalid session ID format", async () => {

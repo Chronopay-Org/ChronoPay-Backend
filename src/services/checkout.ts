@@ -5,7 +5,7 @@
  * Expiry is computed from the `expires_at` column — no in-process timer.
  */
 
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID } from "crypto";
 import {
   CheckoutSession,
   CreateCheckoutSessionRequest,
@@ -17,6 +17,10 @@ import { defaultAuditLogger } from "./auditLogger.js";
 import { withSpan } from "../tracing/hooks.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
 import { query } from "../db/pool.js";
+import {
+  MockPaymentProvider,
+  type PaymentProvider,
+} from "./paymentProvider.js";
 
 import {
   HorizonContractClient,
@@ -28,10 +32,27 @@ const SESSION_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 
 // Singleton repository — can be overridden in tests via setCheckoutRepository().
 let _repo: PgCheckoutSessionRepository = new PgCheckoutSessionRepository(query);
+let _paymentProvider: PaymentProvider | undefined;
+
+// Lazily instantiated in non-production so importing this module in production
+// never triggers the MockPaymentProvider constructor guard.
+let _mockPaymentProvider: MockPaymentProvider | undefined;
 
 /** Replace the repository (for testing). */
 export function setCheckoutRepository(repo: PgCheckoutSessionRepository): void {
   _repo = repo;
+}
+
+/** Configure the provider used for checkout charges. */
+export function setCheckoutPaymentProvider(provider?: PaymentProvider): void {
+  if (provider instanceof MockPaymentProvider && process.env.NODE_ENV === "production") {
+    throw new CheckoutError(
+      CheckoutErrorCode.PAYMENT_PROVIDER_UNAVAILABLE,
+      "Mock payment provider cannot be used in production",
+      503,
+    );
+  }
+  _paymentProvider = provider;
 }
 
 export class CheckoutSessionService {
@@ -48,6 +69,33 @@ export class CheckoutSessionService {
     defaultAuditLogger
       .log({ action: `checkout.${action}`, status, resource, metadata })
       .catch(console.error);
+  }
+
+  private static async updateSession(
+    sessionId: string,
+    fields: {
+      status: CheckoutSessionStatus;
+      updatedAt: number;
+      paymentToken?: string;
+      metadata?: Record<string, string | number | boolean>;
+    },
+    expectedStatus: CheckoutSessionStatus,
+    action: string,
+  ): Promise<CheckoutSession> {
+    const updated = await _repo.updateSession(sessionId, fields, expectedStatus);
+    if (!updated) {
+      this.emitAuditEvent(action, "failed", `session:${sessionId}`, {
+        reason: `Session state changed before ${action}`,
+        expectedState: expectedStatus,
+      });
+      throw new CheckoutError(
+        CheckoutErrorCode.INVALID_SESSION_STATE,
+        `Session state changed before ${action}`,
+        409,
+        { expectedState: expectedStatus },
+      );
+    }
+    return updated;
   }
 
   static async createSession(
@@ -109,10 +157,15 @@ export class CheckoutSessionService {
     const now = Math.floor(Date.now() / 1000);
     if (now > session.expiresAt && session.status === CheckoutSessionStatus.PENDING) {
       // Persist the expired status so subsequent reads are consistent.
-      await _repo.updateSession(sessionId, {
-        status: CheckoutSessionStatus.EXPIRED,
-        updatedAt: now,
-      });
+      await this.updateSession(
+        sessionId,
+        {
+          status: CheckoutSessionStatus.EXPIRED,
+          updatedAt: now,
+        },
+        CheckoutSessionStatus.PENDING,
+        "expired",
+      );
       throw new CheckoutError(
         CheckoutErrorCode.SESSION_EXPIRED,
         "Checkout session has expired",
@@ -149,11 +202,16 @@ export class CheckoutSessionService {
       );
     }
 
-    const updated = await _repo.updateSession(sessionId, {
-      status: CheckoutSessionStatus.COMPLETED,
-      updatedAt: Math.floor(Date.now() / 1000),
-      paymentToken,
-    });
+    const updated = await this.updateSession(
+      sessionId,
+      {
+        status: CheckoutSessionStatus.COMPLETED,
+        updatedAt: Math.floor(Date.now() / 1000),
+        paymentToken,
+      },
+      CheckoutSessionStatus.PENDING,
+      "paid",
+    );
 
     this.emitAuditEvent("paid", "success", `session:${sessionId}`, {
       customerId: session.customer.customerId,
@@ -183,11 +241,16 @@ export class CheckoutSessionService {
     }
 
     const metadata = { ...(session.metadata ?? {}), failureReason: reason ?? "Unknown" };
-    const updated = await _repo.updateSession(sessionId, {
-      status: CheckoutSessionStatus.FAILED,
-      updatedAt: Math.floor(Date.now() / 1000),
-      metadata,
-    });
+    const updated = await this.updateSession(
+      sessionId,
+      {
+        status: CheckoutSessionStatus.FAILED,
+        updatedAt: Math.floor(Date.now() / 1000),
+        metadata,
+      },
+      CheckoutSessionStatus.PENDING,
+      "failed",
+    );
 
     this.emitAuditEvent("failed", "success", `session:${sessionId}`, {
       customerId: session.customer.customerId,
@@ -213,10 +276,15 @@ export class CheckoutSessionService {
       );
     }
 
-    const updated = await _repo.updateSession(sessionId, {
-      status: CheckoutSessionStatus.CANCELLED,
-      updatedAt: Math.floor(Date.now() / 1000),
-    });
+    const updated = await this.updateSession(
+      sessionId,
+      {
+        status: CheckoutSessionStatus.CANCELLED,
+        updatedAt: Math.floor(Date.now() / 1000),
+      },
+      CheckoutSessionStatus.PENDING,
+      "cancelled",
+    );
 
     this.emitAuditEvent("cancelled", "success", `session:${sessionId}`, {
       customerId: session.customer.customerId,
@@ -241,12 +309,24 @@ export class CheckoutSessionService {
       );
     }
 
-    const paymentSuccessful = randomBytes(1)[0] / 255 > 0.1;
-    if (paymentSuccessful) {
-      return this.completeSession(sessionId, "mock_token_123");
-    } else {
-      return this.failSession(sessionId, "Payment provider declined transaction");
+    const provider = _paymentProvider
+      ?? (process.env.NODE_ENV !== "production"
+        ? (_mockPaymentProvider ??= new MockPaymentProvider())
+        : undefined);
+    if (!provider) {
+      throw new CheckoutError(
+        CheckoutErrorCode.PAYMENT_PROVIDER_UNAVAILABLE,
+        "Payment provider is unavailable",
+        503,
+      );
     }
+
+    const result = await provider.charge(session);
+    if (result.status === "succeeded") {
+      return this.completeSession(sessionId, result.providerRef);
+    }
+
+    return this.failSession(sessionId, result.reason);
   }
 
   // ── Per-tenant slippage configuration ──────────────────────────────────────────
@@ -410,11 +490,16 @@ export class CheckoutSessionService {
         lastPartialRefundDestinationAmount: quote.destinationAmount,
       };
 
-      const updatedSession = await _repo.updateSession(request.sessionId, {
-        status: session.status,
-        updatedAt: Math.floor(Date.now() / 1000),
-        metadata: updatedMetadata,
-      });
+      const updatedSession = await this.updateSession(
+        request.sessionId,
+        {
+          status: session.status,
+          updatedAt: Math.floor(Date.now() / 1000),
+          metadata: updatedMetadata,
+        },
+        CheckoutSessionStatus.COMPLETED,
+        "partial_refund_path_payment",
+      );
 
       return { session: updatedSession, quote };
     } catch (err: any) {
