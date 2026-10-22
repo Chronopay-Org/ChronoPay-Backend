@@ -18,7 +18,11 @@ import { auditMiddleware } from "../middleware/audit.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import { validateBody } from "../middleware/validation.js";
-import { antiFraudScoring, captureRequestBody } from "../middleware/fraudScoring.js";
+import {
+  antiFraudScoring,
+  captureRequestBody,
+  enqueuePendingFraudReviews,
+} from "../middleware/fraudScoring.js";
 import {
   CreateBookingIntentBodySchema,
   type CreateBookingIntentBody,
@@ -115,6 +119,11 @@ export function createBookingIntentsRouter(
             },
             req.auth!,
           );
+          // Bind any deferred borderline review to the real intent ids.
+          enqueuePendingFraudReviews(
+            req,
+            report.successes.map((created) => created.id),
+          );
           res.status(201).json({
             success: true,
             report,
@@ -129,6 +138,7 @@ export function createBookingIntentsRouter(
             },
             req.auth!,
           );
+          enqueuePendingFraudReviews(req, [intent.id]);
           res.status(201).json({
             success: true,
             intent,
