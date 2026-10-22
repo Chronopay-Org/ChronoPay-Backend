@@ -1,21 +1,18 @@
 {
   "default_branch": "main",
   "branches": [
-    "fix/issue-1340-fix-validation-subscription-products-accept",
+    "fix/issue-1326-fix-idempotency-5xx-responses-are-cached-for",
     "main",
-    "origin",
-    "security/issue-1328-security-webhooks-kyc-webhook-has-no-replay-or"
+    "origin"
   ],
   "parent": {
-    "fix/issue-1340-fix-validation-subscription-products-accept": "main",
+    "fix/issue-1326-fix-idempotency-5xx-responses-are-cached-for": "main",
     "main": null,
-    "origin": "main",
-    "security/issue-1328-security-webhooks-kyc-webhook-has-no-replay-or": "main"
+    "origin": "main"
   },
   "order": [
     "main",
-    "fix/issue-1340-fix-validation-subscription-products-accept",
-    "origin",
-    "security/issue-1328-security-webhooks-kyc-webhook-has-no-replay-or"
+    "fix/issue-1326-fix-idempotency-5xx-responses-are-cached-for",
+    "origin"
   ]
 }
