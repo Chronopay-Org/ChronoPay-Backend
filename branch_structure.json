@@ -1,0 +1,21 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "main",
+    "origin",
+    "security/issue-1297-fix-booking-intents-concurrent-createintent",
+    "security/issue-1310-fix-slots-app-ts-serves-hard-coded-mock-slot"
+  ],
+  "parent": {
+    "main": null,
+    "origin": "main",
+    "security/issue-1297-fix-booking-intents-concurrent-createintent": "main",
+    "security/issue-1310-fix-slots-app-ts-serves-hard-coded-mock-slot": "main"
+  },
+  "order": [
+    "main",
+    "origin",
+    "security/issue-1297-fix-booking-intents-concurrent-createintent",
+    "security/issue-1310-fix-slots-app-ts-serves-hard-coded-mock-slot"
+  ]
+}
