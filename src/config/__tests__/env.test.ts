@@ -44,6 +44,30 @@ describe("defaults", () => {
   it("applies default trustProxy=false when omitted", () => {
     expect(load().trustProxy).toBe(false);
   });
+
+  it("applies default enableTestRoutes=false when omitted", () => {
+    expect(load().enableTestRoutes).toBe(false);
+  });
+});
+
+// ─── ENABLE_TEST_ROUTES ──────────────────────────────────────────────────────
+
+describe("ENABLE_TEST_ROUTES", () => {
+  it("accepts true", () => {
+    expect(load({ ENABLE_TEST_ROUTES: "true" }).enableTestRoutes).toBe(true);
+  });
+
+  it("accepts 1", () => {
+    expect(load({ ENABLE_TEST_ROUTES: "1" }).enableTestRoutes).toBe(true);
+  });
+
+  it("accepts false", () => {
+    expect(load({ ENABLE_TEST_ROUTES: "false" }).enableTestRoutes).toBe(false);
+  });
+
+  it("rejects invalid ENABLE_TEST_ROUTES value", () => {
+    expectIssue({ ...VALID, ENABLE_TEST_ROUTES: "yes" }, "ENABLE_TEST_ROUTES");
+  });
 });
 
 // ─── NODE_ENV ─────────────────────────────────────────────────────────────────
@@ -254,6 +278,30 @@ describe("optional fields", () => {
 
   it("rejects RATE_LIMIT_MAX=0", () => {
     expectIssue({ ...VALID, RATE_LIMIT_MAX: "0" }, "RATE_LIMIT_MAX");
+  });
+});
+
+// ─── MFA_REQUIRED_FOR_REFUNDS ────────────────────────────────────────────────
+
+describe("MFA_REQUIRED_FOR_REFUNDS", () => {
+  it("defaults to on in production", () => {
+    expect(load({ NODE_ENV: "production" }).mfaRequiredForRefunds).toBe(true);
+  });
+
+  it("defaults to off outside production", () => {
+    expect(load().mfaRequiredForRefunds).toBe(false);
+    expect(load({ NODE_ENV: "test" }).mfaRequiredForRefunds).toBe(false);
+  });
+
+  it("honours an explicit override", () => {
+    expect(
+      load({ NODE_ENV: "production", MFA_REQUIRED_FOR_REFUNDS: "false" }).mfaRequiredForRefunds,
+    ).toBe(false);
+    expect(load({ MFA_REQUIRED_FOR_REFUNDS: "true" }).mfaRequiredForRefunds).toBe(true);
+  });
+
+  it("rejects invalid values", () => {
+    expectIssue({ ...VALID, MFA_REQUIRED_FOR_REFUNDS: "yes" }, "MFA_REQUIRED_FOR_REFUNDS");
   });
 });
 

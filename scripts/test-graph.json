@@ -22,7 +22,8 @@
     "src/__tests__/graceful-shutdown.test.ts",
     "src/__tests__/payload-limit.test.ts",
     "src/__tests__/request-id.test.ts",
-    "src/__tests__/chaos-dependency-faults.test.ts"
+    "src/__tests__/chaos-dependency-faults.test.ts",
+    "src/routes/__tests__/webhooks.security.test.ts"
   ],
 
   "src/index.ts": [],
@@ -163,7 +164,8 @@
   "src/routes/webhooks.ts": [
     "src/__tests__/webhooks.test.ts",
     "src/routes/__tests__/webhooks.test.ts",
-    "src/routes/__tests__/webhooks.rotation.test.ts"
+    "src/routes/__tests__/webhooks.rotation.test.ts",
+    "src/routes/__tests__/webhooks.security.test.ts"
   ],
 
   "src/routes/notifications.ts": [

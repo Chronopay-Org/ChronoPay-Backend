@@ -24,6 +24,27 @@ Other dependencies in `package.json`: ethers, `@stellar/stellar-sdk`, zod, prom-
 
 ## API surface
 
+### Subscription service composition (#1339)
+
+The subscription router and the slot-generator worker share the process-wide
+`subscriptionService` from `src/services/subscriptionContainer.ts`. The router
+continues to re-export that service for compatibility. The entry point must not
+construct a second set of in-memory repositories: subscriptions created through
+the API must be visible to the worker, and generated metadata/cursor updates
+must be visible through the same service and subscription GET endpoint.
+
+Tests can use `createSubscriptionContainer()` for independent state or inject
+product/subscription/slot repositories into that factory. The default container
+is still in-memory and local to one application process; this does not add
+database persistence or cross-instance coordination. Existing generator batch,
+recurrence, conflict and cursor-idempotency behavior is unchanged.
+
+Existing limitation: `SubscriptionService.mintSlot` returns slot metadata, and
+the generator updates `slotsMinted` and `nextSlotStartMs`; it does not insert a
+new bookable slot record into `SlotRepository`. This composition fix verifies
+those actual existing effects rather than claiming SQL/on-chain slot creation.
+Persistent/bookable slot insertion and route authentication remain separate work.
+
 All business routes are under `/api/v1`. Interactive docs are served at `/api-docs` and the generated spec is in `openapi-spec.json` (`npm run generate-openapi`). The list below is derived from the router files; consult the OpenAPI spec and `docs/api/` for request/response shapes.
 
 **Operational (unversioned):** `GET /health`, `/health/horizon`, `/health/ready`, `/ready`, `/live`, `/metrics`.
@@ -61,6 +82,25 @@ Copy `.env.example` to `.env`. Variables listed there:
 
 `src/config/env.ts` additionally reads (not all in `.env.example`): `NODE_ENV`, `REDIS_URL` (required), `HORIZON_URL`/`HORIZON_URLS`, `STELLAR_NETWORK_PASSPHRASE`, `ESCROW_CONTRACT_HASH`, `JWT_ISSUER`, `JWT_AUDIENCE`, `WEBHOOK_SECRET`, `INTERNAL_OVERRIDE_SECRET(_PREV)`, `INTERNAL_BYPASS_TOLERANCE_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, `REQUEST_TIMEOUT_MS`, `TRUST_PROXY`. See [docs/environment-validation.md](docs/environment-validation.md) for validation rules. A database connection is configured in `src/db/` (see [docs/database/migrations.md](docs/database/migrations.md)).
 
+### Checkout redirect destinations (#1325)
+
+Optional `successUrl` and `cancelUrl` are checked by the checkout request
+validator before session creation. Each must be an absolute URL of at most 2048
+characters, use HTTPS in production (HTTP is also allowed outside production),
+and match an exact configured URL host, including a non-default port if present.
+Credentials, raw whitespace/backslashes, relative URLs and non-HTTP schemes are
+rejected. Query strings and fragments on approved destinations are preserved.
+
+Set `CHECKOUT_REDIRECT_ALLOWED_HOSTS=app.example,checkout.example:8443` (host
+authorities only, no schemes, paths or wildcard/subdomain patterns). When this
+variable is absent, the host of a valid absolute `APP_URL` is the fallback.
+An explicitly empty/invalid list denies supplied redirects rather than falling
+back. Without either valid configuration, supplied redirects are rejected;
+requests omitting both optional fields remain valid. Invalid destinations return
+400 with the existing checkout envelope, `code: INVALID_REDIRECT_URL` and
+`details.field: successUrl|cancelUrl`, without reflecting the URL. This policy
+does not change checkout authentication, payments or direct service callers.
+
 ## Running locally
 
 Requires Node.js 20+ (CI uses 22), npm, and a Redis instance.
@@ -76,6 +116,25 @@ npm run build && npm start
 Docker: `docker-compose.yml`, `docker-compose.override.yml` (dev) and `docker-compose.prod.yml` are provided, along with `scripts/docker-health.sh`.
 
 Useful scripts: `npm run migrate <status|validate|drift-check|up|down>`, `npm run generate-openapi`, `npm run generate:error-docs`, `npm run pii-scan`, `npm run sbom`, `npm run canary`, `npm run lint`, `npm run typecheck`.
+
+### Graceful shutdown
+
+The executable handles `SIGTERM` and `SIGINT` with one shared shutdown sequence.
+It stops accepting HTTP connections and stops background workers, waits for
+existing HTTP requests, then closes both PostgreSQL pools and the slot-cache
+Redis client. Worker initializers that finish importing after shutdown starts
+do not start new work. Importing the entry point under `NODE_ENV=test` neither
+binds a port nor installs process signal handlers.
+
+`SHUTDOWN_TIMEOUT_MS` is a positive integer (default `30000`, at most `2147483647`)
+covering worker stops, HTTP draining and resource closure. At the deadline,
+remaining HTTP connections are forcibly closed and resource cleanup is attempted;
+a signal-triggered shutdown exits unsuccessfully on timeout/close failure.
+The signal handler has a hard exit fallback if cleanup never resolves. Ordinary
+shutdown exits with code 0. Driver/worker failures are logged with structured
+resource names without request or credential contents. Already-running external
+calls remain subject to their worker's existing cancellation support and the
+shutdown deadline; this does not redesign those workers or merge the DB pools.
 
 ## Testing
 

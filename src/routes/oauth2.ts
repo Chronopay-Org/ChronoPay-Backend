@@ -9,6 +9,7 @@ const router = Router();
 const COOKIE_NAME_STATE = "oauth2_state";
 const COOKIE_NAME_PKCE = "oauth2_pkce";
 const COOKIE_NAME_NONCE = "oauth2_nonce";
+const COOKIE_NAME_REDIRECT = "oauth2_redirect";
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
@@ -58,6 +59,19 @@ router.get("/:provider/start", (req: Request, res: Response) => {
       });
     }
 
+    // Validate redirect URL before creating any session state
+    let validatedRedirect: string | undefined;
+    if (redirectUrl !== undefined) {
+      const result = validateRedirectUrl(redirectUrl);
+      if (result === null) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid redirect URL",
+        });
+      }
+      validatedRedirect = result;
+    }
+
     // Generate PKCE challenge and state
     const pkceChallenge = oauth2Service.generatePKCEChallenge();
     const state = oauth2Service.generateState();
@@ -75,6 +89,13 @@ router.get("/:provider/start", (req: Request, res: Response) => {
     );
     res.cookie(COOKIE_NAME_NONCE, nonce, COOKIE_OPTIONS);
 
+    // Persist the validated redirect target so the callback can return it
+    if (validatedRedirect !== undefined) {
+      res.cookie(COOKIE_NAME_REDIRECT, validatedRedirect, COOKIE_OPTIONS);
+    } else {
+      res.clearCookie(COOKIE_NAME_REDIRECT, { path: "/" });
+    }
+
     // Build authorization URL
     const authUrl = oauth2Service.buildAuthorizationUrl(
       provider,
@@ -82,26 +103,6 @@ router.get("/:provider/start", (req: Request, res: Response) => {
       state,
       nonce,
     );
-
-    // Add redirect_url to state if provided (will be validated on callback)
-    if (redirectUrl) {
-      // Validate redirect URL is safe (basic check)
-      try {
-        const url = new URL(redirectUrl);
-        // Only allow relative paths or same-origin redirects
-        if (!url.origin.includes(process.env.APP_URL || "localhost")) {
-          return res.status(400).json({
-            success: false,
-            error: "Invalid redirect URL",
-          });
-        }
-      } catch {
-        return res.status(400).json({
-          success: false,
-          error: "Invalid redirect URL format",
-        });
-      }
-    }
 
     return res.status(200).json({
       success: true,
@@ -130,7 +131,8 @@ router.get("/:provider/start", (req: Request, res: Response) => {
  */
 router.get("/:provider/callback", async (req: Request, res: Response) => {
   try {
-    const { provider, code, state, error, error_description } = req.query as Record<
+    const { provider } = req.params;
+    const { code, state, error, error_description } = req.query as Record<
       string,
       string | undefined
     >;
@@ -165,6 +167,7 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
     const storedState = req.cookies[COOKIE_NAME_STATE];
     const pkceData = req.cookies[COOKIE_NAME_PKCE];
     const storedNonce = req.cookies[COOKIE_NAME_NONCE];
+    const storedReedirect = req.cookies[COOKIE_NAME_REDIRECT] as string | undefined;
 
     // Validate state - prevent CSRF and replay attacks
     if (!storedState || storedState !== state) {
@@ -253,7 +256,7 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
     clearOAuthCookies(res);
 
     // Return the JWT to the client (do NOT include provider tokens)
-    return res.status(200).json({
+    const responseBody: Record<string, unknown> = {
       success: true,
       token: appJwt,
       user: {
@@ -262,7 +265,12 @@ router.get("/:provider/callback", async (req: Request, res: Response) => {
         name: userInfo.name,
         provider: userInfo.provider,
       },
-    });
+    };
+    if (storedRedirect) {
+      responseBody.redirect_url = storedRedirect;
+    }
+
+    return res.status(200).json(responseBody);
   } catch (error) {
     clearOAuthCookies(res);
 
