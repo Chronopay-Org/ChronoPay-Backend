@@ -5,6 +5,11 @@ All JWTs must include:
 - `exp`: Numeric expiration timestamp (seconds since epoch)
 - `iat`: Numeric issued-at timestamp (seconds since epoch)
 
+## Subject (`sub`) from OAuth2 logins
+Tokens issued by `GET /api/v1/auth/oauth/:provider/callback` use a provider-namespaced subject,
+`<provider>:<provider-user-id>` (e.g. `google:12345`), so provider-local ids cannot collide across
+providers. See [oauth2.md](oauth2.md) for the format and the migration impact on legacy tokens.
+
 ## Environment Variables
 | Variable | Description | Required |
 | --- | --- | --- |

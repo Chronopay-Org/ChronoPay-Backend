@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../test/auth.js";
 import express from "express";
 import request from "supertest";
 import { createNotificationsRouter } from "../routes/notifications.js";
@@ -34,8 +35,7 @@ function createApp({
 }
 
 const authHeaders = {
-  "x-chronopay-user-id": "user-1",
-  "x-chronopay-role": "customer",
+  Authorization: createTestAuthorization("user-1", "customer"),
 };
 
 const validPayload = {
@@ -59,8 +59,7 @@ describe("POST /api/v1/notifications/sms — auth", () => {
     const { app } = createApp();
     const res = await request(app)
       .post("/api/v1/notifications/sms")
-      .set("x-chronopay-user-id", "user-1")
-      .set("x-chronopay-role", "professional")
+      .set("Authorization", createTestAuthorization("user-1", "professional"))
       .send(validPayload);
     expect(res.status).toBe(403);
   });
