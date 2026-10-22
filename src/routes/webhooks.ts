@@ -1,6 +1,7 @@
 import { Router, Express, Request, Response, NextFunction } from "express";
 import { validateRequiredFields } from "../middleware/validation.js";
 import { internalHmacAuth } from "../middleware/internalHmacAuth.js";
+import { requireAdminToken } from "../middleware/authorization.js";
 import { _settlements } from "../services/settlementReconciler.js";
 import { WebhookIdempotencyStore } from "../services/webhookIdempotencyStore.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
@@ -118,34 +119,40 @@ const handleSettlementWebhook = async (req: Request, res: Response) => {
 };
 
 const router = Router();
-router.post(
-  "/settlements",
-  validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
-  (req, res, next) => handleSettlementWebhook(req, res).catch(next),
+
+// NOTE: provider webhooks are intentionally NOT registered on this router.
+// POST /settlements used to live here as well, so mounting this default
+// router at /api/v1 exposed POST /api/v1/settlements with no HMAC check
+// (#1307). registerWebhookRoutes() below is the single registration path for
+// provider webhooks; this router only carries the admin-token-protected
+// idempotency endpoints.
+
+// Admin inspection endpoint — admin token required (#1307)
+router.get(
+  "/admin/idempotency/:tenantId/:idempotencyKey",
+  requireAdminToken,
+  async (req, res, next) => {
+    try {
+      const { tenantId, idempotencyKey } = req.params;
+      const result = await WebhookIdempotencyStore.inspect(tenantId, idempotencyKey);
+      if (!result) {
+        return res.status(404).json({ success: false, error: "Key not found" });
+      }
+      await defaultAuditLogger.log({
+        action: "webhook_idempotency.inspect",
+        status: "success",
+        resource: `idempotencyKey:${idempotencyKey}`,
+        metadata: { tenantId },
+      });
+      return res.json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
-// Admin inspection endpoint
-router.get("/admin/idempotency/:tenantId/:idempotencyKey", async (req, res, next) => {
-  try {
-    const { tenantId, idempotencyKey } = req.params;
-    const result = await WebhookIdempotencyStore.inspect(tenantId, idempotencyKey);
-    if (!result) {
-      return res.status(404).json({ success: false, error: "Key not found" });
-    }
-    await defaultAuditLogger.log({
-      action: "webhook_idempotency.inspect",
-      status: "success",
-      resource: `idempotencyKey:${idempotencyKey}`,
-      metadata: { tenantId },
-    });
-    return res.json({ success: true, data: result });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Admin sweep endpoint
-router.post("/admin/idempotency/sweep", async (req, res, next) => {
+// Admin sweep endpoint — admin token required (#1307)
+router.post("/admin/idempotency/sweep", requireAdminToken, async (req, res, next) => {
   try {
     const deletedCount = await WebhookIdempotencyStore.sweep();
     await defaultAuditLogger.log({
@@ -222,16 +229,35 @@ const handleKycWebhook = async (req: Request, res: Response, kycProvider?: KycPr
 };
 
 export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions = {}) {
+  const settlementSecrets = {
+    get current() {
+      return options.signingSecret ?? process.env.SETTLEMENTS_WEBHOOK_SECRET;
+    },
+    get previous() {
+      return process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS;
+    },
+    secretName: "Settlement",
+  };
+  const kycSecrets = {
+    get current() {
+      return options.kycSigningSecret ?? process.env.KYC_WEBHOOK_SECRET;
+    },
+    get previous() {
+      return process.env.KYC_WEBHOOK_SECRET_PREVIOUS;
+    },
+    secretName: "KYC",
+  };
+
   app.post(
     "/api/v1/webhooks/settlements",
-    internalHmacAuth(options.signingSecret),
+    internalHmacAuth(settlementSecrets),
     validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
     (req, res, next) => handleSettlementWebhook(req, res).catch(next),
   );
 
   app.post(
     "/api/v1/webhooks/kyc",
-    internalHmacAuth(options.kycSigningSecret ?? process.env.KYC_WEBHOOK_SECRET),
+    internalHmacAuth(kycSecrets),
     validateRequiredFields(["supplierId", "kycRef", "status"]),
     (req: Request, res: Response, next: NextFunction) =>
       handleKycWebhook(req, res, options.kycProvider).catch(next),
