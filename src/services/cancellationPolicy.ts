@@ -290,8 +290,9 @@ export interface CancellationPolicyServiceDeps {
   nowIso?: () => string;
   /**
    * Optional supplier cancellation override store.
-   * When provided, {@link calculateRefund} checks for a per-supplier override
-   * before falling back to the global policy.
+   * When provided, {@link snapshotCurrentPolicy} captures an active supplier
+   * override into the booking snapshot, and {@link calculateRefund} falls back
+   * to a live override only for legacy intents that lack a snapshot.
    */
   supplierOverrideStore?: SupplierCancellationOverrideStore;
 }
@@ -314,7 +315,39 @@ export class CancellationPolicyService {
     this.supplierOverrideStore = deps.supplierOverrideStore;
   }
 
-  snapshotCurrentPolicy(overrideTerms?: ProratedCancellationTerms): CancellationPolicySnapshot {
+  snapshotCurrentPolicy(
+    overrideTermsOrSupplierId?:
+      | ProratedCancellationTerms
+      | string
+      | { supplierId?: string; overrideTerms?: ProratedCancellationTerms },
+    supplierId?: string,
+  ): CancellationPolicySnapshot {
+    let overrideTerms: ProratedCancellationTerms | undefined;
+    let resolvedSupplierId: string | undefined = supplierId;
+
+    if (typeof overrideTermsOrSupplierId === "string") {
+      resolvedSupplierId = overrideTermsOrSupplierId;
+    } else if (overrideTermsOrSupplierId && typeof overrideTermsOrSupplierId === "object") {
+      if ("tiers" in overrideTermsOrSupplierId) {
+        overrideTerms = overrideTermsOrSupplierId;
+      } else {
+        resolvedSupplierId = overrideTermsOrSupplierId.supplierId ?? supplierId;
+        overrideTerms = overrideTermsOrSupplierId.overrideTerms;
+      }
+    }
+
+    if (!overrideTerms && resolvedSupplierId) {
+      const supplierOverride = this.resolveTermsForSupplier(resolvedSupplierId);
+      if (supplierOverride) {
+        validateProratedCancellationTerms(supplierOverride.terms);
+        return {
+          policyVersionId: supplierOverride.policyVersionId,
+          policyTerms: supplierOverride.terms,
+          capturedAtMs: this.nowMs(),
+        };
+      }
+    }
+
     const registry = this.getPolicyRegistrySync();
     const entry = registry.entries[registry.currentVersionId];
     if (!entry) {
@@ -383,35 +416,32 @@ export class CancellationPolicyService {
     let policyVersionId: string;
     let terms: ProratedCancellationTerms;
 
-    // 1. Check for per-supplier override first
-    if (intent.professional) {
-      const supplierOverride = this.resolveTermsForSupplier(intent.professional);
-      if (supplierOverride) {
-        validateProratedCancellationTerms(supplierOverride.terms);
-        return computeRefundWithTerms(
-          supplierOverride.terms,
-          price,
-          hoursUntilStart,
-          supplierOverride.policyVersionId,
-        );
-      }
-    }
-
-    // 2. Fall back to grandfathered or global policy
+    // 1. Prefer the grandfathered snapshot captured on the intent (which already
+    //    records any supplier override active when the booking was created).
     if (intent.cancellationPolicySnapshot) {
       policyVersionId = intent.cancellationPolicySnapshot.policyVersionId;
       terms = intent.cancellationPolicySnapshot.policyTerms;
     } else {
-      const registry = this.getPolicyRegistrySync();
-      const fallback = registry.entries[LEGACY_V1_VERSION.versionId];
-      policyVersionId = LEGACY_V1_VERSION.versionId;
-      terms = fallback ? fallback.terms : LEGACY_V1_TERMS;
+      // 2. Legacy intents without a snapshot: check live supplier override first,
+      //    then fall back to the legacy v1 global policy.
+      const supplierOverride = intent.professional
+        ? this.resolveTermsForSupplier(intent.professional)
+        : null;
+      if (supplierOverride) {
+        policyVersionId = supplierOverride.policyVersionId;
+        terms = supplierOverride.terms;
+      } else {
+        const registry = this.getPolicyRegistrySync();
+        const fallback = registry.entries[LEGACY_V1_VERSION.versionId];
+        policyVersionId = LEGACY_V1_VERSION.versionId;
+        terms = fallback ? fallback.terms : LEGACY_V1_TERMS;
+      }
     }
 
     validateProratedCancellationTerms(terms);
     const breakdown = computeRefundWithTerms(terms, price, hoursUntilStart, policyVersionId);
 
-    // Apply hold fee retention if a snapshot exists on the intent
+    // Apply hold fee retention on every path if a snapshot exists on the intent
     if (intent.holdFeePolicySnapshot) {
       const svc = holdFeeService ?? new HoldFeePolicyService();
       const holdFeeCents = svc.computeRetention(intent.holdFeePolicySnapshot);
