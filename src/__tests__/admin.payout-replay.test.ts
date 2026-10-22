@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../test/auth.js";
 import request from "supertest";
 import express from "express";
 import adminRouter, { pendingReplays } from "../routes/admin.js";
@@ -76,8 +77,7 @@ describe("Dual-Admin Payout Replay Endpoints", () => {
       
       const res = await request(app)
         .post(`/api/v1/admin/payouts/${mockTransactionId}/replay`)
-        .set("x-chronopay-user-id", "admin-1")
-        .set("x-chronopay-role", "admin")
+        .set("Authorization", createTestAuthorization("admin-1", "admin"))
         .send({ reason: "Network issue during payout" });
         
       expect(res.status).toBe(202);
@@ -92,8 +92,7 @@ describe("Dual-Admin Payout Replay Endpoints", () => {
       
       const res = await request(app)
         .post(`/api/v1/admin/payouts/${mockTransactionId}/replay`)
-        .set("x-chronopay-user-id", "admin-1")
-        .set("x-chronopay-role", "admin")
+        .set("Authorization", createTestAuthorization("admin-1", "admin"))
         .send({ reason: "" });
         
       expect(res.status).toBe(400);
@@ -106,8 +105,7 @@ describe("Dual-Admin Payout Replay Endpoints", () => {
       
       const res = await request(app)
         .post(`/api/v1/admin/payouts/${mockTransactionId}/replay`)
-        .set("x-chronopay-user-id", "admin-1")
-        .set("x-chronopay-role", "admin")
+        .set("Authorization", createTestAuthorization("admin-1", "admin"))
         .send({ reason: "I want to replay" });
         
       expect(res.status).toBe(400);

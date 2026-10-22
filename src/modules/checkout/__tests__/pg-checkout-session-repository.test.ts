@@ -70,6 +70,14 @@ describe("PgCheckoutSessionRepository", () => {
       expect(result).toEqual(expectedSession);
     });
 
+    it("throws when the insert returns no session row", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 } as any);
+
+      await expect(repo.create(expectedSession)).rejects.toThrow(
+        "Cannot map missing checkout session row",
+      );
+    });
+
     it("serialises metadata when present", async () => {
       const withMeta = { ...expectedSession, metadata: { ref: "abc" } as any };
       mockQuery.mockResolvedValueOnce({
@@ -134,11 +142,11 @@ describe("PgCheckoutSessionRepository", () => {
         status: CheckoutSessionStatus.COMPLETED,
         updatedAt: NOW_S,
         paymentToken: "tok_123",
-      });
+      }, CheckoutSessionStatus.PENDING);
 
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.stringContaining("UPDATE checkout_sessions"),
-        ["sess-uuid", "completed", NOW_S, "tok_123", null],
+        expect.stringMatching(/UPDATE checkout_sessions[\s\S]*WHERE id = \$1 AND status = \$6/),
+        ["sess-uuid", "completed", NOW_S, "tok_123", null, CheckoutSessionStatus.PENDING],
       );
       expect(result.status).toBe(CheckoutSessionStatus.COMPLETED);
       expect(result.paymentToken).toBe("tok_123");
@@ -152,10 +160,11 @@ describe("PgCheckoutSessionRepository", () => {
         status: CheckoutSessionStatus.FAILED,
         updatedAt: NOW_S,
         metadata: { failureReason: "declined" },
-      });
+      }, CheckoutSessionStatus.PENDING);
 
       const params = mockQuery.mock.calls[0][1] as unknown[];
       expect(params[4]).toBe(JSON.stringify({ failureReason: "declined" }));
+      expect(params[5]).toBe(CheckoutSessionStatus.PENDING);
     });
 
     it("passes null for paymentToken and metadata when omitted", async () => {
@@ -164,11 +173,30 @@ describe("PgCheckoutSessionRepository", () => {
       await repo.updateSession("sess-uuid", {
         status: CheckoutSessionStatus.PENDING,
         updatedAt: NOW_S,
-      });
+      }, CheckoutSessionStatus.PENDING);
 
       const params = mockQuery.mock.calls[0][1] as unknown[];
       expect(params[3]).toBeNull(); // paymentToken
       expect(params[4]).toBeNull(); // metadata
+    });
+
+    it("returns null when the expected status no longer matches", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 } as any);
+
+      const result = await repo.updateSession("sess-uuid", {
+        status: CheckoutSessionStatus.COMPLETED,
+        updatedAt: NOW_S,
+      }, CheckoutSessionStatus.PENDING);
+
+      expect(result).toBeNull();
+      expect(mockQuery.mock.calls[0][1]).toEqual([
+        "sess-uuid",
+        CheckoutSessionStatus.COMPLETED,
+        NOW_S,
+        null,
+        null,
+        CheckoutSessionStatus.PENDING,
+      ]);
     });
   });
 

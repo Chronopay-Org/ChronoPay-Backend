@@ -13,6 +13,7 @@ import {
   getPool,
   closePool,
   withTransaction,
+  getPoolConfig,
   _setPoolFactory,
 } from "../../db/connection.js";
 
@@ -40,6 +41,7 @@ beforeEach(async () => {
   // Tear down any existing singleton first
   await closePool();
   delete process.env.DATABASE_URL;
+  delete process.env.POSTGRESQL_URL;
 
   // Build fresh mock pool methods
    
@@ -66,6 +68,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await closePool();
   delete process.env.DATABASE_URL;
+  delete process.env.POSTGRESQL_URL;
+  delete process.env.DB_POOL_MAX;
   // Restore real pool factory after each test
   _setPoolFactory((url) => new Pool({ connectionString: url }));
 });
@@ -77,12 +81,29 @@ describe("getPool()", () => {
     expect(() => getPool()).toThrow(/DATABASE_URL environment variable is not set/);
   });
 
+  it("throws a descriptive error when neither DATABASE_URL nor POSTGRESQL_URL is set", () => {
+    expect(() => getPool()).toThrow(/DATABASE_URL environment variable is not set/);
+  });
+
   it("creates a Pool using the factory with the DATABASE_URL", () => {
     process.env.DATABASE_URL = FAKE_URL;
     const factoryFn = jest.fn<(...args: any[]) => Pool>().mockReturnValue(mockPoolInstance);
     _setPoolFactory(factoryFn as unknown as (url: string) => Pool);
     getPool();
     expect(factoryFn).toHaveBeenCalledWith(FAKE_URL);
+  });
+
+  it("falls back to POSTGRESQL_URL as a deprecated alias and logs a warning", () => {
+    process.env.POSTGRESQL_URL = FAKE_URL;
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const factoryFn = jest.fn<(...args: any[]) => Pool>().mockReturnValue(mockPoolInstance);
+    _setPoolFactory(factoryFn as unknown as (url: string) => Pool);
+    getPool();
+    expect(factoryFn).toHaveBeenCalledWith(FAKE_URL);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/POSTGRESQL_URL.*deprecated.*DATABASE_URL/i),
+    );
+    warnSpy.mockRestore();
   });
 
   it("registers an error handler on the pool", () => {
@@ -99,6 +120,21 @@ describe("getPool()", () => {
     // Factory called only once (second call hits singleton cache)
     expect(mockConnectFn).not.toHaveBeenCalled(); // only to verify same object
     expect(p1).toBe(mockPoolInstance);
+  });
+});
+
+// ─── getPoolConfig() ─────────────────────────────────────────────────────────
+
+describe("getPoolConfig()", () => {
+  it("defaults max to 20 when DB_POOL_MAX is unset", () => {
+    process.env.DATABASE_URL = FAKE_URL;
+    expect(getPoolConfig().max).toBe(20);
+  });
+
+  it("honours DB_POOL_MAX when set", () => {
+    process.env.DATABASE_URL = FAKE_URL;
+    process.env.DB_POOL_MAX = "7";
+    expect(getPoolConfig().max).toBe(7);
   });
 });
 
@@ -129,6 +165,14 @@ describe("closePool()", () => {
     await closePool();
     await closePool(); // second call — should not call end again
     expect(mockEndFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a new pool after closePool even when factory was reset", async () => {
+    process.env.DATABASE_URL = FAKE_URL;
+    getPool();
+    await closePool();
+    _resetPoolConfigForTests();
+    expect(() => getPool()).not.toThrow();
   });
 });
 

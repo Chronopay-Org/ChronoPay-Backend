@@ -1,6 +1,9 @@
+import { createTestAuthorization } from "../../test/auth.js";
 import request from "supertest";
 import app from "../index.js";
 import { SignJWT } from "jose";
+import { RefundService } from "../services/refund.js";
+import { AmountUtils } from "../utils/amount.js";
 
 const TEST_SECRET = "test-secret-key-at-least-32-chars!!";
 
@@ -48,7 +51,7 @@ describe("Input validation middleware", () => {
   it("should reject slot creation when role is invalid", async () => {
     const res = await request(app)
       .post("/api/v1/slots")
-      .set("x-user-role", "hacker")
+      .set("Authorization", createTestAuthorization("test-user", "hacker"))
       .send({
         professional: "alice",
         startTime: 1000,
@@ -62,7 +65,7 @@ describe("Input validation middleware", () => {
   it("should reject slot creation when role is not authorized", async () => {
     const res = await request(app)
       .post("/api/v1/slots")
-      .set("x-user-role", "customer")
+      .set("Authorization", createTestAuthorization("test-user", "customer"))
       .send({
         professional: "alice",
         startTime: 1000,
@@ -76,7 +79,7 @@ describe("Input validation middleware", () => {
   it("should allow valid slot creation", async () => {
     const res = await request(app)
       .post("/api/v1/slots")
-      .set("x-user-role", "professional")
+      .set("Authorization", createTestAuthorization("test-user", "professional"))
       .send({
         professional: "alice",
         startTime: 1000,
@@ -90,7 +93,7 @@ describe("Input validation middleware", () => {
   it("should allow slot creation for admin role", async () => {
     const res = await request(app)
       .post("/api/v1/slots")
-      .set("x-user-role", "admin")
+      .set("Authorization", createTestAuthorization("test-user", "admin"))
       .send({
         professional: "alice",
         startTime: 1000,
@@ -138,5 +141,39 @@ describe("Input validation middleware", () => {
       });
 
     expect(res.status).toBe(400);
+  });
+
+  describe("admin refund validation", () => {
+    it("rejects non-integer amountCents with 400", async () => {
+      const res = await request(app)
+        .post("/api/v1/admin/refunds")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ paymentId: "pay-1", amountCents: 10.5, currency: "USD" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+
+    it("AmountUtils.validate rejects fractional minor units", () => {
+      expect(() => AmountUtils.validate(10.5)).toThrow();
+      expect(AmountUtils.validate(10)).toBe(10);
+    });
+
+    it("rejects a currency that differs from the payment currency with 422", async () => {
+      const spy = jest
+        .spyOn(RefundService.prototype, "createRefund")
+        .mockRejectedOnce(
+          Object.assign(new Error("currency mismatch"), { status: 422 }),
+        );
+
+      const res = await request(app)
+        .post("/api/v1/admin/refunds")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ paymentId: "pay-1", amountCents: 100, currency: "EUR" });
+
+      expect(res.status).toBe(422);
+      expect(res.body.success).toBe(false);
+      spy.mockRestore();
+    });
   });
 });

@@ -57,7 +57,7 @@ export function requireAdminToken(req: Request, res: Response, next: NextFunctio
     );
   }
 
-  if (providedToken !== configuredToken) {
+  if (!constantTimeEquals(providedToken, configuredToken)) {
     emitAdminTokenDeniedAudit(req, "AUTHZ_FORBIDDEN", 403);
     return sendErrorResponse(res, new ForbiddenError("Invalid admin token"), req);
   }

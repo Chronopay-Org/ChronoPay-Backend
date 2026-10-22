@@ -40,6 +40,8 @@ export function createFakeMfaRepository(): FakeMfaRepositoryHandle {
         period: input.period,
         verified: false,
         last_used_counter: null,
+        failed_attempts: 0,
+        locked_until: null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -66,6 +68,33 @@ export function createFakeMfaRepository(): FakeMfaRepositoryHandle {
       row.last_used_counter = step;
       touch(row);
       return { advanced: true, enrollment: { ...row } };
+    },
+    async recordFailedAttempt(userId, threshold, lockedUntil) {
+      const row = rows.get(userId);
+      if (!row) return null;
+      row.failed_attempts += 1;
+      if (row.failed_attempts >= threshold && row.locked_until === null) {
+        row.locked_until = lockedUntil.toISOString();
+      }
+      touch(row);
+      return { failedAttempts: row.failed_attempts, lockedUntil: row.locked_until };
+    },
+    async clearExpiredLockout(userId, now) {
+      const row = rows.get(userId);
+      if (!row || row.locked_until === null || new Date(row.locked_until).getTime() > now.getTime()) {
+        return false;
+      }
+      row.failed_attempts = 0;
+      row.locked_until = null;
+      touch(row);
+      return true;
+    },
+    async resetFailedAttempts(userId) {
+      const row = rows.get(userId);
+      if (!row) return;
+      row.failed_attempts = 0;
+      row.locked_until = null;
+      touch(row);
     },
     async deleteByUserId(userId) {
       return rows.delete(userId);
