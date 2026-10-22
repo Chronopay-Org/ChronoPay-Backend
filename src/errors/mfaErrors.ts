@@ -49,6 +49,16 @@ export class MfaInvalidCodeError extends Error implements MfaErrorShape {
   }
 }
 
+export class MfaLockedError extends Error implements MfaErrorShape {
+  readonly statusCode = 429;
+  readonly errorCode = "MFA_LOCKED";
+
+  constructor() {
+    super("MFA verification is temporarily locked; try again later");
+    this.name = "MfaLockedError";
+  }
+}
+
 export class MfaReplayDetectedError extends Error implements MfaErrorShape {
   readonly statusCode = 409;
   readonly errorCode = "MFA_REPLAY_DETECTED";
