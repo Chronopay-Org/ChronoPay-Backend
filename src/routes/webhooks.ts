@@ -229,16 +229,35 @@ const handleKycWebhook = async (req: Request, res: Response, kycProvider?: KycPr
 };
 
 export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions = {}) {
+  const settlementSecrets = {
+    get current() {
+      return options.signingSecret ?? process.env.SETTLEMENTS_WEBHOOK_SECRET;
+    },
+    get previous() {
+      return process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS;
+    },
+    secretName: "Settlement",
+  };
+  const kycSecrets = {
+    get current() {
+      return options.kycSigningSecret ?? process.env.KYC_WEBHOOK_SECRET;
+    },
+    get previous() {
+      return process.env.KYC_WEBHOOK_SECRET_PREVIOUS;
+    },
+    secretName: "KYC",
+  };
+
   app.post(
     "/api/v1/webhooks/settlements",
-    internalHmacAuth(options.signingSecret),
+    internalHmacAuth(settlementSecrets),
     validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
     (req, res, next) => handleSettlementWebhook(req, res).catch(next),
   );
 
   app.post(
     "/api/v1/webhooks/kyc",
-    internalHmacAuth(options.kycSigningSecret ?? process.env.KYC_WEBHOOK_SECRET),
+    internalHmacAuth(kycSecrets),
     validateRequiredFields(["supplierId", "kycRef", "status"]),
     (req: Request, res: Response, next: NextFunction) =>
       handleKycWebhook(req, res, options.kycProvider).catch(next),

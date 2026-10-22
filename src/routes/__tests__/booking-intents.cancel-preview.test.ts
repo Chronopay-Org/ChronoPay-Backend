@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../../test/auth.js";
 import request from "supertest";
 import { createApp } from "../../app.js";
 import { setFeatureFlagsFromEnv } from "../../flags/service.js";
@@ -25,8 +26,7 @@ describe("GET /api/v1/booking-intents/:id/cancel-preview", () => {
     // Create intent
     const createRes = await request(app)
       .post("/api/v1/booking-intents")
-      .set("x-chronopay-user-id", validUserId)
-      .set("x-chronopay-role", validRole)
+      .set("Authorization", createTestAuthorization(validUserId, validRole))
       .send({ slotId: "slot-11111111-1111-4111-8111-111111111111" });
 
     const intentId = createRes.body.intent.id;
@@ -34,8 +34,7 @@ describe("GET /api/v1/booking-intents/:id/cancel-preview", () => {
     const start = performance.now();
     const res = await request(app)
       .get(`/api/v1/booking-intents/${intentId}/cancel-preview`)
-      .set("x-chronopay-user-id", validUserId)
-      .set("x-chronopay-role", validRole);
+      .set("Authorization", createTestAuthorization(validUserId, validRole));
     const end = performance.now();
 
     expect(res.status).toBe(200);
@@ -53,20 +52,17 @@ describe("GET /api/v1/booking-intents/:id/cancel-preview", () => {
   it("should return 200 preview after the intent is cancelled", async () => {
     const createRes = await request(app)
       .post("/api/v1/booking-intents")
-      .set("x-chronopay-user-id", validUserId)
-      .set("x-chronopay-role", validRole)
+      .set("Authorization", createTestAuthorization(validUserId, validRole))
       .send({ slotId: "slot-22222222-2222-4222-8222-222222222222" });
     const intentId = createRes.body.intent.id;
 
     await request(app)
       .post(`/api/v1/booking-intents/${intentId}/cancel`)
-      .set("x-chronopay-user-id", validUserId)
-      .set("x-chronopay-role", validRole);
+      .set("Authorization", createTestAuthorization(validUserId, validRole));
 
     const res = await request(app)
       .get(`/api/v1/booking-intents/${intentId}/cancel-preview`)
-      .set("x-chronopay-user-id", validUserId)
-      .set("x-chronopay-role", validRole);
+      .set("Authorization", createTestAuthorization(validUserId, validRole));
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
