@@ -18,6 +18,7 @@ import {
 } from "../types/checkout.js";
 
 import { AmountUtils } from "../utils/amount.js";
+import { isAllowedCheckoutRedirect } from "../config/checkoutRedirects.js";
 
 /**
  * Validates email format
@@ -202,6 +203,18 @@ export function validateCreateCheckoutSession() {
           400,
           { field: "metadata" },
         );
+      }
+
+      for (const field of ["successUrl", "cancelUrl"] as const) {
+        const value: unknown = req.body[field];
+        if (value !== undefined && !isAllowedCheckoutRedirect(value)) {
+          throw new CheckoutError(
+            CheckoutErrorCode.INVALID_REDIRECT_URL,
+            "Redirect URL must use an allowed host and scheme and be at most 2048 characters",
+            400,
+            { field },
+          );
+        }
       }
 
       next();
