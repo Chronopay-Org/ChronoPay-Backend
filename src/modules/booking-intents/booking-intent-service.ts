@@ -6,7 +6,6 @@ import type {
   BookingIntentRepository,
   BookingIntentStatus,
   BookingType,
-  PricingSnapshot,
   CancellationPolicySnapshot,
 } from "./booking-intent-repository.js";
 import {
@@ -20,7 +19,8 @@ import { withSpan } from "../../tracing/hooks.js";
 import { AppError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { sanitizeNote } from "../../utils/redact.js";
-import { resolvePrice, type StrategyId } from "../../services/pricingStrategy.js";
+import type { StrategyId } from "../../services/pricingStrategy.js";
+import { resolvePricingSnapshot } from "./pricing-snapshot.js";
 import {
   CancellationPolicyService,
   RefundBreakdown,
@@ -204,42 +204,16 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
 
-    let pricingSnapshot: PricingSnapshot | undefined;
-    if (slot.pricingStrategy) {
-      const ps = slot.pricingStrategy;
-      const activeBookings = this.bookingIntentRepository
-        .listAll()
-        .filter(
-          (i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"),
-        ).length;
-      const capacity = ps.capacity ?? 1;
-      const currentMs = this.nowMs();
-
-      const result = resolvePrice(ps.strategyId, {
-        basePrice: ps.basePrice,
-        slotStartMs: slot.startTime,
-        nowMs: currentMs,
-        activeBookings,
-        capacity,
-        config: ps.config,
-      });
-
-      pricingSnapshot = {
-        strategyId: result.strategyId,
-        resolvedPrice: result.price,
-        basePrice: ps.basePrice,
-        slotStartMs: slot.startTime,
-        nowMs: currentMs,
-        activeBookings,
-        capacity,
-        config: ps.config,
-      };
-    }
+    const pricingSnapshot = slot.pricingStrategy
+      ? resolvePricingSnapshot(slot, await this.bookingIntentRepository.listAll(), this.nowMs())
+      : undefined;
 
     const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
     const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
-    let fxRateSnapshot: { rate: number; baseCurrency: string; targetCurrency: string; capturedAtMs: number; } | undefined;
+    let fxRateSnapshot:
+      | { rate: number; baseCurrency: string; targetCurrency: string; capturedAtMs: number }
+      | undefined;
     if (slot.currency && input.buyerCurrency && this.fxRateProvider) {
       try {
         const rate = await this.fxRateProvider.getRate(slot.currency, input.buyerCurrency);
@@ -312,6 +286,7 @@ export class BookingIntentService {
       now: this.now,
       assertBundleTransferable: (slot, act) =>
         this.bundleTransferabilityService.assertBundleTransferable(slot, act as AuthContext),
+      nowMs: this.nowMs,
       capturePolicySnapshots: (professionalId) => ({
         cancellationPolicySnapshot: this.captureCancellationPolicySnapshot(),
         holdFeePolicySnapshot: this.captureHoldFeePolicySnapshot(professionalId),
@@ -321,6 +296,8 @@ export class BookingIntentService {
     try {
       const report = await engine.createRecurringBookings(input.rrule, actor as never, {
         note: input.note,
+        bookingType: input.bookingType,
+        holdDeadlineMs: input.holdDeadlineMs,
       });
       return report;
     } catch (err) {
@@ -415,7 +392,10 @@ export class BookingIntentService {
    * Applies the same ownership rule as cancelIntent: only the intent owner or
    * an admin may read it.
    */
-  getHoldStatus(intentId: string, actor: AuthContext): {
+  getHoldStatus(
+    intentId: string,
+    actor: AuthContext,
+  ): {
     intentId: string;
     bookingType: BookingIntentRecord["bookingType"];
     status: BookingIntentRecord["status"];
@@ -670,8 +650,14 @@ export function parseCreateBookingIntentBody(
 
   let parsedBuyerCurrency: import("../../utils/amount.js").SupportedCurrencies | undefined;
   if (buyerCurrency !== undefined) {
-    if (typeof buyerCurrency !== "string" || !["USD", "EUR", "GBP", "XLM"].includes(buyerCurrency)) {
-      throw new BookingIntentError(400, "Invalid buyerCurrency. Must be one of USD, EUR, GBP, XLM.");
+    if (
+      typeof buyerCurrency !== "string" ||
+      !["USD", "EUR", "GBP", "XLM"].includes(buyerCurrency)
+    ) {
+      throw new BookingIntentError(
+        400,
+        "Invalid buyerCurrency. Must be one of USD, EUR, GBP, XLM.",
+      );
     }
     parsedBuyerCurrency = buyerCurrency as import("../../utils/amount.js").SupportedCurrencies;
   }
@@ -702,16 +688,17 @@ export function parseCreateBookingIntentBody(
     // Assert error for ambiguous inputs without explicit offset. Line-based
     // parsing is linear (avoids a backtracking regex on attacker-controlled
     // rrule text).
-    const dtstartLine = normalizedRRule
-      .split(/\r?\n/)
-      .find((line) => line.startsWith("DTSTART"));
+    const dtstartLine = normalizedRRule.split(/\r?\n/).find((line) => line.startsWith("DTSTART"));
     if (dtstartLine) {
       const valueStart = dtstartLine.indexOf(":");
       const dtstartVal = valueStart >= 0 ? dtstartLine.slice(valueStart + 1) : "";
       const hasZ = dtstartVal.endsWith("Z");
       const hasTzid = normalizedRRule.includes("TZID=");
       if (!hasZ && !hasTzid) {
-        throw new BookingIntentError(400, "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)");
+        throw new BookingIntentError(
+          400,
+          "Ambiguous DTSTART: missing explicit timezone offset (Z or TZID)",
+        );
       }
     }
 
