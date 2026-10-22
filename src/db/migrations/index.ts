@@ -42,16 +42,7 @@ import { migration as migration017 } from "./018_add_partner_token_quotas.js";
 import { migration as migration019 } from "./019_add_active_booking_intent_unique_idx.js";
 import { migration as migration020 } from "./020_create_escrow_holdings_table.js";
 import { migration as migration021 } from "./021_create_mfa_enrollments_table.js";
-import { migration as migration027 } from "./013_create_cancellation_reversal_ledger.js";
-import { migration as migration028 } from "./016_create_holiday_calendars.js";
-import { migration as migration029 } from "./017_add_residency_waivers_table.js";
-import { migration as migration030 } from "./018_create_dispute_mediation_transcripts.js";
-import { migration as migration031 } from "./019_create_dsr_sla_table.js";
-import { migration as migration032 } from "./020_create_gdpr_erasure_events.js";
-import { migration as migration033 } from "./020_create_secondary_listings_table.js";
-import { migration as migration034 } from "./021_add_multi_currency_pricing.js";
-import { migration as migration035 } from "./021a_create_subscription_products.js";
-import { migration as migration036 } from "./021b_create_subscriptions.js";
+import { migration as migration022 } from "./022_add_outbox_claim_lease.js";
 
 export const migrations: Migration[] = [
   migration001,
@@ -80,16 +71,7 @@ export const migrations: Migration[] = [
   migration019,
   migration020,
   migration021,
-  migration027,
-  migration028,
-  migration029,
-  migration030,
-  migration031,
-  migration032,
-  migration033,
-  migration034,
-  migration035,
-  migration036,
+  migration022,
 ];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────
