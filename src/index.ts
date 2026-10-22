@@ -3,8 +3,22 @@ import { createApp } from "./app.js";
 import { getFraudDriftDetector } from "./services/fraudDriftDetector.js";
 import { escrowMigrationState } from "./services/escrowMigrationState.js";
 import { logger } from "./utils/logger.js";
+import { ApplicationLifecycle, registerShutdownSignals } from "./lifecycle.js";
+import { closePool } from "./db/connection.js";
+import { closePool as closeLegacyPool } from "./db/pool.js";
+import { closeRedisClient } from "./cache/redisClient.js";
+import { stopScheduler } from "./scheduler/reminderScheduler.js";
 
 const config = loadEnvConfig();
+const lifecycle = new ApplicationLifecycle(
+  [
+    { name: "database", close: closePool },
+    { name: "legacy-database", close: closeLegacyPool },
+    { name: "redis", close: closeRedisClient },
+  ],
+  Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 30_000),
+);
+lifecycle.registerStop("reminders", stopScheduler);
 
 // Validate pinned escrow contract hash on startup
 const pinnedHash = escrowMigrationState.getPinnedHash();
@@ -17,8 +31,10 @@ if (pinnedHash) {
 }
 
 const app = createApp({
+  requestTracker: lifecycle.trackRequests,
   enableDocs: true,
   enableTestRoutes: config.nodeEnv !== "production",
+  apiKey: process.env.CHRONOPAY_API_KEY,
 });
 
 // Optional fraud score drift detector. Operators opt in via env so unit tests
@@ -27,9 +43,9 @@ const app = createApp({
 // (default 5m) and emits structured `FRAUD_DRIFT_ALARM` log lines on breach.
 // See docs/fraud-drift.md for thresholds and runbook.
 if (process.env.FRAUD_DRIFT_ENABLED === "true") {
-  getFraudDriftDetector().startDetector(
-    Number(process.env.FRAUD_DRIFT_INTERVAL_MS) || undefined,
-  );
+  const detector = getFraudDriftDetector();
+  const timer = detector.startDetector(Number(process.env.FRAUD_DRIFT_INTERVAL_MS) || undefined);
+  lifecycle.registerStop("fraud-drift", () => detector.stopDetector(timer));
 }
 
 // ─── Dispute Deadline Scheduler ──────────────────────────────────────────────
@@ -43,26 +59,20 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
     return;
   }
 
-  const { startDisputeDeadlineScheduler } = await import(
-    "./scheduler/disputeDeadlineScheduler.js"
-  );
+  const { startDisputeDeadlineScheduler, stopDisputeDeadlineScheduler } =
+    await import("./scheduler/disputeDeadlineScheduler.js");
 
   // Dynamically import admin routes to get the disputes map.
   const { getDisputes } = await import("./routes/admin.js");
 
-  startDisputeDeadlineScheduler(
-    getDisputes,
-    {
-      pollIntervalMs:
-        Number(process.env.DISPUTE_DEADLINE_INTERVAL_MS) || undefined,
-      inactivityTimeoutMs:
-        Number(process.env.DISPUTE_INACTIVITY_TIMEOUT_MS) || undefined,
-      seniorReviewTimeoutMs:
-        Number(process.env.DISPUTE_SENIOR_REVIEW_TIMEOUT_MS) || undefined,
-      autoResolveWindowMs:
-        Number(process.env.DISPUTE_AUTO_RESOLVE_WINDOW_MS) || undefined,
-    },
-  );
+  if (lifecycle.isShuttingDown) return;
+  lifecycle.registerStop("dispute-deadline", stopDisputeDeadlineScheduler);
+  startDisputeDeadlineScheduler(getDisputes, {
+    pollIntervalMs: Number(process.env.DISPUTE_DEADLINE_INTERVAL_MS) || undefined,
+    inactivityTimeoutMs: Number(process.env.DISPUTE_INACTIVITY_TIMEOUT_MS) || undefined,
+    seniorReviewTimeoutMs: Number(process.env.DISPUTE_SENIOR_REVIEW_TIMEOUT_MS) || undefined,
+    autoResolveWindowMs: Number(process.env.DISPUTE_AUTO_RESOLVE_WINDOW_MS) || undefined,
+  });
 })();
 
 // ─── Feature-Flag Rollout Scheduler (#570) ──────────────────────────────────
@@ -75,12 +85,13 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
     return;
   }
 
-  const { createFlagRolloutScheduler } = await import(
-    "./scheduler/flagRolloutScheduler.js"
-  );
-  createFlagRolloutScheduler({
+  const { createFlagRolloutScheduler } = await import("./scheduler/flagRolloutScheduler.js");
+  if (lifecycle.isShuttingDown) return;
+  const scheduler = createFlagRolloutScheduler({
     runIntervalMs: Number(process.env.FLAG_ROLLOUT_INTERVAL_MS) || undefined,
-  }).start();
+  });
+  lifecycle.registerStop("flag-rollout", () => scheduler.stop());
+  scheduler.start();
 })();
 
 // ─── Outbox Relay Worker ─────────────────────────────────────────────────────
@@ -90,7 +101,6 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
 // ─── Subscription Slot Generator Worker ────────────────────────────────────
 // Idempotent background worker that auto-mints recurring slots for active
 // subscriptions. Set SUBSCRIPTION_SLOT_GENERATOR_DISABLED=true to skip.
-const _shutdownHooks: Array<() => void> = [];
 (async () => {
   if (process.env.SUBSCRIPTION_SLOT_GENERATOR_DISABLED === "true") {
     logger.info("subscription-slot-generator disabled via SUBSCRIPTION_SLOT_GENERATOR_DISABLED");
@@ -100,33 +110,16 @@ const _shutdownHooks: Array<() => void> = [];
   const { createSubscriptionSlotGenerator } = await import(
     "./scheduler/subscriptionSlotGenerator.js"
   );
-  const { SubscriptionService } = await import("./services/subscriptionService.js");
-
-  // In production, use SQL-backed repositories; here we use in-memory for the
-  // standalone worker. The app.ts routes use their own repository instances.
-  const { InMemorySubscriptionProductRepository } = await import(
-    "./modules/subscriptions/subscription-product-repository.js"
+  const { subscriptionService: service } = await import(
+    "./services/subscriptionContainer.js"
   );
-  const { InMemorySubscriptionRepository } = await import(
-    "./modules/subscriptions/subscription-repository.js"
-  );
-  const { InMemorySlotRepository } = await import(
-    "./modules/slots/slot-repository.js"
-  );
-
-  const productRepo = new InMemorySubscriptionProductRepository();
-  const subscriptionRepo = new InMemorySubscriptionRepository();
-  const slotRepo = new InMemorySlotRepository();
-  const service = new SubscriptionService(productRepo, subscriptionRepo, slotRepo);
-
-  const controller = new AbortController();
-  _shutdownHooks.push(() => controller.abort());
 
   const generator = createSubscriptionSlotGenerator(service, {
     intervalMs: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_INTERVAL_MS) || undefined,
     batchSize: Number(process.env.SUBSCRIPTION_SLOT_GENERATOR_BATCH_SIZE) || undefined,
   });
-
+  if (lifecycle.isShuttingDown) return;
+  lifecycle.registerStop("subscription-generator", () => generator.stop());
   generator.start();
   logger.info("subscription-slot-generator worker started");
 })();
@@ -137,17 +130,21 @@ const _shutdownHooks: Array<() => void> = [];
     return;
   }
 
-  const { runOutboxRelayWorker, SqlOutboxStore } = await import(
-    "./services/outboxRelay.js"
-  );
+  const { runOutboxRelayWorker, SqlOutboxStore } = await import("./services/outboxRelay.js");
   const { getPool } = await import("./db/connection.js");
 
+  if (lifecycle.isShuttingDown) return;
   const pool = getPool();
   const store = new SqlOutboxStore(pool);
 
   // Default publish callback: log the event (production deployments replace
   // this with a real publisher, e.g. Kafka producer or webhook dispatcher).
-  const publish = async (event: { id: string; event_type: string; aggregate_id: string; payload: unknown }) => {
+  const publish = async (event: {
+    id: string;
+    event_type: string;
+    aggregate_id: string;
+    payload: unknown;
+  }) => {
     logger.info(
       { eventId: event.id, eventType: event.event_type, aggregateId: event.aggregate_id },
       "outbox relay: publishing event",
@@ -155,12 +152,13 @@ const _shutdownHooks: Array<() => void> = [];
   };
 
   const controller = new AbortController();
-  _shutdownHooks.push(() => controller.abort());
-
-  runOutboxRelayWorker(controller.signal, store, publish).catch((err: Error) => {
+  const worker = runOutboxRelayWorker(controller.signal, store, publish).catch((err: Error) => {
     logger.error({ err }, "outbox relay worker exited unexpectedly");
   });
-
+  lifecycle.registerStop("outbox-relay", async () => {
+    controller.abort();
+    await worker;
+  });
   logger.info("outbox-relay worker started");
 })();
 
@@ -182,6 +180,7 @@ const _shutdownHooks: Array<() => void> = [];
   const { HorizonContractClient } = await import("./clients/horizon-contract-client.js");
   const { startSettlementReconciler } = await import("./services/settlementReconciler.js");
 
+  if (lifecycle.isShuttingDown) return;
   const contractService = new ContractService();
   const horizonClient = new HorizonContractClient(
     config.horizonUrls,
@@ -194,7 +193,7 @@ const _shutdownHooks: Array<() => void> = [];
     pollIntervalMs: Number(process.env.SETTLEMENT_RECONCILER_POLL_INTERVAL_MS) || undefined,
     minConfirmations: Number(process.env.MIN_LEDGER_CONFIRMATIONS) || undefined,
   });
-  _shutdownHooks.push(() => reconciler.stop());
+  lifecycle.registerStop("settlement-reconciler", () => reconciler.stop());
 
   logger.info("settlement-reconciler started");
 })();
@@ -213,57 +212,19 @@ const server = isTestEnv
       logger.info({ port: PORT }, `ChronoPay API listening on http://localhost:${PORT}`);
     });
 
-let _serverInstance: any = server;
-let _isShuttingDown = false;
-let _activeRequests = 0;
+lifecycle.setServer(server);
 
-/** Express middleware that keeps the in-flight request counter current. */
-export function trackRequests(req: any, res: any, next: () => void): void {
-  _activeRequests += 1;
-  let settled = false;
-  const done = (): void => {
-    if (settled) return;
-    settled = true;
-    _activeRequests -= 1;
-  };
-  res.on("finish", done);
-  res.on("close", done);
-  next();
-}
+export const trackRequests = lifecycle.trackRequests;
+export const setServer = (server?: Parameters<ApplicationLifecycle["setServer"]>[0]): void =>
+  lifecycle.setServer(server);
+export const resetShutdownFlag = (): void => lifecycle.resetShutdownFlag();
+export const gracefulShutdown = (): Promise<void> => lifecycle.shutdown();
+export const getActiveRequestCount = (): number => lifecycle.getActiveRequestCount();
 
-app.use(trackRequests);
-
-export function setServer(srv: any): void {
-  _serverInstance = srv;
-}
-
-export function resetShutdownFlag(): void {
-  _isShuttingDown = false;
-}
-
-export async function gracefulShutdown(): Promise<void> {
-  if (_isShuttingDown) return;
-  _isShuttingDown = true;
-
-  // Abort all background workers first
-  for (const hook of _shutdownHooks) {
-    try { hook(); } catch { /* ignore */ }
-  }
-
-  if (_serverInstance) {
-    await new Promise<void>((resolve) => {
-      try {
-        _serverInstance.close(() => resolve());
-      } catch {
-        resolve();
-      }
-    });
-  }
-}
-
-/** Number of requests currently being served and not yet finished. */
-export function getActiveRequestCount(): number {
-  return _activeRequests;
+if (!isTestEnv) {
+  registerShutdownSignals(gracefulShutdown, {
+    timeoutMs: Math.min(lifecycle.timeoutMs + 1000, 2_147_483_647),
+  });
 }
 
 export { app };

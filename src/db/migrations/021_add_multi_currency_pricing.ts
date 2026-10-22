@@ -2,7 +2,7 @@ import { PoolClient } from "pg";
 import { Migration } from "../migrationRunner.js";
 
 export const migration: Migration = {
-  id: "021",
+  id: "034",
   name: "add_multi_currency_pricing",
 
   async up(client: PoolClient): Promise<void> {

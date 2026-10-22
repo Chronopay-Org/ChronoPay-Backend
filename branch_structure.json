@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "fix/issue-1326-fix-idempotency-5xx-responses-are-cached-for",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "fix/issue-1326-fix-idempotency-5xx-responses-are-cached-for": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "fix/issue-1326-fix-idempotency-5xx-responses-are-cached-for",
+    "origin"
+  ]
+}

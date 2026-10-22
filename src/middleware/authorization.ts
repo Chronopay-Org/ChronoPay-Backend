@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import { ConfigurationError, ForbiddenError, UnauthorizedError } from "../errors/AppError.js";
 import { sendErrorResponse } from "../errors/sendError.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { constantTimeEquals } from "../utils/constantTimeEquals.js";
 
 const ADMIN_TOKEN_HEADER = "x-chronopay-admin-token";
 
@@ -53,7 +54,7 @@ export function requireAdminToken(req: Request, res: Response, next: NextFunctio
     );
   }
 
-  if (providedToken !== configuredToken) {
+  if (!constantTimeEquals(providedToken, configuredToken)) {
     emitAdminTokenDeniedAudit(req, "AUTHZ_FORBIDDEN", 403);
     return sendErrorResponse(res, new ForbiddenError("Invalid admin token"), req);
   }

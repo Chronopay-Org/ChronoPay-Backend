@@ -1,5 +1,6 @@
 import { jest } from "@jest/globals";
 import request from "supertest";
+import { InMemorySlotRepository } from "../repositories/slot.repository.js";
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -10,6 +11,14 @@ jest.mock("../middleware/rateLimiter.js", () => ({
 jest.mock("../middleware/featureFlags.js", () => ({
   featureFlagContextMiddleware: (_req: unknown, _res: unknown, next: () => void) => next(),
   initializeFeatureFlagsFromEnv: () => {},
+}));
+
+jest.mock("../middleware/auth.js", () => ({
+  authenticateToken: (req: any, _res: any, next: () => void) => {
+    const userId = req.headers["x-test-user-id"] ?? "user-1";
+    req.user = { id: userId, userId, role: "user" };
+    next();
+  },
 }));
 
 jest.mock("../routes/booking-intents.js", () => ({
@@ -30,6 +39,13 @@ describe("createApp", () => {
   beforeEach(() => {
     jest.resetModules();
   });
+
+  const createSlotApp = async () => {
+    const { createApp } = await import("../app.js");
+    const slotRepository = new InMemorySlotRepository();
+    const app = createApp({ enableDocs: false, slotRepository });
+    return app;
+  };
 
   describe("enableDocs: false", () => {
     it("does not mount /api-docs when enableDocs is false", async () => {
@@ -262,6 +278,24 @@ describe("createApp", () => {
     });
   });
 
+  it("rejects invalid CORS configuration during app creation", async () => {
+    const originalAllowedOrigins = process.env.CORS_ALLOWED_ORIGINS;
+    process.env.CORS_ALLOWED_ORIGINS = "*";
+
+    try {
+      const { createApp } = await import("../app.js");
+      expect(() => createApp()).toThrow(
+        "Invalid origin pattern: wildcard-only patterns are not allowed for security",
+      );
+    } finally {
+      if (originalAllowedOrigins === undefined) {
+        delete process.env.CORS_ALLOWED_ORIGINS;
+      } else {
+        process.env.CORS_ALLOWED_ORIGINS = originalAllowedOrigins;
+      }
+    }
+  });
+
   describe("notFoundHandler and 404 envelope consistency", () => {
     it("returns 404 with JSON envelope for unknown paths", async () => {
       const { notFoundHandler } = await import("../middleware/errorHandling.js");
@@ -366,6 +400,100 @@ describe("createApp", () => {
       expect(res2.body).toHaveProperty("code");
       expect(res2.body).toHaveProperty("error");
       expect(res2.body).toHaveProperty("timestamp");
+    });
+  });
+
+  describe("slots router wiring", () => {
+    it("persists a created slot and returns it on a subsequent GET", async () => {
+      const app = await createSlotApp();
+
+      const createRes = await request(app)
+        .post("/api/v1/slots")
+        .set("Content-Type", "application/json")
+        .set("x-test-user-id", "user-1")
+        .send({
+          professional: "alice",
+          startTime: "2030-01-01T10:00:00.000Z",
+          endTime: "2030-01-01T11:00:00.000Z",
+        });
+
+      expect(createRes.status).toBe(201);
+      expect(createRes.body.id).toBeDefined();
+      expect(createRes.body.id).not.toBe("slot-new");
+
+      const listRes = await request(app)
+        .get("/api/v1/slots")
+        .set("x-test-user-id", "user-1");
+
+      expect(listRes.status).toBe(200);
+      const items = listRes.body.data ?? listRes.body;
+      const ids = (Array.isArray(items) ? items : []).map((s: any) => s.id);
+      expect(ids).toContain(createRes.body.id);
+    });
+
+    it("returns the second slot for ?page=2&limit=1 when two slots exist", async () => {
+      const app = await createSlotApp();
+
+      const first = await request(app)
+        .post("/api/v1/slots")
+        .set("Content-Type", "application/json")
+        .set("x-test-user-id", "user-1")
+        .send({
+          professional: "alice",
+          startTime: "2030-01-01T10:00:00.000Z",
+          endTime: "2030-01-01T11:00:00.000Z",
+        });
+      const second = await request(app)
+        .post("/api/v1/slots")
+        .set("Content-Type", "application/json")
+        .set("x-test-user-id", "user-1")
+        .send({
+          professional: "alice",
+          startTime: "2030-01-02T10:00:00.000Z",
+          endTime: "2030-01-02T11:00:00.000Z",
+        });
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(201);
+
+      const page2 = await request(app)
+        .get("/api/v1/slots?page=2&limit=1")
+        .set("x-test-user-id", "user-1");
+
+      expect(page2.status).toBe(200);
+      const items = page2.body.data ?? page2.body;
+      expect(Array.isArray(items)).toBe(true);
+      expect(items).toHaveLength(1);
+      expect(items[0].id).toBe(second.body.id);
+    });
+
+    it("rejects DELETE of a slot by a non-owner via authorizeSlotDelete", async () => {
+      const app = await createSlotApp();
+
+      const created = await request(app)
+        .post("/api/v1/slots")
+        .set("Content-Type", "application/json")
+        .set("x-test-user-id", "owner-1")
+        .send({
+          professional: "alice",
+          startTime: "2030-01-01T10:00:00.000Z",
+          endTime: "2030-01-01T11:00:00.000Z",
+        });
+
+      expect(created.status).toBe(201);
+
+      const deleteRes = await request(app)
+        .delete(`/api/v1/slots/${created.body.id}`)
+        .set("x-test-user-id", "intruder-1");
+
+      expect(deleteRes.status).toBe(403);
+
+      const listRes = await request(app)
+        .get("/api/v1/slots")
+        .set("x-test-user-id", "owner-1");
+      const items = listRes.body.data ?? listRes.body;
+      const ids = (Array.isArray(items) ? items : []).map((s: any) => s.id);
+      expect(ids).toContain(created.body.id);
     });
   });
 });
