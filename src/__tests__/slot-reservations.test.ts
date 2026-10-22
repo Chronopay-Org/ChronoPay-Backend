@@ -19,6 +19,7 @@ import request from "supertest";
 import express from "express";
 import slotsRouter, { resetSlotStore } from "../routes/slots.js";
 import { slotService } from "../services/slotService.js";
+import { createTestAuthorization } from "../../test/auth.js";
 
 // ─── App setup ────────────────────────────────────────────────────────────────
 
@@ -50,7 +51,7 @@ function addHold(slotId: string, buyerId = "buyer-1", expiresAt = FUTURE) {
 }
 
 function authHeaders(userId: string, role = "professional") {
-  return { "x-chronopay-user-id": userId, "x-chronopay-role": role };
+  return { Authorization: createTestAuthorization(userId, role) };
 }
 
 // ─── Setup ────────────────────────────────────────────────────────────────────

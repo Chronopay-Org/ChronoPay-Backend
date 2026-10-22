@@ -262,6 +262,24 @@ describe("createApp", () => {
     });
   });
 
+  it("rejects invalid CORS configuration during app creation", async () => {
+    const originalAllowedOrigins = process.env.CORS_ALLOWED_ORIGINS;
+    process.env.CORS_ALLOWED_ORIGINS = "*";
+
+    try {
+      const { createApp } = await import("../app.js");
+      expect(() => createApp()).toThrow(
+        "Invalid origin pattern: wildcard-only patterns are not allowed for security",
+      );
+    } finally {
+      if (originalAllowedOrigins === undefined) {
+        delete process.env.CORS_ALLOWED_ORIGINS;
+      } else {
+        process.env.CORS_ALLOWED_ORIGINS = originalAllowedOrigins;
+      }
+    }
+  });
+
   describe("notFoundHandler and 404 envelope consistency", () => {
     it("returns 404 with JSON envelope for unknown paths", async () => {
       const { notFoundHandler } = await import("../middleware/errorHandling.js");

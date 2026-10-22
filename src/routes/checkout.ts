@@ -38,7 +38,6 @@ checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
  *       tracking and user association.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - [] # Optional authentication
  *     requestBody:
@@ -161,7 +160,6 @@ checkoutRouter.post(
  *       session details. No authentication required for basic session lookup.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - [] # Optional authentication
  *     parameters:
@@ -245,7 +243,6 @@ checkoutRouter.get(
  *       authentication to prevent unauthorized completion attempts.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - adminTokenAuth: []
  *     parameters:
@@ -347,7 +344,6 @@ checkoutRouter.post(
  *       to COMPLETED or FAILED based on payment result.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *     parameters:
  *       - in: path
@@ -436,7 +432,6 @@ checkoutRouter.post(
  *       to prevent unauthorized status changes.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - adminTokenAuth: []
  *     parameters:
@@ -537,7 +532,6 @@ checkoutRouter.post(
  *       authenticated admin users.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - adminTokenAuth: []
  *     parameters:

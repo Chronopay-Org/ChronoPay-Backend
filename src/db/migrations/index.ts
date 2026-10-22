@@ -42,6 +42,7 @@ import { migration as migration017 } from "./018_add_partner_token_quotas.js";
 import { migration as migration019 } from "./019_add_active_booking_intent_unique_idx.js";
 import { migration as migration020 } from "./020_create_escrow_holdings_table.js";
 import { migration as migration021 } from "./021_create_mfa_enrollments_table.js";
+import { migration as migration027 } from "./027_add_mfa_failed_attempt_lockout.js";
 
 export const migrations: Migration[] = [
   migration001,
@@ -70,6 +71,7 @@ export const migrations: Migration[] = [
   migration019,
   migration020,
   migration021,
+  migration027,
 ];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────
