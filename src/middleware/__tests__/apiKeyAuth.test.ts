@@ -1,5 +1,8 @@
 // @ts-nocheck
-import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { jest, describe, it, expect, beforeEach } from "@jest/globals";
+import * as crypto from "node:crypto";
+import express from "express";
+import request from "supertest";
 import { Request, Response, NextFunction } from "express";
 import fs from "node:fs";
 import { 
@@ -85,10 +88,37 @@ describe("apiKeyAuth Middleware", () => {
   });
 
   describe("requireApiKey", () => {
-    it("skips auth if expectedApiKey is not provided", async () => {
+    it("keeps the explicit opt-out in test mode when expectedApiKey is not provided", async () => {
+      const previousNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = "test";
       const middleware = requireApiKey();
       await middleware(req as Request, res as Response, next);
       expect(next).toHaveBeenCalledWith();
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    });
+
+    it("returns 503 on a protected route when the key is not configured in production", async () => {
+      const previousNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = "production";
+      const app = express();
+      app.get("/protected", requireApiKey(), (_req, response) => response.sendStatus(200));
+
+      await request(app).get("/protected").expect(503);
+
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    });
+
+    it("uses crypto.timingSafeEqual when checking an API key", async () => {
+      (req.header as any).mockReturnValue("expected-key");
+      jest.spyOn(partnerTierService, "fetchPartnerTier").mockResolvedValue("premium");
+      const timingSafeEqualSpy = jest.spyOn(crypto, "timingSafeEqual");
+
+      await requireApiKey("expected-key")(req as Request, res as Response, next);
+
+      expect(timingSafeEqualSpy).toHaveBeenCalledTimes(1);
+      timingSafeEqualSpy.mockRestore();
     });
 
     it("fails if API key is missing", async () => {
