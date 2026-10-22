@@ -40,32 +40,33 @@ export interface RequireFreshMfaOptions {
   nowMs?: number;
 }
 
-/** Result of {@link verifyRequestMfaChallenge}: ok, or the response to send. */
-export type MfaChallengeCheck =
-  | { ok: true }
-  | { ok: false; status: number; error: string };
-
 /**
- * Verifies the `x-chronopay-mfa` header of `req` against the MFA challenge
- * signer, bound to the authenticated actor. Shared by the {@link requireFreshMfa}
- * middleware and the anti-fraud step-up flow (issue #1345), which needs the
- * same verification without owning the response.
+ * Verifies the `x-chronopay-mfa` proof on `req` without owning the rest of the
+ * request lifecycle. Returns `true` when the proof is valid; on failure it
+ * writes the same status/body mapping as {@link requireFreshMfa} and returns
+ * `false` so the caller must not continue.
+ *
+ * Shared by the `requireFreshMfa` middleware and the anti-fraud wall's
+ * `x-fraud-challenge` retry path (both must apply identical MFA semantics).
  */
-export async function verifyRequestMfaChallenge(
+export async function assertFreshMfa(
   req: Request,
+  res: Response,
   options: RequireFreshMfaOptions = {},
-): Promise<MfaChallengeCheck> {
+): Promise<boolean> {
   const raw = req.headers["x-chronopay-mfa"];
   const header = Array.isArray(raw) ? raw[0] : raw;
   const token = typeof header === "string" ? header.trim() : "";
 
   if (token.length === 0) {
-    return { ok: false, status: 401, error: "Missing MFA challenge" };
+    res.status(401).json({ success: false, error: "Missing MFA challenge" });
+    return false;
   }
 
   const userId = req.auth?.userId;
   if (!userId) {
-    return { ok: false, status: 401, error: "Authentication required" };
+    res.status(401).json({ success: false, error: "Authentication required" });
+    return false;
   }
 
   try {
@@ -77,30 +78,36 @@ export async function verifyRequestMfaChallenge(
       freshnessMs: options.maxAgeMs,
       nowMs: options.nowMs,
     });
-    return { ok: true };
+    return true;
   } catch (error) {
     if (error instanceof MfaConfigurationError) {
-      return { ok: false, status: 500, error: "MFA is not configured" };
+      res.status(500).json({ success: false, error: "MFA is not configured" });
+    } else if (error instanceof MfaChallengeExpiredError) {
+      res.status(401).json({ success: false, error: "MFA challenge has expired; please verify again" });
+    } else if (error instanceof MfaChallengeInvalidError) {
+      res.status(403).json({ success: false, error: "Invalid MFA challenge" });
+    } else {
+      res.status(500).json({ success: false, error: "Failed to verify MFA challenge" });
     }
-    if (error instanceof MfaChallengeExpiredError) {
-      return {
-        ok: false,
-        status: 401,
-        error: "MFA challenge has expired; please verify again",
-      };
-    }
-    if (error instanceof MfaChallengeInvalidError) {
-      return { ok: false, status: 403, error: "Invalid MFA challenge" };
-    }
-    return { ok: false, status: 500, error: "Failed to verify MFA challenge" };
+    return false;
   }
 }
 
 export function requireFreshMfa(options: RequireFreshMfaOptions = {}) {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    const outcome = await verifyRequestMfaChallenge(req, options);
-    if (!outcome.ok) {
-      return res.status(outcome.status).json({ success: false, error: outcome.error });
+  // Async so callers that `await` the middleware observe `next()` (or the
+  // error response) before the returned promise settles — same contract as
+  // when this body lived directly inside the factory.
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (await assertFreshMfa(req, res, options)) {
+        next();
+      }
+    } catch {
+      // assertFreshMfa maps expected failures itself; this guard only keeps
+      // an unexpected throw from surfacing as an unhandled rejection.
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, error: "Failed to verify MFA challenge" });
+      }
     }
     next();
   };

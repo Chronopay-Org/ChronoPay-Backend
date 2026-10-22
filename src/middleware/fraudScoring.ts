@@ -7,16 +7,18 @@
  * validation, idempotency, rate-limiting and audit). It:
  *
  *   1. runs the {@link FraudScorer} against the request,
- *   2. attaches the scoring result to `req.fraudResult` for downstream
- *      consumers and observability,
+ *   2. attaches the scoring result to `req.fraudResult` (and the decision to
+ *      `req.fraudDecision`) for downstream consumers and observability,
  *   3. records the score into the fraud drift detector,
  *   4. emits a `fraud_score` audit event for *every* evaluated intent with the
  *      final HTTP status,
- *   5. defers borderline scores (threshold - 1) to the HITL review queue: the
- *      review item is created by the route handler once the intent exists, so
- *      it can carry the real intent id (issue #1345),
- *   6. steps up on high scores — challenge response in challenge mode, or a
- *      quarantine entry in quarantine mode — instead of silently dropping.
+ *   5. marks borderline scores (threshold - 1) for HITL review — the route
+ *      queues the item via {@link enqueueHitlReviewForIntent} once the real
+ *      intent id exists,
+ *   6. steps up on high scores — challenge response in challenge mode (token
+ *      persisted so a retry carrying `x-fraud-challenge` plus fresh MFA passes
+ *      exactly once), or a quarantine entry in quarantine mode — instead of
+ *      silently dropping.
  *
  * Challenge mode issues a one-time `challengeToken` (persisted in
  * {@link FraudChallengeStore}, bound to the actor and the request body). A
@@ -34,13 +36,19 @@ import type { NextFunction, Request, Response } from "express";
 import { FraudScorer, type FraudEvaluationResult } from "../services/fraudScorer.js";
 import { recordFraudScore } from "../metrics/fraudDriftMetrics.js";
 import { QuarantineStore } from "../services/quarantineStore.js";
-import { fraudReviewQueue } from "../services/fraudReviewQueue.js";
+import { fraudReviewQueue, type HitlReviewItem } from "../services/fraudReviewQueue.js";
+import {
+  hashFraudChallengeBody,
+  InMemoryFraudChallengeStore,
+  type FraudChallengeStore,
+} from "../services/fraudChallengeStore.js";
 import { defaultAuditLogger, type AuditLogger } from "../services/auditLogger.js";
 import {
   FraudReasonCode,
   getFraudReasonCode,
   getFraudMessage,
 } from "../services/fraudReasonCodes.js";
+import { assertFreshMfa } from "./requireFreshMfa.js";
 import { logger } from "../utils/logger.js";
 import {
   FraudChallengeStore,
@@ -58,6 +66,8 @@ declare global {
     interface Request {
       /** Anti-fraud evaluation result for the current request, when screened. */
       fraudResult?: FraudEvaluationResult;
+      /** Final anti-fraud decision, set once the wall has evaluated the request. */
+      fraudDecision?: FraudDecision;
       /**
        * Borderline (threshold - 1) evaluation awaiting a HITL review item.
        * Set by the anti-fraud wall; the route handler reports the created
@@ -83,17 +93,32 @@ export interface FraudScoringOptions {
   auditLogger?: AuditLogger;
   /** Store for quarantine entries; defaults to a fresh in-memory store. */
   quarantineStore?: QuarantineStore;
-  /** Store for challenge tokens; defaults to the process-wide store. */
+  /**
+   * Store for issued step-up challenge tokens. Defaults to an in-process
+   * store with TTL; inject a shared (e.g. Redis-backed) store when the wall
+   * runs across multiple processes.
+   */
   challengeStore?: FraudChallengeStore;
-  /** MFA options used to verify the step-up proof on a challenge retry. */
-  mfa?: RequireFreshMfaOptions;
 }
 
-type FraudDecision = "allowed" | "review" | "blocked";
+export type FraudDecision = "allowed" | "review" | "blocked";
 
+/**
+ * Pre-creation reference handed to the scorer (velocity bucketing, drift
+ * metrics). The scorer runs before the intent exists, so it can never see the
+ * real intent id — HITL items must not reuse this value (see
+ * {@link enqueueHitlReviewForIntent}).
+ */
 function deriveIntentReference(req: Request): string {
   const body = req.body as { slotId?: string; rrule?: string } | undefined;
   return body?.slotId ?? body?.rrule ?? "temp-intent-id";
+}
+
+/** Reads a (possibly repeated) request header, trimmed; "" when absent. */
+function readHeader(req: Request, name: string): string {
+  const raw = req.headers[name];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return typeof value === "string" ? value.trim() : "";
 }
 
 /**
@@ -148,41 +173,54 @@ export function antiFraudScoring(options: FraudScoringOptions = {}) {
   const scorer = options.scorer ?? new FraudScorer();
   const auditLogger = options.auditLogger ?? defaultAuditLogger;
   const quarantineStore = options.quarantineStore ?? new QuarantineStore();
-  const challengeStore = options.challengeStore ?? fraudChallengeStore;
+  const challengeStore = options.challengeStore ?? new InMemoryFraudChallengeStore();
 
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    // A blocked client may retry with the one-time challenge token it was
-    // issued plus a fresh MFA proof. Both are verified before the block is
-    // bypassed; the token is consumed so it can never be reused.
-    const challengeToken = readHeader(req, "x-fraud-challenge");
-    let challengeBypassed = false;
-    if (challengeToken.length > 0) {
-      const actorId = req.auth?.userId ?? "";
-      const bodyHash = hashRequestBody(req.rawParsedBody ?? req.body);
-      const rejection = challengeStore.check(challengeToken, actorId, bodyHash);
-      if (rejection) {
-        res.status(403).json({
-          success: false,
-          error: FRAUD_CHALLENGE_REJECTIONS[rejection],
-        });
-        return;
-      }
-
-      const mfa = await verifyRequestMfaChallenge(req, options.mfa ?? {});
-      if (!mfa.ok) {
-        // The token stays redeemable: only a solved challenge consumes it.
-        res.status(mfa.status).json({ success: false, error: mfa.error });
-        return;
-      }
-      if (!challengeStore.consume(challengeToken)) {
-        res.status(403).json({
-          success: false,
-          error: FRAUD_CHALLENGE_REJECTIONS.unknown,
-        });
-        return;
-      }
-      challengeBypassed = true;
+  /**
+   * Resolves a retry that presented `x-fraud-challenge` on a request the wall
+   * would otherwise block:
+   *
+   *   1. verify a fresh MFA proof (`x-chronopay-mfa`, same semantics as
+   *      `requireFreshMfa`) — done first so a presenter without MFA learns
+   *      nothing about token validity and cannot burn someone else's token;
+   *   2. consume the challenge token (single-use; actor- and body-bound);
+   *   3. let the request through exactly once.
+   *
+   * On any failure the response has already been written by step 1/2 and
+   * `next` is never called.
+   */
+  async function resolveChallengeRetry(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+    challengeToken: string,
+    actorId: string,
+    bodyHash: string,
+  ): Promise<void> {
+    const mfaSatisfied = await assertFreshMfa(req, res);
+    if (!mfaSatisfied) {
+      return;
     }
+
+    const verdict = challengeStore.consume(challengeToken, { actorId, bodyHash });
+    if (!verdict.ok) {
+      logger.warn(
+        { actorId, reason: verdict.reason, resource: req.originalUrl },
+        "Fraud challenge retry rejected",
+      );
+      res.status(403).json({
+        success: false,
+        error: "Fraud challenge is invalid or has expired.",
+        challengeRequired: true,
+      });
+      return;
+    }
+
+    logger.info(
+      { actorId, resource: req.originalUrl },
+      "Fraud challenge satisfied; allowing one retry past the anti-fraud wall",
+    );
+    next();
+  }
 
     const intentReference = deriveIntentReference(req);
 
@@ -221,6 +259,9 @@ export function antiFraudScoring(options: FraudScoringOptions = {}) {
         : borderline
           ? "review"
           : "allowed";
+    // Published on the request so the route can act on the decision (the HITL
+    // enqueue needs the created intent id, which does not exist yet here).
+    req.fraudDecision = decision;
 
     // Emit one auditable `fraud_score` event per evaluated intent with the
     // eventual HTTP status. Fire-and-forget: audit writer failures must never
@@ -267,12 +308,41 @@ export function antiFraudScoring(options: FraudScoringOptions = {}) {
       };
 
       if (scorer.getStepUpMode() === "challenge") {
-        // Persist the token so the retry can be verified (issue #1345). It is
-        // bound to this actor and this request body, and expires on a TTL.
-        const { token: issuedToken } = challengeStore.issue(
-          req.auth?.userId ?? "",
-          hashRequestBody(req.rawParsedBody ?? req.body),
-        );
+        const presentedChallenge = readHeader(req, "x-fraud-challenge");
+        if (presentedChallenge.length > 0) {
+          // The client is retrying a previously blocked request with the
+          // issued token plus fresh MFA proof. Only a validated, unconsumed
+          // token for this actor and this exact body passes the wall once.
+          void resolveChallengeRetry(
+            req,
+            res,
+            next,
+            presentedChallenge,
+            req.auth?.userId ?? "",
+            hashFraudChallengeBody(req.rawParsedBody ?? req.body ?? null),
+          ).catch((error) => {
+            logger.error(
+              { err: error, actorId: req.auth?.userId },
+              "Fraud challenge retry failed; failing closed",
+            );
+            if (!res.headersSent) {
+              res.status(500).json({
+                success: false,
+                error: "Booking intents are temporarily unavailable. Please retry.",
+              });
+            }
+          });
+          return;
+        }
+
+        // Issue a token so the legitimate user can complete step-up (MFA) and
+        // retry this exact request. Persisted: the 403 alone was previously a
+        // dead end because the token existed only in the response body.
+        const challengeToken = crypto.randomUUID();
+        challengeStore.issue(challengeToken, {
+          actorId: req.auth?.userId ?? "",
+          bodyHash: hashFraudChallengeBody(req.rawParsedBody ?? req.body ?? null),
+        });
         res.status(403).json({
           ...errorPayload,
           challengeRequired: true,
@@ -292,14 +362,27 @@ export function antiFraudScoring(options: FraudScoringOptions = {}) {
       return;
     }
 
-    // Borderline risk -> deferred HITL review. The intent is still created by
-    // the route, which reports the real intent id(s) back through
-    // `enqueuePendingFraudReviews` so the queued item is actionable (the
-    // middleware cannot know the id before creation).
-    if (borderline) {
-      req.fraudReview = { score: result.score, reasons: result.reasons };
-    }
-
+    // Borderline risk (decision "review"): the intent is still created by the
+    // route. The HITL item is queued there — via
+    // enqueueHitlReviewForIntent(req, intent.id) — because only the route
+    // knows the real intent id; enqueueing here would store the placeholder
+    // "temp-intent-id" reviewers cannot act on.
     next();
   };
+}
+
+/**
+ * Queues the current request's borderline score for HITL review against the
+ * intent id that was actually created. Call from the route handler after the
+ * intent has been created (per created intent when a request yields several).
+ * No-op unless the anti-fraud wall decided "review" for this request.
+ */
+export function enqueueHitlReviewForIntent(
+  req: Request,
+  intentId: string,
+): HitlReviewItem | undefined {
+  if (req.fraudDecision !== "review" || !req.fraudResult || !intentId) {
+    return undefined;
+  }
+  return fraudReviewQueue.enqueue(intentId, req.fraudResult.score, req.fraudResult.reasons);
 }

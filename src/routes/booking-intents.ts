@@ -21,7 +21,7 @@ import { validateBody } from "../middleware/validation.js";
 import {
   antiFraudScoring,
   captureRequestBody,
-  enqueuePendingFraudReviews,
+  enqueueHitlReviewForIntent,
 } from "../middleware/fraudScoring.js";
 import {
   CreateBookingIntentBodySchema,
@@ -119,11 +119,12 @@ export function createBookingIntentsRouter(
             },
             req.auth!,
           );
-          // Bind any deferred borderline review to the real intent ids.
-          enqueuePendingFraudReviews(
-            req,
-            report.successes.map((created) => created.id),
-          );
+          // Borderline fraud scores are queued for HITL here — the middleware
+          // cannot know the ids before creation (issue #1345). One review item
+          // per created intent so reviewers can open the real intent.
+          for (const created of report.successes) {
+            enqueueHitlReviewForIntent(req, created.id);
+          }
           res.status(201).json({
             success: true,
             report,
@@ -138,7 +139,7 @@ export function createBookingIntentsRouter(
             },
             req.auth!,
           );
-          enqueuePendingFraudReviews(req, [intent.id]);
+          enqueueHitlReviewForIntent(req, intent.id);
           res.status(201).json({
             success: true,
             intent,
