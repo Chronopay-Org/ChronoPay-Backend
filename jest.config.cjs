@@ -14,6 +14,7 @@ if (!process.env.DATABASE_URL) {
 if (!process.env.NODE_ENV) {
   process.env.NODE_ENV = "test";
 }
+process.env.JWT_SECRET = "chronopay-test-jwt-secret-at-least-32-characters";
 
 /** @type {import('jest').Config} */
 module.exports = {

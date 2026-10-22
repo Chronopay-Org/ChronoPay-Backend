@@ -13,7 +13,7 @@
  */
 
 import { jest, describe, it, expect, beforeAll, afterEach } from "@jest/globals";
-import type { QueryResult, Pool } from "pg";
+import type { PoolClient, QueryResult, Pool } from "pg";
 
 type ClosePool = () => Promise<void>;
 type InitDB = () => Promise<void>;
@@ -155,12 +155,19 @@ describe("query()", () => {
   });
 
   it("translates a 57014 cancellation into a budget-exceeded error and records the breach", async () => {
-    const q = poolQuery();
+    const client = {
+      query: jest.fn(),
+      release: jest.fn(),
+    } as unknown as PoolClient;
+    const connect = jest.spyOn(pool, "connect").mockResolvedValue(client);
+    const q = jest.spyOn(client, "query");
+    q.mockResolvedValueOnce(ok()); // BEGIN
     q.mockResolvedValueOnce(ok()); // SET LOCAL statement_timeout
     const cancelled = Object.assign(new Error("canceling statement due to statement timeout"), {
       code: "57014",
     });
     q.mockRejectedValueOnce(cancelled);
+    q.mockResolvedValueOnce(ok()); // ROLLBACK
 
     await runWithQueryBudget(
       { budgetMs: 50, totalSqlTimeMs: 0, route: "/api/v1/checkout", breached: false },
@@ -170,13 +177,23 @@ describe("query()", () => {
     );
 
     expect(recordBudgetBreach).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledTimes(1);
     expect(q).toHaveBeenCalledWith("SET LOCAL statement_timeout = '50ms'");
+    expect(q).toHaveBeenCalledWith("SELECT pg_sleep(10)", undefined);
+    expect(client.release).toHaveBeenCalledTimes(1);
   });
 
   it("does not record a breach for a non-timeout failure even inside a budget", async () => {
-    const q = poolQuery();
+    const client = {
+      query: jest.fn(),
+      release: jest.fn(),
+    } as unknown as PoolClient;
+    jest.spyOn(pool, "connect").mockResolvedValue(client);
+    const q = jest.spyOn(client, "query");
+    q.mockResolvedValueOnce(ok()); // BEGIN
     q.mockResolvedValueOnce(ok()); // SET LOCAL statement_timeout
     q.mockRejectedValueOnce(Object.assign(new Error("deadlock detected"), { code: "40P01" }));
+    q.mockResolvedValueOnce(ok()); // ROLLBACK
 
     await runWithQueryBudget(
       { budgetMs: 50, totalSqlTimeMs: 0, route: "/api/v1/checkout", breached: false },
@@ -186,6 +203,7 @@ describe("query()", () => {
     );
 
     expect(recordBudgetBreach).not.toHaveBeenCalled();
+    expect(client.release).toHaveBeenCalledTimes(1);
   });
 
   it("skips SET LOCAL once the budget has already been breached", async () => {

@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../test/auth.js";
 import request from "supertest";
 import app from "../index.js";
 import { SignJWT } from "jose";
@@ -48,7 +49,7 @@ describe("Input validation middleware", () => {
   it("should reject slot creation when role is invalid", async () => {
     const res = await request(app)
       .post("/api/v1/slots")
-      .set("x-user-role", "hacker")
+      .set("Authorization", createTestAuthorization("test-user", "hacker"))
       .send({
         professional: "alice",
         startTime: 1000,
@@ -62,7 +63,7 @@ describe("Input validation middleware", () => {
   it("should reject slot creation when role is not authorized", async () => {
     const res = await request(app)
       .post("/api/v1/slots")
-      .set("x-user-role", "customer")
+      .set("Authorization", createTestAuthorization("test-user", "customer"))
       .send({
         professional: "alice",
         startTime: 1000,
@@ -76,7 +77,7 @@ describe("Input validation middleware", () => {
   it("should allow valid slot creation", async () => {
     const res = await request(app)
       .post("/api/v1/slots")
-      .set("x-user-role", "professional")
+      .set("Authorization", createTestAuthorization("test-user", "professional"))
       .send({
         professional: "alice",
         startTime: 1000,
@@ -90,7 +91,7 @@ describe("Input validation middleware", () => {
   it("should allow slot creation for admin role", async () => {
     const res = await request(app)
       .post("/api/v1/slots")
-      .set("x-user-role", "admin")
+      .set("Authorization", createTestAuthorization("test-user", "admin"))
       .send({
         professional: "alice",
         startTime: 1000,

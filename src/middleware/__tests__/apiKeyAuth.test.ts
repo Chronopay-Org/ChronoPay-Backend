@@ -1,15 +1,19 @@
 // @ts-nocheck
 import { jest, describe, it, expect, beforeEach } from "@jest/globals";
+import * as crypto from "node:crypto";
+import express from "express";
+import request from "supertest";
 import { Request, Response, NextFunction } from "express";
 import fs from "node:fs";
 import { 
   requireApiKey, 
   matchEndpoint, 
-  isEndpointAllowed
+  isEndpointAllowed,
+  deriveApiKeyId
 } from "../apiKeyAuth.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { defaultAuditLogger } from "../../services/auditLogger.js";
-import { partnerTierService } from "../../services/partnerTierService.js";
+import { partnerTierService, reloadPartnerTierMap } from "../../services/partnerTierService.js";
 
 describe("apiKeyAuth Middleware", () => {
   let req: Partial<Request>;
@@ -22,6 +26,8 @@ describe("apiKeyAuth Middleware", () => {
       ip: "127.0.0.1",
       method: "GET",
       originalUrl: "/api/v1/public/test",
+      baseUrl: "",
+      path: "/api/v1/public/test",
     };
     res = {
       status: jest.fn().mockReturnThis(),
@@ -29,15 +35,14 @@ describe("apiKeyAuth Middleware", () => {
     };
     next = jest.fn();
     jest.clearAllMocks();
-    
-    jest.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({
-      tiers: {
-        basic: ["GET /api/v1/public/*"],
-        premium: ["*"]
-      }
-    }));
+    reloadPartnerTierMap("{}");
     
     jest.spyOn(defaultAuditLogger, 'log').mockResolvedValue(undefined as any);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    reloadPartnerTierMap();
   });
 
   describe("matchEndpoint", () => {
@@ -70,7 +75,7 @@ describe("apiKeyAuth Middleware", () => {
     });
 
     it("denies basic tier from private endpoints", () => {
-      expect(isEndpointAllowed("basic", "POST", "/api/v1/transactions", config)).toBe(false);
+      expect(isEndpointAllowed("basic", "POST", "/api/v1/slots", config)).toBe(false);
     });
 
     it("allows premium tier to access anything", () => {
@@ -83,10 +88,37 @@ describe("apiKeyAuth Middleware", () => {
   });
 
   describe("requireApiKey", () => {
-    it("skips auth if expectedApiKey is not provided", async () => {
+    it("keeps the explicit opt-out in test mode when expectedApiKey is not provided", async () => {
+      const previousNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = "test";
       const middleware = requireApiKey();
       await middleware(req as Request, res as Response, next);
       expect(next).toHaveBeenCalledWith();
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    });
+
+    it("returns 503 on a protected route when the key is not configured in production", async () => {
+      const previousNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = "production";
+      const app = express();
+      app.get("/protected", requireApiKey(), (_req, response) => response.sendStatus(200));
+
+      await request(app).get("/protected").expect(503);
+
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    });
+
+    it("uses crypto.timingSafeEqual when checking an API key", async () => {
+      (req.header as any).mockReturnValue("expected-key");
+      jest.spyOn(partnerTierService, "fetchPartnerTier").mockResolvedValue("premium");
+      const timingSafeEqualSpy = jest.spyOn(crypto, "timingSafeEqual");
+
+      await requireApiKey("expected-key")(req as Request, res as Response, next);
+
+      expect(timingSafeEqualSpy).toHaveBeenCalledTimes(1);
+      timingSafeEqualSpy.mockRestore();
     });
 
     it("fails if API key is missing", async () => {
@@ -115,13 +147,14 @@ describe("apiKeyAuth Middleware", () => {
       (req.header as any).mockReturnValue("expected-key");
       
       req.method = "POST";
-      req.originalUrl = "/api/v1/transactions";
-
-      jest.spyOn(partnerTierService, "fetchPartnerTier").mockResolvedValue("basic");
+      req.baseUrl = "/api/v1/slots";
+      req.path = "/";
+      req.originalUrl = "/api/v1/slots";
 
       await middleware(req as Request, res as Response, next);
       
       expect(res.status).toHaveBeenCalledWith(403);
+      expect(req.partnerTier).toBe("basic");
       expect(defaultAuditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
         action: "PARTNER_TIER_DENIED",
         status: 403,
@@ -129,12 +162,48 @@ describe("apiKeyAuth Middleware", () => {
       }));
     });
 
+    it("allows a key explicitly mapped to premium to POST /api/v1/slots", async () => {
+      reloadPartnerTierMap(JSON.stringify({
+        [deriveApiKeyId("expected-key")]: "premium",
+      }));
+      const middleware = requireApiKey("expected-key");
+      (req.header as any).mockReturnValue("expected-key");
+      req.method = "POST";
+      req.baseUrl = "/api/v1/slots";
+      req.path = "/";
+      req.originalUrl = "/api/v1/slots";
+
+      await middleware(req as Request, res as Response, next);
+
+      expect(req.partnerTier).toBe("premium");
+      expect(next).toHaveBeenCalledWith();
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it("allows basic public endpoints with a query string without reading config per request", async () => {
+      const readFileSync = jest.spyOn(fs, "readFileSync");
+      const middleware = requireApiKey("expected-key");
+      (req.header as any).mockReturnValue("expected-key");
+      req.method = "GET";
+      req.baseUrl = "/api/v1";
+      req.path = "/public/test";
+      req.originalUrl = "/api/v1/public/test?y=1";
+
+      await middleware(req as Request, res as Response, next);
+
+      expect(req.partnerTier).toBe("basic");
+      expect(next).toHaveBeenCalledWith();
+      expect(readFileSync).not.toHaveBeenCalled();
+    });
+
     it("handles tier upgrade mid-request by dynamically fetching tier", async () => {
       const middleware = requireApiKey("expected-key");
       (req.header as any).mockReturnValue("expected-key");
       
       req.method = "POST";
-      req.originalUrl = "/api/v1/transactions";
+      req.baseUrl = "/api/v1/slots";
+      req.path = "/";
+      req.originalUrl = "/api/v1/slots";
 
       let calls = 0;
       jest.spyOn(partnerTierService, "fetchPartnerTier").mockImplementation(async () => {

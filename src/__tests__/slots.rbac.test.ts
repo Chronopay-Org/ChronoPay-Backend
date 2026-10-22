@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../test/auth.js";
 import request from "supertest";
 import express from "express";
 import { jest } from "@jest/globals";
@@ -55,7 +56,7 @@ describe("PATCH /api/v1/slots/:id — RBAC", () => {
     const slotId = await seedSlot();
     const res = await request(app)
       .patch(`/api/v1/slots/${slotId}`)
-      .set("x-user-role", "customer")
+      .set("Authorization", createTestAuthorization("test-user", "customer"))
       .send({ professional: "bob" });
     expect(res.status).toBe(403);
     expect(res.body.success).toBe(false);
@@ -65,7 +66,7 @@ describe("PATCH /api/v1/slots/:id — RBAC", () => {
     const slotId = await seedSlot();
     const res = await request(app)
       .patch(`/api/v1/slots/${slotId}`)
-      .set("x-user-role", "professional")
+      .set("Authorization", createTestAuthorization("test-user", "professional"))
       .send({ professional: "bob" });
     expect(res.status).toBe(403);
     expect(res.body.success).toBe(false);
@@ -75,7 +76,7 @@ describe("PATCH /api/v1/slots/:id — RBAC", () => {
     const slotId = await seedSlot("alice");
     const res = await request(app)
       .patch(`/api/v1/slots/${slotId}`)
-      .set("x-user-role", "admin")
+      .set("Authorization", createTestAuthorization("test-user", "admin"))
       .send({ professional: "carol", startTime: 1_000_000, endTime: 3_000_000 });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -86,7 +87,7 @@ describe("PATCH /api/v1/slots/:id — RBAC", () => {
     await seedSlot();
     const res = await request(app)
       .patch("/api/v1/slots/9999")
-      .set("x-user-role", "admin")
+      .set("Authorization", createTestAuthorization("test-user", "admin"))
       .send({ professional: "carol" });
     expect(res.status).toBe(404);
   });
@@ -110,8 +111,7 @@ describe("DELETE /api/v1/slots/:id — RBAC", () => {
     const slotId = await seedSlot("alice");
     const res = await request(app)
       .delete(`/api/v1/slots/${slotId}`)
-      .set("x-chronopay-user-id", "bob")
-      .set("x-chronopay-role", "customer");
+      .set("Authorization", createTestAuthorization("bob", "customer"));
     expect(res.status).toBe(403);
     expect(res.body.success).toBe(false);
   });
@@ -120,8 +120,7 @@ describe("DELETE /api/v1/slots/:id — RBAC", () => {
     const slotId = await seedSlot("alice");
     const res = await request(app)
       .delete(`/api/v1/slots/${slotId}`)
-      .set("x-chronopay-user-id", "alice")
-      .set("x-chronopay-role", "customer");
+      .set("Authorization", createTestAuthorization("alice", "customer"));
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.deletedSlotId).toBe(slotId);
@@ -131,8 +130,7 @@ describe("DELETE /api/v1/slots/:id — RBAC", () => {
     const slotId = await seedSlot("alice");
     const res = await request(app)
       .delete(`/api/v1/slots/${slotId}`)
-      .set("x-chronopay-user-id", "admin-user")
-      .set("x-chronopay-role", "admin");
+      .set("Authorization", createTestAuthorization("admin-user", "admin"));
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.deletedSlotId).toBe(slotId);
@@ -141,8 +139,7 @@ describe("DELETE /api/v1/slots/:id — RBAC", () => {
   it("returns 404 when targeting a non-existent slot", async () => {
     const res = await request(app)
       .delete("/api/v1/slots/9999")
-      .set("x-chronopay-user-id", "alice")
-      .set("x-chronopay-role", "customer");
+      .set("Authorization", createTestAuthorization("alice", "customer"));
     expect(res.status).toBe(404);
   });
 
@@ -150,8 +147,7 @@ describe("DELETE /api/v1/slots/:id — RBAC", () => {
     const slotId = await seedSlot("alice");
     await request(app)
       .delete(`/api/v1/slots/${slotId}`)
-      .set("x-chronopay-user-id", "alice")
-      .set("x-chronopay-role", "customer");
+      .set("Authorization", createTestAuthorization("alice", "customer"));
 
     const getRes = await request(app).get(`/api/v1/slots/${slotId}`);
     expect(getRes.status).toBe(404);

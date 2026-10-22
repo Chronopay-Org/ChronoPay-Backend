@@ -3,6 +3,7 @@ import { jest } from "@jest/globals";
 import { setFeatureFlagsFromEnv } from "../flags/index.js";
 import { setRedisClient, type RedisClient } from "../cache/redisClient.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { createTestAuthorization } from "../../test/auth.js";
 
 type StoredValue = { value: string; expiresAt?: number };
 
@@ -100,8 +101,7 @@ describe("POST /api/v1/booking-intents idempotency", () => {
   });
 
   const actorHeaders = {
-    "x-chronopay-user-id": "customer-123",
-    "x-chronopay-role": "customer",
+    Authorization: createTestAuthorization("customer-123", "customer"),
   };
 
   const url = "/api/v1/booking-intents";

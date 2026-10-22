@@ -2,9 +2,10 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
-import { getCORSConfig } from "./config/cors.js";
+import { getCORSConfig, validateCORSConfig } from "./config/cors.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
+import { parseCookies } from "./middleware/cookieParser.js";
 import { authenticateTokenIfPresent } from "./middleware/auth.middleware.js";
 import {
   genericErrorHandler,
@@ -22,23 +23,6 @@ import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
 import { ContractService } from "./services/contract.service.js";
-
-// Simple cookie parser middleware
-function parseCookies(req: Request, _res: Response, next: any): void {
-  const cookieHeader = req.headers.cookie;
-  req.cookies = {};
-
-  if (cookieHeader) {
-    cookieHeader.split(";").forEach((cookie) => {
-      const [key, val] = cookie.split("=");
-      if (key && val) {
-        req.cookies[key.trim()] = decodeURIComponent(val.trim());
-      }
-    });
-  }
-
-  next();
-}
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   if (value === undefined) return false;
@@ -81,6 +65,7 @@ import { isValidIANATimezone } from "./validation/reminderValidation.js";
 
 
 export interface AppFactoryOptions {
+  requestTracker?: express.RequestHandler;
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
@@ -133,14 +118,6 @@ function registerSwaggerDocs(app: express.Express) {
               scheme: "bearer",
               bearerFormat: "JWT",
               description: "JWT token for user authentication (obtained from auth service)",
-            },
-            // Header-based authentication (current implementation)
-            chronoPayAuth: {
-              type: "apiKey",
-              in: "header",
-              name: "x-chronopay-user-id",
-              description:
-                "User ID header for authentication (must be paired with x-chronopay-role)",
             },
             // API Key authentication
             apiKeyAuth: {
@@ -235,7 +212,7 @@ function registerSwaggerDocs(app: express.Express) {
         },
         security: [
           // Default security requirement - can be overridden per endpoint
-          { chronoPayAuth: [] },
+          { bearerAuth: [] },
         ],
       },
       apis: chooseApis(),
@@ -261,7 +238,12 @@ export function createApp(options: AppFactoryOptions = {}) {
     );
   }
 
+  const corsConfig = getCORSConfig();
+  validateCORSConfig(corsConfig);
+
   const app = express();
+
+  if (options.requestTracker) app.use(options.requestTracker);
 
   if (isTruthyEnvValue(process.env.TRUST_PROXY)) {
     app.set("trust proxy", 1);
@@ -271,7 +253,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(tracingMiddleware);
   app.use(metricsMiddleware);
   app.use(featureFlagContextMiddleware);
-  app.use(createCORSMiddleware(getCORSConfig()));
+  app.use(createCORSMiddleware(corsConfig));
 
   // Content negotiation BEFORE express.json() to reject invalid Content-Type early
   if (options.enableContentNegotiation !== false) {
