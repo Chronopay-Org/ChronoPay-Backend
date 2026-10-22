@@ -2,7 +2,11 @@ import request from "supertest";
 import { createApp } from "../../app.js";
 import { setFeatureFlagsFromEnv } from "../../flags/service.js";
 import { CheckoutSession, CheckoutSessionStatus } from "../../types/checkout.js";
-import { CheckoutSessionService, setCheckoutRepository } from "../../services/checkout.js";
+import {
+  CheckoutSessionService,
+  setCheckoutPaymentProvider,
+  setCheckoutRepository,
+} from "../../services/checkout.js";
 import { PgCheckoutSessionRepository } from "../../modules/checkout/pg-checkout-session-repository.js";
 
 const app = createApp({ enableContentNegotiation: false });
@@ -76,10 +80,14 @@ beforeEach(() => {
   setFeatureFlagsFromEnv(process.env);
   CheckoutSessionService.clearAllSessions();
   setCheckoutRepository(makeInMemoryRepo());
+  setCheckoutPaymentProvider({
+    charge: async () => ({ status: "succeeded", providerRef: "route_test_ref" }),
+  });
 });
 
 afterAll(() => {
   delete process.env.FF_CHECKOUT;
+  setCheckoutPaymentProvider(undefined);
   setFeatureFlagsFromEnv(process.env);
   CheckoutSessionService.clearAllSessions();
 });
@@ -303,14 +311,15 @@ describe("Lifecycle: create → fail", () => {
 // ── POST /sessions/:id/pay ────────────────────────────────────────────────────
 
 describe("POST /api/v1/checkout/sessions/:sessionId/pay", () => {
-  it("returns 200 with COMPLETED or FAILED status", async () => {
+  it("returns 200 with the provider-backed completed status", async () => {
     const { body: created } = await createSession();
     const id = created.session.id;
 
     const res = await post(`/api/v1/checkout/sessions/${id}/pay`);
 
     expect(res.status).toBe(200);
-    expect(["completed", "failed"]).toContain(res.body.session.status);
+    expect(res.body.session.status).toBe(CheckoutSessionStatus.COMPLETED);
+    expect(res.body.session.paymentToken).toBe("route_test_ref");
   });
 
   it("returns 409 when paying a completed session", async () => {

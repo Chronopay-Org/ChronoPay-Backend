@@ -1,6 +1,10 @@
 // @ts-nocheck
 import { jest } from "@jest/globals";
-import { CheckoutSessionService, setCheckoutRepository } from "../../../services/checkout.js";
+import {
+  CheckoutSessionService,
+  setCheckoutPaymentProvider,
+  setCheckoutRepository,
+} from "../../../services/checkout.js";
 import { PgCheckoutSessionRepository } from "../pg-checkout-session-repository.js";
 import { defaultAuditLogger } from "../../../services/auditLogger.js";
 import {
@@ -52,11 +56,15 @@ describe("CheckoutSessionService", () => {
   beforeEach(() => {
     repo = makeMockRepo();
     setCheckoutRepository(repo);
+    setCheckoutPaymentProvider({
+      charge: async () => ({ status: "succeeded", providerRef: "provider_ref_123" }),
+    });
     jest.spyOn(Date, "now").mockReturnValue(NOW_S * 1000);
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
+    setCheckoutPaymentProvider(undefined);
   });
 
   // ── createSession ──────────────────────────────────────────────────────────
@@ -307,9 +315,8 @@ describe("CheckoutSessionService", () => {
 
   describe("paySession", () => {
     it("completes the session when payment succeeds", async () => {
-      jest.spyOn(Math, "random").mockReturnValue(0.5); // > 0.1 → success
       const session = makeSession();
-      const completed = makeSession({ status: CheckoutSessionStatus.COMPLETED, paymentToken: "mock_token_123" });
+      const completed = makeSession({ status: CheckoutSessionStatus.COMPLETED, paymentToken: "provider_ref_123" });
       // getSession → findById, then completeSession → findById again
       (repo.findById as jest.Mock)
         .mockResolvedValueOnce(session)
@@ -322,9 +329,18 @@ describe("CheckoutSessionService", () => {
     });
 
     it("fails the session when payment is declined", async () => {
-      jest.spyOn(Math, "random").mockReturnValue(0.05); // < 0.1 → failure
+      setCheckoutPaymentProvider({
+        charge: async () => ({
+          status: "declined",
+          providerRef: "declined_ref_123",
+          reason: "Insufficient funds",
+        }),
+      });
       const session = makeSession();
-      const failed = makeSession({ status: CheckoutSessionStatus.FAILED });
+      const failed = makeSession({
+        status: CheckoutSessionStatus.FAILED,
+        metadata: { failureReason: "Insufficient funds" },
+      });
       (repo.findById as jest.Mock)
         .mockResolvedValueOnce(session)
         .mockResolvedValueOnce(session);
@@ -419,7 +435,8 @@ describe("CheckoutSessionService", () => {
         "sess-uuid",
         expect.objectContaining({
           metadata: expect.objectContaining({
-            lastPartialRefundQuote: mockQuote,
+            lastPartialRefundQuoteId: mockQuote.quoteId,
+            lastPartialRefundDestinationAmount: mockQuote.destinationAmount,
           }),
         }),
       );

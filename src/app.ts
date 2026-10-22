@@ -32,6 +32,10 @@ function isTruthyEnvValue(value: string | undefined): boolean {
 
 // Import routers
 import checkoutRouter from "./routes/checkout.js";
+import {
+  setCheckoutPaymentProvider,
+} from "./services/checkout.js";
+import { MockPaymentProvider } from "./services/paymentProvider.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import authRouter from "./routes/auth.js";
@@ -362,6 +366,13 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use("/api/v1/slots", slotsRouter);
 
   // 2. Checkout Routes
+  // In non-production environments install the deterministic mock provider so
+  // that /pay works end-to-end without a real payment gateway.  In production
+  // no provider is wired here; a real provider must be injected before the
+  // server handles any /pay requests or the endpoint returns 503.
+  if (nodeEnv !== "production") {
+    setCheckoutPaymentProvider(new MockPaymentProvider());
+  }
   app.use("/api/v1/checkout", checkoutRouter);
 
   // 3. Buyer Profile Routes
