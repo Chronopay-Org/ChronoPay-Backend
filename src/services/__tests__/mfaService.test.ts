@@ -40,6 +40,13 @@ function wrongCode(secret: Buffer, nowMs: number): string {
 }
 
 describe("MfaService.enroll", () => {
+  it("throws when userId is empty or whitespace", async () => {
+    const { service, handle } = makeService();
+    await expect(service.enroll("", { masterKey: MASTER_KEY })).rejects.toThrow("Token subject missing");
+    await expect(service.enroll("   ", { masterKey: MASTER_KEY })).rejects.toThrow("Token subject missing");
+    expect(handle.rows.size).toBe(0);
+  });
+
   it("creates a pending enrollment and returns secret + otpauth URL", async () => {
     const { service, handle } = makeService();
     const result = await service.enroll("user-1", { masterKey: MASTER_KEY, issuer: "ChronoPay" });
@@ -91,6 +98,24 @@ describe("MfaService.enroll", () => {
 describe("MfaService.verifyCode", () => {
   const nowMs = 1_700_000_000_000;
   const period = 30;
+
+  it("throws when userId is empty or whitespace", async () => {
+    const { service } = makeService();
+    await expect(
+      service.verifyCode("", "123456", {
+        masterKey: MASTER_KEY,
+        challengeSecret: CHALLENGE_SECRET,
+        nowMs,
+      }),
+    ).rejects.toThrow("Token subject missing");
+    await expect(
+      service.verifyCode("   ", "123456", {
+        masterKey: MASTER_KEY,
+        challengeSecret: CHALLENGE_SECRET,
+        nowMs,
+      }),
+    ).rejects.toThrow("Token subject missing");
+  });
 
   it("accepts a valid code, advances the counter, activates a pending enrollment, returns a token", async () => {
     const { service, handle } = makeService();

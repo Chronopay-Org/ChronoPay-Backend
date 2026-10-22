@@ -136,6 +136,9 @@ export class MfaService {
    * A *pending* enrolment is replaced so the user can re-scan after a miss.
    */
   async enroll(userId: string, options: MfaServiceOptions = {}): Promise<EnrollMfaResult> {
+    if (typeof userId !== "string" || userId.trim().length === 0) {
+      throw new Error("Token subject missing");
+    }
     const config = this.buildConfig(options);
     const masterKey = this.resolveMasterKey(options);
     const existing = await this.getRepository().findByUserId(userId);
@@ -189,6 +192,9 @@ export class MfaService {
    * with the same code cannot both win — exactly one is accepted.
    */
   async verifyCode(userId: string, code: string, options: MfaServiceOptions = {}): Promise<VerifyMfaCodeResult> {
+    if (typeof userId !== "string" || userId.trim().length === 0) {
+      throw new Error("Token subject missing");
+    }
     const config = this.buildConfig(options);
     const repository = this.getRepository();
     let enrollment = await repository.findByUserId(userId);

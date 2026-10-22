@@ -94,6 +94,41 @@ describe("auth MFA routes", () => {
       expect(res.status).toBe(401);
     });
 
+    it("rejects a validly signed JWT without sub or id with 401 Token subject missing", async () => {
+      const handle = createFakeMfaRepository();
+      setMfaRepositoryForTests(handle.repo);
+
+      const sublessToken = await signJwt(
+        { role: "customer", iat: Math.floor(Date.now() / 1000) },
+        ACCESS_SECRET,
+        { expiresInSec: 3600, issuer: ISSUER, audience: AUDIENCE },
+      );
+
+      const res = await request(app)
+        .post("/api/v1/auth/mfa/enroll")
+        .set("Authorization", `Bearer ${sublessToken}`)
+        .send({});
+
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ success: false, error: "Token subject missing" });
+      expect(handle.rows.size).toBe(0);
+    });
+
+    it("rejects a validly signed JWT with whitespace-only sub with 401 Token subject missing", async () => {
+      const handle = createFakeMfaRepository();
+      setMfaRepositoryForTests(handle.repo);
+
+      const whitespaceSubToken = await accessToken("   ");
+      const res = await request(app)
+        .post("/api/v1/auth/mfa/enroll")
+        .set("Authorization", `Bearer ${whitespaceSubToken}`)
+        .send({});
+
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ success: false, error: "Token subject missing" });
+      expect(handle.rows.size).toBe(0);
+    });
+
     it("enrols a user and returns the base32 secret + otpauth URI", async () => {
       const token = await accessToken("user-123");
       const res = await request(app)
@@ -143,6 +178,22 @@ describe("auth MFA routes", () => {
     it("requires authentication", async () => {
       const res = await request(app).post("/api/v1/auth/mfa/verify").send({ code: "123456" });
       expect(res.status).toBe(401);
+    });
+
+    it("rejects a validly signed JWT without sub or id with 401 Token subject missing", async () => {
+      const sublessToken = await signJwt(
+        { role: "customer", iat: Math.floor(Date.now() / 1000) },
+        ACCESS_SECRET,
+        { expiresInSec: 3600, issuer: ISSUER, audience: AUDIENCE },
+      );
+
+      const res = await request(app)
+        .post("/api/v1/auth/mfa/verify")
+        .set("Authorization", `Bearer ${sublessToken}`)
+        .send({ code: "123456" });
+
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ success: false, error: "Token subject missing" });
     });
 
     it("rejects a request with no body payload", async () => {

@@ -234,6 +234,44 @@ describe("auth middleware & ChronoPayRole contract", () => {
       expect(mockNext).not.toHaveBeenCalled();
     });
 
+    it("returns 401 Token subject missing when token has no sub or id claim", async () => {
+      const token = await makeJwt(
+        { role: "customer" },
+        { expiresInSec: 3600 },
+      );
+      mockReq.headers = { authorization: `Bearer ${token}` };
+
+      const middleware = requireAuth();
+      await middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
+
+      expect(statusMock).toHaveBeenCalledWith(401);
+      expect(jsonMock).toHaveBeenCalledWith({
+        success: false,
+        error: "Token subject missing",
+      });
+      expect(mockNext).not.toHaveBeenCalled();
+      expect(mockReq.auth).toBeUndefined();
+    });
+
+    it("returns 401 Token subject missing when token sub is empty or whitespace", async () => {
+      const token = await makeJwt(
+        { sub: "   ", role: "customer" },
+        { expiresInSec: 3600 },
+      );
+      mockReq.headers = { authorization: `Bearer ${token}` };
+
+      const middleware = requireAuth();
+      await middleware(mockReq as Request, mockRes as Response, mockNext as unknown as NextFunction);
+
+      expect(statusMock).toHaveBeenCalledWith(401);
+      expect(jsonMock).toHaveBeenCalledWith({
+        success: false,
+        error: "Token subject missing",
+      });
+      expect(mockNext).not.toHaveBeenCalled();
+      expect(mockReq.auth).toBeUndefined();
+    });
+
     it("populates req.user and req.auth and calls next on successful verification", async () => {
       const token = await makeJwt(
         { sub: "user-admin", role: "admin" },
@@ -352,7 +390,7 @@ describe("auth middleware & ChronoPayRole contract", () => {
   });
 
   // =========================================================================
-  // 4. requireAuthenticatedActor runtime middleware behavior & error contracts
+  // 4. requireAuthenticatedActor runtime behavior & error contracts
   // =========================================================================
   describe("requireAuthenticatedActor runtime behavior", () => {
     let mockReq: Partial<Request>;

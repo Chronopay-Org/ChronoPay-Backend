@@ -57,11 +57,16 @@ export function requireAuth(expectedIssuer?: string) {
         return res.status(401).json({ success: false, error: "Missing Authorization header" });
       }
 
-      const payload = await verifyRequestJwt(req, expectedIssuer);
+      const payload = await verifyJwt(token, { issuer: expectedIssuer ?? configService.jwtIssuer ?? undefined });
+      const userId = getUserId(payload);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: "Token subject missing" });
+      }
+
       // @ts-expect-error - Auto-fixed by script
       req.user = payload;
       req.auth = {
-        userId: getUserId(payload),
+        userId,
         role: parseJwtRole(payload.role),
         claims: payload,
       };
