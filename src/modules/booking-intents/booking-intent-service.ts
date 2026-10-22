@@ -26,6 +26,7 @@ import {
   RefundBreakdown,
   createDefaultRegistry,
   VersionedPolicyRegistry,
+  LEGACY_V1_VERSION,
 } from "../../services/cancellationPolicy.js";
 import {
   HoldFeePolicyService,
@@ -404,8 +405,7 @@ export class BookingIntentService {
       );
     }
 
-    const policy = new CancellationPolicyService();
-    return policy.calculateRefund(intent);
+    return this.cancellationPolicyService.calculateRefund(intent);
   }
 
   /**
@@ -449,6 +449,22 @@ export class BookingIntentService {
     };
   }
 
+  /**
+   * Refunds an active booking intent and transitions it to `cancelled`.
+   *
+   * Product rule for refund calculation:
+   * - Pre-start cancellations (`cancelledAtMs < intent.startTime`): computed via
+   *   `this.cancellationPolicyService.calculateRefund(intent)`, which applies
+   *   the grandfathered `cancellationPolicySnapshot` (tiered notice windows,
+   *   flat/percentage fees, tax reversal) and deducts any non-refundable
+   *   `holdFeePolicySnapshot` retention. This guarantees `previewCancel` and
+   *   `refundIntent` produce identical amounts under the same clock and registry.
+   * - In-progress or elapsed sessions (`cancelledAtMs >= intent.startTime`):
+   *   tiered pre-start notice windows no longer apply once the session has
+   *   started; the refund uses linear duration-based proration via
+   *   `CheckoutSessionService.calculateDurationBasedRefund` over the remaining
+   *   session time (0 once the slot has fully elapsed).
+   */
   refundIntent(
     intentId: string,
     actor: AuthContext,
@@ -459,6 +475,11 @@ export class BookingIntentService {
     refundRatio: number;
     consumedRatio: number;
     reason: string;
+    policyVersionId: string;
+    fee: number;
+    holdFee: number;
+    taxReversal: number;
+    breakdown: RefundBreakdown;
   } {
     const intent = this.bookingIntentRepository.findById(intentId);
     if (!intent) {
@@ -482,14 +503,41 @@ export class BookingIntentService {
       throw new BookingIntentError(400, "cancelledAtMs must be a valid number.");
     }
 
-    const amountCents = this.resolveIntentPrice(intent);
-    const refundSummary = CheckoutSessionService.calculateDurationBasedRefund({
-      amountCents,
-      startTimeMs: intent.startTime,
-      endTimeMs: intent.endTime,
-      nowMs: cancelledAtMs,
-      curve: "linear",
-    });
+    let refundAmountCents: number;
+    let refundRatio: number;
+    let consumedRatio: number;
+    let breakdown: RefundBreakdown;
+
+    if (cancelledAtMs < intent.startTime) {
+      breakdown = this.cancellationPolicyService.calculateRefund(intent);
+      refundAmountCents = breakdown.netRefund;
+      refundRatio = breakdown.tierApplied?.refundRatio ?? 0;
+      consumedRatio = 0;
+    } else {
+      const amountCents = this.resolveIntentPrice(intent);
+      const refundSummary = CheckoutSessionService.calculateDurationBasedRefund({
+        amountCents,
+        startTimeMs: intent.startTime,
+        endTimeMs: intent.endTime,
+        nowMs: cancelledAtMs,
+        curve: "linear",
+      });
+      const policyVersionId =
+        intent.cancellationPolicySnapshot?.policyVersionId ?? LEGACY_V1_VERSION.versionId;
+      breakdown = {
+        fee: 0,
+        taxReversal: 0,
+        netRefund: refundSummary.refundAmountCents,
+        policyVersion: policyVersionId,
+        tierApplied: null,
+        hoursUntilStart: (intent.startTime - cancelledAtMs) / (1000 * 60 * 60),
+        basePrice: amountCents,
+        holdFee: 0,
+      };
+      refundAmountCents = refundSummary.refundAmountCents;
+      refundRatio = refundSummary.remainingRatio;
+      consumedRatio = refundSummary.consumedRatio;
+    }
 
     const reason = (input.reason ?? "partial_refund").trim() || "partial_refund";
     const updated = this.bookingIntentRepository.update(intentId, {
@@ -497,7 +545,7 @@ export class BookingIntentService {
       refundedAt: this.now(),
       refundMetadata: {
         refundedAt: this.now(),
-        refundedAmountCents: refundSummary.refundAmountCents,
+        refundedAmountCents: refundAmountCents,
         refundReason: reason,
       },
     });
@@ -506,10 +554,15 @@ export class BookingIntentService {
 
     return {
       intent: updated,
-      refundAmountCents: refundSummary.refundAmountCents,
-      refundRatio: refundSummary.remainingRatio,
-      consumedRatio: refundSummary.consumedRatio,
+      refundAmountCents,
+      refundRatio,
+      consumedRatio,
       reason,
+      policyVersionId: breakdown.policyVersion,
+      fee: breakdown.fee,
+      holdFee: breakdown.holdFee,
+      taxReversal: breakdown.taxReversal,
+      breakdown,
     };
   }
 

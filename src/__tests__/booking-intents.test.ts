@@ -294,6 +294,71 @@ describe("POST /:id/refund", () => {
     expect(res.status).toBe(400);
     expect(res.body.success).toBe(false);
   });
+
+  it("returns the policy breakdown and matches GET /:id/cancel-preview for a pre-start cancellation", async () => {
+    const startTime = Date.now() + 36 * 60 * 60 * 1000;
+    const endTime = startTime + 60 * 60 * 1000;
+    const intent = await repo.create({
+      ...BASE_INTENT,
+      customerId: "user1",
+      professional: "pro-1",
+      status: "confirmed",
+      startTime,
+      endTime,
+      pricingSnapshot: {
+        strategyId: "fixed",
+        resolvedPrice: 1000,
+        basePrice: 1000,
+        slotStartMs: startTime,
+        nowMs: Date.now(),
+        activeBookings: 1,
+        capacity: 1,
+        config: { strategy: "fixed" },
+      },
+      cancellationPolicySnapshot: {
+        policyVersionId: "v2-prorated",
+        capturedAtMs: Date.now(),
+        policyTerms: {
+          tiers: [
+            { minHoursUntilStart: 24, maxHoursUntilStart: 72, refundRatio: 0.6, flatFee: 50, taxReversalRatio: 0.1 },
+            { minHoursUntilStart: 0, maxHoursUntilStart: 24, refundRatio: 0, flatFee: 0 },
+          ],
+        },
+      },
+      holdFeePolicySnapshot: {
+        supplierId: "pro-1",
+        holdFeeCents: 100,
+        capturedAtMs: Date.now(),
+      },
+    });
+
+    const previewRes = await request(app)
+      .get(`/api/v1/booking-intents/${intent.id}/cancel-preview`)
+      .set("x-chronopay-user-id", "user1")
+      .set("x-chronopay-role", "customer");
+
+    const refundRes = await request(app)
+      .post(`/api/v1/booking-intents/${intent.id}/refund`)
+      .send({ reason: "customer_cancel" })
+      .set("x-chronopay-user-id", "user1")
+      .set("x-chronopay-role", "customer");
+
+    expect(previewRes.status).toBe(200);
+    expect(refundRes.status).toBe(200);
+    expect(refundRes.body.refund.refundAmountCents).toBe(510);
+    expect(refundRes.body.refund.refundAmountCents).toBe(previewRes.body.preview.netRefund);
+    expect(refundRes.body.refund.policyVersionId).toBe("v2-prorated");
+    expect(refundRes.body.refund.fee).toBe(50);
+    expect(refundRes.body.refund.holdFee).toBe(100);
+    expect(refundRes.body.refund.taxReversal).toBe(60);
+    expect(refundRes.body.refund.breakdown).toMatchObject({
+      policyVersion: "v2-prorated",
+      fee: 50,
+      holdFee: 100,
+      taxReversal: 60,
+      netRefund: 510,
+    });
+  });
 });
 
 describe("concurrent booking-intent creates — one active per slot", () => {
