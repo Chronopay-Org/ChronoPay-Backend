@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from "@jest/globals";
 import request from "supertest";
 import express from "express";
 import router, { _resetProcessedTransactions } from "../routes/webhooks.js";
+import { kycService } from "../services/kycService.js";
 
 const app = express();
 app.use(express.json());
@@ -17,6 +18,7 @@ const validPayload = {
 
 beforeEach(() => {
   _resetProcessedTransactions();
+  kycService.reset();
 });
 
 describe("POST /webhooks/settlements", () => {
@@ -113,5 +115,71 @@ describe("POST /webhooks/settlements", () => {
     // Idempotency key is transactionId; second call is treated as duplicate
     expect(second.status).toBe(200);
     expect(second.body.success).toBe(true);
+  });
+});
+
+const kycPayload = (overrides = {}) => ({
+  eventId: "kyc-evt-001",
+  occurredAt: new Date().toISOString(),
+  supplierId: "supplier-001",
+  status: "verified",
+  ...overrides,
+});
+
+describe("POST /webhooks/kyc", () => {
+  it("accepts a valid KYC event", async () => {
+    const res = await request(app).post("/webhooks/kyc").send(kycPayload());
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it("returns 400 when eventId is missing", async () => {
+    const { eventId: _, ...payload } = kycPayload();
+    const res = await request(app).post("/webhooks/kyc").send(payload);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/eventId/);
+  });
+
+  it("returns 400 when occurredAt is missing", async () => {
+    const { occurredAt: _, ...payload } = kycPayload();
+    const res = await request(app).post("/webhooks/kyc").send(payload);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/occurredAt/);
+  });
+
+  it("returns 403 for a payload older than 5 minutes", async () => {
+    const stale = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+    const res = await request(app)
+      .post("/webhooks/kyc")
+      .send(kycPayload({ occurredAt: stale }));
+    expect(res.status).toBe(403);
+  });
+
+  it("returns the cached response on replay and does not re-grant the bootstrap", async () => {
+    const payload = kycPayload();
+    const first = await request(app).post("/webhooks/kyc").send(payload);
+    const second = await request(app).post("/webhooks/kyc").send(payload);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body).toEqual(first.body);
+    expect(kycService.getBootstrapGrantCount(payload.supplierId)).toBe(1);
+  });
+
+  it("ignores a verified event older than the last applied rejected event", async () => {
+    const rejectedAt = new Date(Date.now() - 60 * 1000).toISOString();
+    const verifiedAt = new Date(Date.now() - 120 * 1000).toISOString();
+
+    await request(app)
+      .post("/webhooks/kyc")
+      .send(kycPayload({ eventId: "evt-rejected", status: "rejected", occurredAt: rejectedAt }));
+
+    const res = await request(app)
+      .post("/webhooks/kyc")
+      .send(kycPayload({ eventId: "evt-verified", status: "verified", occurredAt: verifiedAt }));
+
+    expect(res.status).toBe(200);
+    expect(res.body.ignored).toBe("stale");
+    expect(kycService.getStatus("supplier-001")).toBe("rejected");
+    expect(kycService.getBootstrapGrantCount("supplier-001")).toBe(0);
   });
 });
