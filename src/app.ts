@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
-import { getCORSConfig } from "./config/cors.js";
+import { getCORSConfig, validateCORSConfig } from "./config/cors.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { parseCookies } from "./middleware/cookieParser.js";
@@ -246,6 +246,9 @@ export function createApp(options: AppFactoryOptions = {}) {
     );
   }
 
+  const corsConfig = getCORSConfig();
+  validateCORSConfig(corsConfig);
+
   const app = express();
 
   if (options.requestTracker) app.use(options.requestTracker);
@@ -258,7 +261,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(tracingMiddleware);
   app.use(metricsMiddleware);
   app.use(featureFlagContextMiddleware);
-  app.use(createCORSMiddleware(getCORSConfig()));
+  app.use(createCORSMiddleware(corsConfig));
 
   // Content negotiation BEFORE express.json() to reject invalid Content-Type early
   if (options.enableContentNegotiation !== false) {
