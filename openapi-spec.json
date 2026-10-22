@@ -15,9 +15,6 @@
         ],
         "security": [
           {
-            "chronoPayAuth": []
-          },
-          {
             "bearerAuth": []
           },
           []
@@ -184,9 +181,6 @@
         ],
         "security": [
           {
-            "chronoPayAuth": []
-          },
-          {
             "bearerAuth": []
           },
           []
@@ -288,9 +282,6 @@
           "Checkout"
         ],
         "security": [
-          {
-            "chronoPayAuth": []
-          },
           {
             "bearerAuth": []
           },
@@ -421,9 +412,6 @@
         ],
         "security": [
           {
-            "chronoPayAuth": []
-          },
-          {
             "bearerAuth": []
           }
         ],
@@ -534,9 +522,6 @@
           "Checkout"
         ],
         "security": [
-          {
-            "chronoPayAuth": []
-          },
           {
             "bearerAuth": []
           },
@@ -664,9 +649,6 @@
           "Checkout"
         ],
         "security": [
-          {
-            "chronoPayAuth": []
-          },
           {
             "bearerAuth": []
           },

@@ -2,6 +2,7 @@
 import { jest } from "@jest/globals";
 import { CheckoutSessionService, setCheckoutRepository } from "../../../services/checkout.js";
 import { PgCheckoutSessionRepository } from "../pg-checkout-session-repository.js";
+import { defaultAuditLogger } from "../../../services/auditLogger.js";
 import {
   CheckoutSession,
   CheckoutSessionStatus,
@@ -140,6 +141,7 @@ describe("CheckoutSessionService", () => {
       expect(repo.updateSession).toHaveBeenCalledWith(
         "sess-uuid",
         expect.objectContaining({ status: CheckoutSessionStatus.EXPIRED }),
+        CheckoutSessionStatus.PENDING,
       );
     });
 
@@ -170,8 +172,32 @@ describe("CheckoutSessionService", () => {
       expect(repo.updateSession).toHaveBeenCalledWith(
         "sess-uuid",
         expect.objectContaining({ status: CheckoutSessionStatus.COMPLETED, paymentToken: "tok" }),
+        CheckoutSessionStatus.PENDING,
       );
       expect(result.status).toBe(CheckoutSessionStatus.COMPLETED);
+    });
+
+    it("returns 409 and emits no success audit when the conditional update loses a race", async () => {
+      const session = makeSession();
+      (repo.findById as jest.Mock).mockResolvedValueOnce(session);
+      (repo.updateSession as jest.Mock).mockResolvedValueOnce(null);
+      const auditSpy = jest.spyOn(defaultAuditLogger, "log").mockResolvedValue(undefined);
+
+      await expect(
+        CheckoutSessionService.completeSession("sess-uuid", "tok"),
+      ).rejects.toMatchObject({
+        code: CheckoutErrorCode.INVALID_SESSION_STATE,
+        status: 409,
+      });
+
+      expect(repo.updateSession).toHaveBeenCalledWith(
+        "sess-uuid",
+        expect.objectContaining({ status: CheckoutSessionStatus.COMPLETED }),
+        CheckoutSessionStatus.PENDING,
+      );
+      expect(auditSpy.mock.calls.some(([event]) =>
+        typeof event !== "string" && event.action === "checkout.paid" && event.status === "success"
+      )).toBe(false);
     });
 
     it("throws INVALID_SESSION_STATE when already completed", async () => {
@@ -217,6 +243,7 @@ describe("CheckoutSessionService", () => {
           status: CheckoutSessionStatus.FAILED,
           metadata: { failureReason: "declined" },
         }),
+        CheckoutSessionStatus.PENDING,
       );
       expect(result.status).toBe(CheckoutSessionStatus.FAILED);
     });
@@ -233,6 +260,7 @@ describe("CheckoutSessionService", () => {
       expect(repo.updateSession).toHaveBeenCalledWith(
         "sess-uuid",
         expect.objectContaining({ metadata: { failureReason: "Unknown" } }),
+        CheckoutSessionStatus.PENDING,
       );
     });
 
@@ -258,6 +286,11 @@ describe("CheckoutSessionService", () => {
       const result = await CheckoutSessionService.cancelSession("sess-uuid");
 
       expect(result.status).toBe(CheckoutSessionStatus.CANCELLED);
+      expect(repo.updateSession).toHaveBeenCalledWith(
+        "sess-uuid",
+        expect.objectContaining({ status: CheckoutSessionStatus.CANCELLED }),
+        CheckoutSessionStatus.PENDING,
+      );
     });
 
     it("throws INVALID_SESSION_STATE when already completed", async () => {

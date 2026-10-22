@@ -18,6 +18,7 @@ jest.mock("../../middleware/rateLimiter.js", () => ({
 import express from "express";
 import request from "supertest";
 import { createGdprErasureRouter } from "../../routes/gdprErasure.js";
+import { createTestAuthorization } from "../../../test/auth.js";
 
 
 import {
@@ -65,24 +66,15 @@ function makeApp(opts: {
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 
 function asAdmin() {
-  return {
-    "x-chronopay-user-id": "admin-user-1",
-    "x-chronopay-role": "admin",
-  };
+  return { Authorization: createTestAuthorization("admin-user-1", "admin") };
 }
 
 function asAuditor() {
-  return {
-    "x-chronopay-user-id": "auditor-user-1",
-    "x-chronopay-role": "auditor",
-  };
+  return { Authorization: createTestAuthorization("auditor-user-1", "auditor") };
 }
 
 function asCustomer() {
-  return {
-    "x-chronopay-user-id": "customer-1",
-    "x-chronopay-role": "customer",
-  };
+  return { Authorization: createTestAuthorization("customer-1", "customer") };
 }
 
 // ─── Authentication & authorization ──────────────────────────────────────────
@@ -259,7 +251,7 @@ describe("POST /api/v1/gdpr/erase — success", () => {
     const { app } = makeApp({});
     const res = await request(app)
       .post("/api/v1/gdpr/erase")
-      .set({ "x-chronopay-user-id": "admin-xyz", "x-chronopay-role": "admin" })
+      .set({ Authorization: createTestAuthorization("admin-xyz", "admin") })
       .send({ subjectId: "user-123" });
 
     expect(res.body.receipt.requestedBy).toBe("admin-xyz");
