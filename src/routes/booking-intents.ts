@@ -200,6 +200,14 @@ export function createBookingIntentsRouter(
     },
   );
 
+  /**
+   * Refund a booking intent.
+   *
+   * Note on `cancelledAtMs`: Non-admin callers (such as customers) cannot override
+   * the cancellation timestamp; any `cancelledAtMs` supplied by non-admins is ignored
+   * in favor of the authoritative server clock (`nowMs()`). Admins may provide a
+   * backdated `cancelledAtMs` (which must be <= server now) and such overrides are audited.
+   */
   router.post(
     "/:id/refund",
     requireFeatureFlag("CREATE_BOOKING_INTENT"),

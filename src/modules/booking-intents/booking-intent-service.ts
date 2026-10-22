@@ -34,12 +34,8 @@ import {
   type HoldFeePolicy,
 } from "../../services/holdFeePolicy.js";
 import { CheckoutSessionService } from "../../services/checkout.js";
-import { strikeService } from "../../services/strikeService.js";
-import {
-  DEFAULT_GRACE_WINDOW_SECONDS,
-  GraceWindowService,
-  getGraceWindowService,
-} from "../../services/graceWindowService.js";
+import { writeReputationScore } from "../../services/reputationWriteAudit.js";
+import { defaultAuditLogger } from "../../services/auditLogger.js";
 
 export interface CreateBookingIntentInput {
   slotId: string;
@@ -517,17 +513,46 @@ export class BookingIntentService {
       throw new BookingIntentError(403, "You are not authorized to refund this booking intent.");
     }
 
+    if (intent.refundMetadata || intent.refundedAt) {
+      throw new BookingIntentError(409, "Intent has already been refunded.");
+    }
+
     if (
       intent.status === "cancelled" ||
       intent.status === "expired" ||
-      intent.status === "hold_refunded"
+      intent.status === "hold_refunded" ||
+      intent.status === "no_show"
     ) {
       throw new BookingIntentError(409, `Cannot refund intent with status "${intent.status}".`);
     }
 
-    const cancelledAtMs = input.cancelledAtMs ?? this.nowMs();
-    if (!Number.isFinite(cancelledAtMs)) {
-      throw new BookingIntentError(400, "cancelledAtMs must be a valid number.");
+    const currentNowMs = this.nowMs();
+    let effectiveCancelledAtMs: number;
+
+    if (actor.role === "admin" && input.cancelledAtMs !== undefined) {
+      if (!Number.isFinite(input.cancelledAtMs)) {
+        throw new BookingIntentError(400, "cancelledAtMs must be a valid number.");
+      }
+      if (input.cancelledAtMs > currentNowMs) {
+        throw new BookingIntentError(400, "Admin override cancelledAtMs cannot be in the future.");
+      }
+      effectiveCancelledAtMs = input.cancelledAtMs;
+
+      defaultAuditLogger
+        .log({
+          action: "booking_intent.admin_override_cancelled_at",
+          status: "success",
+          resource: `booking_intent:${intentId}`,
+          metadata: {
+            bookingIntentId: intentId,
+            adminUserId: actor.userId,
+            overrideCancelledAtMs: effectiveCancelledAtMs,
+            serverNowMs: currentNowMs,
+          },
+        })
+        .catch(() => {});
+    } else {
+      effectiveCancelledAtMs = currentNowMs;
     }
 
     const amountCents = this.resolveIntentPrice(intent);
@@ -535,7 +560,7 @@ export class BookingIntentService {
       amountCents,
       startTimeMs: intent.startTime,
       endTimeMs: intent.endTime,
-      nowMs: cancelledAtMs,
+      nowMs: effectiveCancelledAtMs,
       curve: "linear",
     });
 
