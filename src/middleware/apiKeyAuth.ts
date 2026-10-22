@@ -23,13 +23,47 @@ export interface PartnerTiersConfig {
   tiers: Record<string, string[]>;
 }
 
-export function readPartnerTiersConfig(): PartnerTiersConfig {
+function validatePartnerTiersConfig(config: unknown): PartnerTiersConfig {
+  if (config === null || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("Partner tiers config must be a JSON object");
+  }
+
+  const tiers = (config as Record<string, unknown>).tiers;
+  if (tiers === null || typeof tiers !== "object" || Array.isArray(tiers)) {
+    throw new Error("Partner tiers config must contain a tiers object");
+  }
+
+  const validatedTiers: Record<string, string[]> = {};
+  for (const [tier, endpoints] of Object.entries(tiers)) {
+    if (!tier || !Array.isArray(endpoints) || !endpoints.every(endpoint => typeof endpoint === "string")) {
+      throw new Error(`Partner tier "${tier}" must have an array of endpoint strings`);
+    }
+    validatedTiers[tier] = endpoints;
+  }
+
+  return { tiers: validatedTiers };
+}
+
+function loadPartnerTiersConfig(): PartnerTiersConfig {
+  let parsed: unknown;
   try {
     const raw = fs.readFileSync(PARTNER_TIERS_CONFIG_URL, "utf8");
-    return JSON.parse(raw) as PartnerTiersConfig;
-  } catch {
-    return { tiers: {} };
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error("Unable to load partner tiers config", { cause: error });
   }
+  return validatePartnerTiersConfig(parsed);
+}
+
+let partnerTiersConfig = loadPartnerTiersConfig();
+
+export function readPartnerTiersConfig(): PartnerTiersConfig {
+  return partnerTiersConfig;
+}
+
+export function reloadPartnerTiersConfig(): PartnerTiersConfig {
+  partnerTiersConfig = loadPartnerTiersConfig();
+  return partnerTiersConfig;
 }
 
 
@@ -94,7 +128,7 @@ export function requireApiKey(expectedApiKey?: string) {
 
       const config = readPartnerTiersConfig();
       const method = req.method;
-      const path = req.originalUrl || req.path;
+      const path = `${req.baseUrl}${req.path}`;
 
       if (!isEndpointAllowed(tier, method, path, config)) {
         defaultAuditLogger.log({
