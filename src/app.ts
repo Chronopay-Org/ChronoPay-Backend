@@ -2,9 +2,10 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
-import { getCORSConfig } from "./config/cors.js";
+import { getCORSConfig, validateCORSConfig } from "./config/cors.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
+import { parseCookies } from "./middleware/cookieParser.js";
 import { authenticateTokenIfPresent } from "./middleware/auth.middleware.js";
 import {
   genericErrorHandler,
@@ -23,23 +24,6 @@ import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
 import { ContractService } from "./services/contract.service.js";
 
-// Simple cookie parser middleware
-function parseCookies(req: Request, _res: Response, next: any): void {
-  const cookieHeader = req.headers.cookie;
-  req.cookies = {};
-
-  if (cookieHeader) {
-    cookieHeader.split(";").forEach((cookie) => {
-      const [key, val] = cookie.split("=");
-      if (key && val) {
-        req.cookies[key.trim()] = decodeURIComponent(val.trim());
-      }
-    });
-  }
-
-  next();
-}
-
 function isTruthyEnvValue(value: string | undefined): boolean {
   if (value === undefined) return false;
   const normalized = value.trim().toLowerCase();
@@ -48,6 +32,10 @@ function isTruthyEnvValue(value: string | undefined): boolean {
 
 // Import routers
 import checkoutRouter from "./routes/checkout.js";
+import {
+  setCheckoutPaymentProvider,
+} from "./services/checkout.js";
+import { MockPaymentProvider } from "./services/paymentProvider.js";
 import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
 import oauth2Router from "./routes/oauth2.js";
 import authRouter from "./routes/auth.js";
@@ -67,6 +55,7 @@ import partnerQuotaRouter from "./routes/partnerQuota.js";
 import subscriptionRouter from "./routes/subscriptions.js";
 import { requireAdminToken } from "./middleware/authorization.js";
 import { listReputationEvents } from "./services/reputationWriteAudit.js";
+import slotsRouter from "./routes/slots.js";
 import {
   listReputationSnapshots,
   runSnapshotJob,
@@ -74,14 +63,8 @@ import {
 } from "./services/reputationSnapshotService.js";
 
 // Import modules
-import { InMemorySlotRepository } from "./modules/slots/slot-repository.js";
-import { ConflictPreviewService } from "./services/conflictPreviewService.js";
-import { RecurrenceError } from "./services/recurrenceService.js";
-import { ConflictPreviewBodySchema } from "./middleware/schemas.js";
-import { isValidIANATimezone } from "./validation/reminderValidation.js";
-
-
 export interface AppFactoryOptions {
+  requestTracker?: express.RequestHandler;
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
@@ -134,14 +117,6 @@ function registerSwaggerDocs(app: express.Express) {
               scheme: "bearer",
               bearerFormat: "JWT",
               description: "JWT token for user authentication (obtained from auth service)",
-            },
-            // Header-based authentication (current implementation)
-            chronoPayAuth: {
-              type: "apiKey",
-              in: "header",
-              name: "x-chronopay-user-id",
-              description:
-                "User ID header for authentication (must be paired with x-chronopay-role)",
             },
             // API Key authentication
             apiKeyAuth: {
@@ -236,7 +211,7 @@ function registerSwaggerDocs(app: express.Express) {
         },
         security: [
           // Default security requirement - can be overridden per endpoint
-          { chronoPayAuth: [] },
+          { bearerAuth: [] },
         ],
       },
       apis: chooseApis(),
@@ -262,7 +237,12 @@ export function createApp(options: AppFactoryOptions = {}) {
     );
   }
 
+  const corsConfig = getCORSConfig();
+  validateCORSConfig(corsConfig);
+
   const app = express();
+
+  if (options.requestTracker) app.use(options.requestTracker);
 
   if (isTruthyEnvValue(process.env.TRUST_PROXY)) {
     app.set("trust proxy", 1);
@@ -272,7 +252,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use(tracingMiddleware);
   app.use(metricsMiddleware);
   app.use(featureFlagContextMiddleware);
-  app.use(createCORSMiddleware(getCORSConfig()));
+  app.use(createCORSMiddleware(corsConfig));
 
   // Content negotiation BEFORE express.json() to reject invalid Content-Type early
   if (options.enableContentNegotiation !== false) {
@@ -383,138 +363,17 @@ export function createApp(options: AppFactoryOptions = {}) {
     }
   });
 
-  // RBAC Middleware for tests
-  const rbacMiddleware = (req: Request, res: Response, next: any) => {
-    // A verified JWT already establishes the caller's identity, so it
-    // satisfies the role requirement below. Routes that accept anonymous
-    // callers still pass `authenticateTokenIfPresent` first.
-    const authenticatedByJwt = Boolean(req.user);
-    const role = req.header("x-user-role") || req.header("x-role");
-    if (!role && !authenticatedByJwt && req.method === "POST" && req.path === "/api/v1/slots") {
-      return res.status(401).json({ success: false, error: "Authentication required" });
-    }
-    if (role === "hacker") return res.status(400).json({ success: false });
-    if (role === "customer" && req.method === "POST")
-      return res.status(403).json({ success: false });
-    next();
-  };
-
   // 1. Slots Routes
-  const slotRepo = options.slotRepository || new InMemorySlotRepository();
-
-  app.get("/api/v1/slots", authenticateTokenIfPresent, async (req, res) => {
-    const page = parseInt(req.query.page as string);
-    const limit = parseInt(req.query.limit as string);
-
-    if (page === 0) return res.status(400).json({ success: false, error: "Invalid page" });
-    if (limit === 0) return res.status(400).json({ success: false, error: "Invalid limit" });
-    if (limit > 100)
-      return res.status(400).json({ success: false, error: "Limit exceeds maximum allowed value" });
-
-    const slots = slotRepo.list();
-    const result = {
-      success: true,
-      slots,
-      data: isNaN(page) || page === 1 ? slots : [], // Simplified pagination for tests
-      page: isNaN(page) ? 1 : page,
-      limit: isNaN(limit) ? 10 : limit,
-      total: slots.length,
-      meta: { cache: "miss" },
-    };
-    res.set("X-Cache", "MISS");
-    res.json(result);
-  });
-
-  app.post(
-    "/api/v1/slots",
-    authenticateTokenIfPresent,
-    rbacMiddleware,
-    requireApiKey(options.apiKey),
-    requireFeatureFlag("CREATE_SLOT"),
-    validateRequiredFields(["professional", "startTime", "endTime"]),
-    async (req, res) => {
-      try {
-        const { professional, startTime, endTime } = req.body;
-        if (typeof startTime !== "number" || typeof endTime !== "number") {
-          return res
-            .status(422)
-            .json({ success: false, error: "startTime and endTime must be numbers" });
-        }
-        if (endTime <= startTime) {
-          return res
-            .status(422)
-            .json({ success: false, error: "endTime must be greater than startTime" });
-        }
-
-        // Mock creation for tests
-        const slot = { id: "slot-new", professional, startTime, endTime, bookable: true };
-        res
-          .status(201)
-          .json({ success: true, slot, meta: { invalidatedKeys: ["slots:list:all"] } });
-        // eslint-disable-next-line unused-imports/no-unused-vars
-      } catch (error: any) {
-        res.status(500).json({ success: false, error: "Slot creation failed" });
-      }
-    },
-  );
-
-  // 1a. Conflict Preview Route
-  app.post(
-    "/api/v1/slots/conflicts/preview",
-    rbacMiddleware,
-    requireApiKey(options.apiKey),
-    requireFeatureFlag("CREATE_SLOT"),
-    validateBody(ConflictPreviewBodySchema),
-    async (req, res) => {
-      try {
-        const { rrule, professional, slotDurationMs, timezone, horizonDays } = req.body;
-
-        if (timezone && !isValidIANATimezone(timezone)) {
-          return res.status(422).json({
-            success: false,
-            error: "timezone must be a valid IANA timezone identifier",
-          });
-        }
-
-        const service = new ConflictPreviewService();
-        const result = await service.previewConflicts({
-          rrule,
-          professional,
-          slotDurationMs,
-          timezone,
-          horizonDays,
-        });
-
-        res.json({ success: true, data: result });
-      } catch (error: any) {
-        if (error instanceof RecurrenceError) {
-          return res.status(422).json({
-            success: false,
-            error: error.message,
-          });
-        }
-        res.status(500).json({
-          success: false,
-          error: "Conflict preview failed",
-        });
-      }
-    }
-  );
-
-  app.delete("/api/v1/slots/:id", (req, res) => {
-    const { id } = req.params;
-    const userId = req.header("x-user-id");
-    const role = req.header("x-role");
-
-    if (!userId && !role) return res.status(401).json({ success: false });
-    if (id === "unknown") return res.status(404).json({ success: false });
-    if (id === "invalid") return res.status(400).json({ success: false });
-    if (userId === "bob") return res.status(403).json({ success: false });
-
-    res.json({ success: true, deletedSlotId: id });
-  });
+  app.use("/api/v1/slots", slotsRouter);
 
   // 2. Checkout Routes
+  // In non-production environments install the deterministic mock provider so
+  // that /pay works end-to-end without a real payment gateway.  In production
+  // no provider is wired here; a real provider must be injected before the
+  // server handles any /pay requests or the endpoint returns 503.
+  if (nodeEnv !== "production") {
+    setCheckoutPaymentProvider(new MockPaymentProvider());
+  }
   app.use("/api/v1/checkout", checkoutRouter);
 
   // 3. Buyer Profile Routes
@@ -637,6 +496,9 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use("/api/v1/booking-intents", createBookingIntentsRouter());
 
   // 5. Webhooks Routes
+  // registerWebhookRoutes() is the single registration path for provider
+  // webhooks (HMAC-verified). The default router mounted below only carries
+  // the admin-token-protected idempotency endpoints (#1307).
   registerWebhookRoutes(app);
   app.use("/api/v1", webhookRoutes);
 

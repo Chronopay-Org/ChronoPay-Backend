@@ -18,7 +18,7 @@ jest.unstable_mockModule("../../db/pool.js", () => {
 // 2. Import modules AFTER mocking
 const { registerWebhookRoutes } = await import("../webhooks.js");
 
-function buildApp() {
+function buildApp(signingSecret: string | null = SECRET) {
   const app = express();
 
   // Capture raw body for HMAC verification (mirrors production setup)
@@ -30,13 +30,17 @@ function buildApp() {
     }),
   );
 
-  registerWebhookRoutes(app, { kycSigningSecret: SECRET });
+  registerWebhookRoutes(app, signingSecret === null ? {} : { kycSigningSecret: signingSecret });
   return app;
 }
 
 function sign(body: object): string {
+  return signWithSecret(body, SECRET);
+}
+
+function signWithSecret(body: object, secret: string): string {
   const raw = JSON.stringify(body);
-  return "sha256=" + createHmac("sha256", SECRET).update(raw).digest("hex");
+  return "sha256=" + createHmac("sha256", secret).update(raw).digest("hex");
 }
 
 describe("POST /api/v1/webhooks/kyc", () => {
@@ -400,17 +404,13 @@ describe("POST /api/v1/webhooks/kyc", () => {
 
   it("returns 500 when the KYC signing secret is not configured", async () => {
     const previous = process.env.KYC_WEBHOOK_SECRET;
+    const settlementsSecret = process.env.SETTLEMENTS_WEBHOOK_SECRET;
+    const settlementsPreviousSecret = process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS;
     delete process.env.KYC_WEBHOOK_SECRET;
+    process.env.SETTLEMENTS_WEBHOOK_SECRET = SECRET;
+    process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS = "old-settlements-secret";
     try {
-      const unsecuredApp = express();
-      unsecuredApp.use(
-        express.json({
-          verify: (req: any, _res, buf) => {
-            req.rawBody = buf;
-          },
-        }),
-      );
-      registerWebhookRoutes(unsecuredApp, {});
+      const unsecuredApp = buildApp(null);
 
       const payload = { supplierId, kycRef: "ref-123", status: "verified" };
       // Even a well-formed signature cannot verify without a configured secret.
@@ -425,6 +425,69 @@ describe("POST /api/v1/webhooks/kyc", () => {
     } finally {
       if (previous === undefined) delete process.env.KYC_WEBHOOK_SECRET;
       else process.env.KYC_WEBHOOK_SECRET = previous;
+      if (settlementsSecret === undefined) delete process.env.SETTLEMENTS_WEBHOOK_SECRET;
+      else process.env.SETTLEMENTS_WEBHOOK_SECRET = settlementsSecret;
+      if (settlementsPreviousSecret === undefined)
+        delete process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS;
+      else process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS = settlementsPreviousSecret;
+    }
+  });
+
+  it("rejects a signature made with the settlements previous secret", async () => {
+    const settlementsPreviousSecret = process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS;
+    const kycPreviousSecret = process.env.KYC_WEBHOOK_SECRET_PREVIOUS;
+    process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS = "old-settlements-secret";
+    delete process.env.KYC_WEBHOOK_SECRET_PREVIOUS;
+    try {
+      const payload = { supplierId, kycRef: "ref-123", status: "verified" };
+      const res = await request(app)
+        .post("/api/v1/webhooks/kyc")
+        .set("x-webhook-signature", signWithSecret(payload, "old-settlements-secret"))
+        .send(payload);
+
+      expect(res.status).toBe(403);
+    } finally {
+      if (settlementsPreviousSecret === undefined)
+        delete process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS;
+      else process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS = settlementsPreviousSecret;
+      if (kycPreviousSecret === undefined) delete process.env.KYC_WEBHOOK_SECRET_PREVIOUS;
+      else process.env.KYC_WEBHOOK_SECRET_PREVIOUS = kycPreviousSecret;
+    }
+  });
+
+  it("accepts a signature made with the KYC previous secret during rotation", async () => {
+    const kycPreviousSecret = process.env.KYC_WEBHOOK_SECRET_PREVIOUS;
+    process.env.KYC_WEBHOOK_SECRET_PREVIOUS = "old-kyc-secret";
+    try {
+      mockQuery.mockImplementation(async (sql: string) => {
+        if (sql.includes("SELECT id, email, kyc_status")) {
+          return {
+            rowCount: 1,
+            rows: [
+              {
+                id: supplierId,
+                email: "supplier@example.com",
+                kyc_status: "pending",
+                kyc_ref: null,
+              },
+            ],
+          };
+        }
+        if (sql.includes("UPDATE users SET kyc_status")) return { rowCount: 1, rows: [] };
+        return { rowCount: 0, rows: [] };
+      });
+
+      const payload = { supplierId, kycRef: "ref-123", status: "verified" };
+      const res = await request(app)
+        .post("/api/v1/webhooks/kyc")
+        .set("x-webhook-signature", signWithSecret(payload, "old-kyc-secret"))
+        .send(payload);
+
+      expect(res.status).toBe(200);
+    } finally {
+      mockQuery.mockReset();
+      if (kycPreviousSecret === undefined) delete process.env.KYC_WEBHOOK_SECRET_PREVIOUS;
+      else process.env.KYC_WEBHOOK_SECRET_PREVIOUS = kycPreviousSecret;
     }
   });
 

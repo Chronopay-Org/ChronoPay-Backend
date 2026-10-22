@@ -21,6 +21,7 @@ import {
   SLOT_ID_PATTERN,
   parseCreateBookingIntentBody,
   type AutoRefundResult,
+  type BookingIntentServiceOptions,
   type CreateBookingIntentInput,
   type CreateRecurringBookingInput,
 } from "../booking-intent-service.js";
@@ -45,6 +46,7 @@ import {
 } from "../../../services/reputationWriteAudit.js";
 import type { FxRateProvider } from "../../../services/fxRateProvider.js";
 import type { HoldFeePolicyRegistry } from "../../../services/holdFeePolicy.js";
+import { strikeService } from "../../../services/strikeService.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -118,6 +120,7 @@ function createFixture(
   slots: SlotRecord[] = [bookableSlot()],
   fxRateProvider?: FxRateProvider,
   holdFeeRegistry?: HoldFeePolicyRegistry,
+  options?: BookingIntentServiceOptions,
 ) {
   const slotRepo = new InMemorySlotRepository(slots);
   const intentRepo = new InMemoryBookingIntentRepository();
@@ -129,6 +132,7 @@ function createFixture(
     undefined,
     holdFeeRegistry,
     fxRateProvider,
+    options,
   );
   return { slotRepo, intentRepo, service };
 }
@@ -137,7 +141,10 @@ function isBookable(slotRepo: InMemorySlotRepository, slotId: string): boolean {
   return slotRepo.findById(slotId)?.bookable === true;
 }
 
-function statusOf(intentRepo: InMemoryBookingIntentRepository, id: string): BookingIntentStatus | undefined {
+function statusOf(
+  intentRepo: InMemoryBookingIntentRepository,
+  id: string,
+): BookingIntentStatus | undefined {
   return intentRepo.findById(id)?.status;
 }
 
@@ -188,6 +195,7 @@ const fxProvider = (rate: number, onError?: () => never): FxRateProvider => ({
 beforeEach(() => {
   jest.spyOn(Date, "now").mockReturnValue(NOW_MS);
   _resetReputationEventStore();
+  strikeService.resetState();
 });
 
 afterEach(() => {
@@ -237,7 +245,10 @@ describe("parseCreateBookingIntentBody — CreateBookingIntentInput", () => {
 
   it("accepts a note of exactly 500 characters (inclusive boundary)", () => {
     const note = "a".repeat(500);
-    const parsed = parseCreateBookingIntentBody({ slotId: SLOT_ALICE, note }) as CreateBookingIntentInput;
+    const parsed = parseCreateBookingIntentBody({
+      slotId: SLOT_ALICE,
+      note,
+    }) as CreateBookingIntentInput;
 
     expect(parsed.note).toHaveLength(500);
   });
@@ -257,14 +268,17 @@ describe("parseCreateBookingIntentBody — CreateBookingIntentInput", () => {
     expect(parseCreateBookingIntentBody({ slotId: upper })).toEqual({ slotId: upper });
   });
 
-  it.each(["USD", "EUR", "GBP", "XLM"] as const)("accepts the supported buyerCurrency %s", (currency) => {
-    const parsed = parseCreateBookingIntentBody({
-      slotId: SLOT_ALICE,
-      buyerCurrency: currency,
-    }) as CreateBookingIntentInput;
+  it.each(["USD", "EUR", "GBP", "XLM"] as const)(
+    "accepts the supported buyerCurrency %s",
+    (currency) => {
+      const parsed = parseCreateBookingIntentBody({
+        slotId: SLOT_ALICE,
+        buyerCurrency: currency,
+      }) as CreateBookingIntentInput;
 
-    expect(parsed.buyerCurrency).toBe(currency);
-  });
+      expect(parsed.buyerCurrency).toBe(currency);
+    },
+  );
 
   it.each([
     ["a non-object body", null, "Booking intent payload must be a JSON object."],
@@ -325,9 +339,9 @@ describe("parseCreateBookingIntentBody — CreateBookingIntentInput", () => {
   });
 
   it("rejects a note longer than 500 characters", () => {
-    expect(() => parseCreateBookingIntentBody({ slotId: SLOT_ALICE, note: "a".repeat(501) })).toThrow(
-      new BookingIntentError(400, "note must be 500 characters or fewer."),
-    );
+    expect(() =>
+      parseCreateBookingIntentBody({ slotId: SLOT_ALICE, note: "a".repeat(501) }),
+    ).toThrow(new BookingIntentError(400, "note must be 500 characters or fewer."));
   });
 
   it.each([
@@ -343,7 +357,10 @@ describe("parseCreateBookingIntentBody — CreateBookingIntentInput", () => {
   });
 
   it.each(["standard", "refundable_hold"] as const)("accepts bookingType %s", (bookingType) => {
-    const parsed = parseCreateBookingIntentBody({ slotId: SLOT_ALICE, bookingType }) as CreateBookingIntentInput;
+    const parsed = parseCreateBookingIntentBody({
+      slotId: SLOT_ALICE,
+      bookingType,
+    }) as CreateBookingIntentInput;
     expect(parsed.bookingType).toBe(bookingType);
   });
 
@@ -426,7 +443,9 @@ describe("parseCreateBookingIntentBody — CreateRecurringBookingInput", () => {
   });
 
   it("leaves the optional recurring fields undefined when they are absent", () => {
-    const parsed = parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1 }) as CreateRecurringBookingInput;
+    const parsed = parseCreateBookingIntentBody({
+      rrule: RRULE_DAILY_1,
+    }) as CreateRecurringBookingInput;
 
     expect(parsed.note).toBeUndefined();
     expect(parsed.bookingType).toBeUndefined();
@@ -484,19 +503,24 @@ describe("parseCreateBookingIntentBody — CreateRecurringBookingInput", () => {
     expect(() => parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, note: "   " })).toThrow(
       new BookingIntentError(400, "note cannot be empty when provided."),
     );
-    expect(() => parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, note: "a".repeat(501) })).toThrow(
-      new BookingIntentError(400, "note must be 500 characters or fewer."),
-    );
+    expect(() =>
+      parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, note: "a".repeat(501) }),
+    ).toThrow(new BookingIntentError(400, "note must be 500 characters or fewer."));
   });
 
   it("applies the same bookingType/holdDeadlineMs/buyerCurrency rules in the recurring branch", () => {
-    expect(() => parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, bookingType: "premium" })).toThrow(
-      new BookingIntentError(400, "Invalid bookingType."),
-    );
-    expect(() => parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, holdDeadlineMs: "soon" })).toThrow(
-      new BookingIntentError(400, "holdDeadlineMs must be a valid number."),
-    );
-    expect(() => parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, buyerCurrency: "JPY" })).toThrow(
+    expect(() =>
+      parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, bookingType: "premium" }),
+    ).toThrow(new BookingIntentError(400, "Invalid bookingType."));
+    expect(() =>
+      parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, holdDeadlineMs: "soon" }),
+    ).toThrow(new BookingIntentError(400, "holdDeadlineMs must be a valid number."));
+    expect(() =>
+      parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, holdDeadlineMs: Number.NaN }),
+    ).toThrow(new BookingIntentError(400, "holdDeadlineMs must be a valid number."));
+    expect(() =>
+      parseCreateBookingIntentBody({ rrule: RRULE_DAILY_1, buyerCurrency: "JPY" }),
+    ).toThrow(
       new BookingIntentError(400, "Invalid buyerCurrency. Must be one of USD, EUR, GBP, XLM."),
     );
   });
@@ -610,10 +634,16 @@ describe("BookingIntentService.createIntent — CreateBookingIntentInput success
     ]);
     // A confirmed intent on the same slot counts as demand but does not block
     // a new buyer: `findBySlotId` only reports pending / hold_placed intents.
-    const confirmed = await seedIntent(intentRepo, { slotId: SLOT_ALICE, customerId: "someone-else" });
+    const confirmed = await seedIntent(intentRepo, {
+      slotId: SLOT_ALICE,
+      customerId: "someone-else",
+    });
     intentRepo.updateStatus(confirmed.id, "confirmed");
     // A terminal intent on the same slot must not be counted.
-    const expired = await seedIntent(intentRepo, { slotId: SLOT_ALICE, customerId: "someone-else-2" });
+    const expired = await seedIntent(intentRepo, {
+      slotId: SLOT_ALICE,
+      customerId: "someone-else-2",
+    });
     intentRepo.updateStatus(expired.id, "expired");
 
     const intent = await service.createIntent({ slotId: SLOT_ALICE }, customer);
@@ -887,7 +917,13 @@ describe("BookingIntentService reads", () => {
 // ─── Primary state transitions ────────────────────────────────────────────────
 
 describe("BookingIntentService state transitions", () => {
-  const TERMINAL: BookingIntentStatus[] = ["cancelled", "expired", "hold_refunded", "no_show", "firm"];
+  const TERMINAL: BookingIntentStatus[] = [
+    "cancelled",
+    "expired",
+    "hold_refunded",
+    "no_show",
+    "firm",
+  ];
 
   async function pricedFixture() {
     const fixture = createFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
@@ -928,9 +964,7 @@ describe("BookingIntentService state transitions", () => {
       const error = captureSyncError(() => service.confirmIntent(intent.id, otherCustomer));
 
       expect(error?.status).toBe(403);
-      expect(error?.message).toBe(
-        "Only the intent owner or admin can confirm a booking intent.",
-      );
+      expect(error?.message).toBe("Only the intent owner or admin can confirm a booking intent.");
     });
 
     it("throws 404 for an unknown intent id", () => {
@@ -1194,8 +1228,26 @@ describe("BookingIntentService state transitions", () => {
   });
 
   describe("markNoShow", () => {
+    // Slot started two hours ago, so the 15-minute grace window has elapsed
+    // and the no-show is eligible. Explicit grace keeps the fixture independent
+    // of the process-wide grace-window singleton.
+    const STARTED_MS = NOW_MS - 2 * HOUR_MS;
+    const ENDED_MS = STARTED_MS + HOUR_MS;
+    const GRACE_MS = 15 * 60 * 1000;
+
     async function confirmedIntent() {
-      const fixture = createFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
+      const fixture = createFixture(
+        [
+          bookableSlot({
+            startTime: STARTED_MS,
+            endTime: ENDED_MS,
+            pricingStrategy: FIXED_PRICING,
+          }),
+        ],
+        undefined,
+        undefined,
+        { noShowGraceMs: GRACE_MS },
+      );
       const intent = await fixture.service.createIntent({ slotId: SLOT_ALICE }, customer);
       fixture.service.confirmIntent(intent.id, customer);
       return { ...fixture, intent };
@@ -1209,7 +1261,8 @@ describe("BookingIntentService state transitions", () => {
       expect(result.status).toBe("no_show");
       expect(result.intent.status).toBe("no_show");
       expect(result.forfeitAmountCents).toBe(200);
-      expect(result.reputationDelta).toBe(-1);
+      expect(result.strikeId).toEqual(expect.any(String));
+      expect(result.autoSuspended).toBe(false);
       expect(result.reason).toBe("Buyer no-show");
       expect(result.buyerId).toBe("customer-1");
       expect(result.supplierId).toBe("alice");
@@ -1217,29 +1270,25 @@ describe("BookingIntentService state transitions", () => {
       expect(statusOf(intentRepo, intent.id)).toBe("no_show");
     });
 
-    it("appends a no_show reputation event for the booking", async () => {
+    it("issues exactly one buyer strike and writes no supplier reputation event", async () => {
       const { service, intent } = await confirmedIntent();
 
-      await service.markNoShow(intent.id, alice, { forfeitRatio: 0.5 });
+      const result = await service.markNoShow(intent.id, alice, { forfeitRatio: 0.5 });
 
-      const { events, total } = await listReputationEvents({ supplierId: "customer-1" });
-      expect(total).toBe(1);
-      expect(events[0]).toMatchObject({
-        supplierId: "customer-1",
-        actorId: "alice",
-        cause: "no_show",
-        causeId: intent.id,
-        delta: -1,
-        scoreBefore: 0,
-        scoreAfter: -1,
-      });
-      expect(events[0].metadata).toMatchObject({
+      const buyerStrikes = strikeService.getBuyerStrikes("customer-1");
+      expect(buyerStrikes).toHaveLength(1);
+      expect(buyerStrikes[0]).toMatchObject({
         buyerId: "customer-1",
-        supplierId: "alice",
-        bookingIntentId: intent.id,
-        forfeitRatio: 0.5,
-        forfeitAmountCents: 500,
+        intentId: intent.id,
+        slotId: SLOT_ALICE,
+        reason: "Buyer no-show",
       });
+      expect(result.strikeId).toBe(buyerStrikes[0].id);
+
+      // Regression (#1322): the old implementation recorded the buyer as a
+      // supplier with hard-coded scores. No reputation event may be written.
+      expect((await listReputationEvents({ supplierId: "customer-1" })).total).toBe(0);
+      expect((await listReputationEvents({ supplierId: "alice" })).total).toBe(0);
     });
 
     it("accepts a supplier-requested forfeit ratio of 1 (inclusive upper boundary)", async () => {
@@ -1513,6 +1562,8 @@ describe("BookingIntentService.createRecurringIntents — CreateRecurringBooking
     const created = report.successes[0];
     expect(created.status).toBe("pending");
     expect(created.bookingType).toBe("standard");
+    expect(created.holdPlacedAt).toBeUndefined();
+    expect(created.holdUntilMs).toBeUndefined();
     expect(created.note).toBe("weekly session");
     expect(created.customerId).toBe("customer-1");
     expect(created.slotId).toBe(SLOT_ALICE);
@@ -1543,6 +1594,93 @@ describe("BookingIntentService.createRecurringIntents — CreateRecurringBooking
 
     expect(report.successes).toHaveLength(2);
     expect(report.failures).toEqual([]);
+  });
+
+  it("materializes each refundable occurrence with its own price snapshot", async () => {
+    const { service } = createFixture([
+      occurrenceSlot(OCC_1_MS, { pricingStrategy: FIXED_PRICING }),
+      occurrenceSlot(OCC_2_MS, {
+        id: SLOT_BOB,
+        professional: "bob",
+        pricingStrategy: { ...FIXED_PRICING, basePrice: 1500 },
+      }),
+    ]);
+
+    const report = await service.createRecurringIntents(
+      {
+        rrule: RRULE_DAILY_2,
+        bookingType: "refundable_hold",
+        holdDeadlineMs: HOLD_DEADLINE_MS,
+      },
+      customer,
+    );
+
+    expect(report.failures).toEqual([]);
+    expect(report.successes).toHaveLength(2);
+    expect(report.successes).toEqual([
+      expect.objectContaining({
+        bookingType: "refundable_hold",
+        status: "hold_placed",
+        holdPlacedAt: NOW_ISO,
+        holdUntilMs: HOLD_DEADLINE_MS,
+        pricingSnapshot: {
+          strategyId: "fixed",
+          resolvedPrice: 1000,
+          basePrice: 1000,
+          slotStartMs: OCC_1_MS,
+          nowMs: NOW_MS,
+          activeBookings: 0,
+          capacity: 1,
+          config: { strategy: "fixed" },
+        },
+      }),
+      expect.objectContaining({
+        bookingType: "refundable_hold",
+        status: "hold_placed",
+        holdPlacedAt: NOW_ISO,
+        holdUntilMs: HOLD_DEADLINE_MS,
+        pricingSnapshot: {
+          strategyId: "fixed",
+          resolvedPrice: 1500,
+          basePrice: 1500,
+          slotStartMs: OCC_2_MS,
+          nowMs: NOW_MS,
+          activeBookings: 0,
+          capacity: 1,
+          config: { strategy: "fixed" },
+        },
+      }),
+    ]);
+
+    expect(service.getHoldStatus(report.successes[0].id, customer)).toMatchObject({
+      bookingType: "refundable_hold",
+      status: "hold_placed",
+      refundableNow: true,
+      refundAmountCents: 1000,
+    });
+
+    const refunded = service.cancelIntent(report.successes[0].id, customer);
+    expect(refunded.refundMetadata?.refundedAmountCents).toBe(1000);
+    await expect(
+      service.markNoShow(report.successes[1].id, actor("bob", "professional")),
+    ).resolves.toMatchObject({ forfeitAmountCents: 300 });
+  });
+
+  it("does not create a pricing snapshot when a recurring slot has no pricing strategy", async () => {
+    const { service } = createFixture([occurrenceSlot(OCC_1_MS)]);
+
+    const report = await service.createRecurringIntents(
+      {
+        rrule: RRULE_DAILY_1,
+        bookingType: "refundable_hold",
+        holdDeadlineMs: HOLD_DEADLINE_MS,
+      },
+      customer,
+    );
+
+    expect(report.successes).toHaveLength(1);
+    expect(report.successes[0].pricingSnapshot).toBeUndefined();
+    expect(service.getHoldStatus(report.successes[0].id, customer).refundAmountCents).toBe(0);
   });
 
   it("records a failure for a non-transferable bundle without aborting the batch", async () => {
