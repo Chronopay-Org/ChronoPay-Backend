@@ -54,6 +54,7 @@ export const ERROR_CODES = {
   // --- State / lifecycle (404 / 409 / 422) ---
   NOT_FOUND: { status: 404, code: "NOT_FOUND" },
   CONFLICT: { status: 409, code: "CONFLICT" },
+  HOLD_EXPIRED: { status: 409, code: "HOLD_EXPIRED" },
   UNPROCESSABLE_ENTITY: { status: 422, code: "UNPROCESSABLE_ENTITY" },
   BUNDLE_EXPIRED: { status: 422, code: "BUNDLE_EXPIRED" },
   BUNDLE_NOT_TRANSFERABLE: { status: 422, code: "BUNDLE_NOT_TRANSFERABLE" },

@@ -213,6 +213,14 @@ export class BookingIntentService {
     const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
 
     const bookingType = input.bookingType ?? "standard";
+    if (bookingType === "refundable_hold") {
+      if (input.holdDeadlineMs === undefined || input.holdDeadlineMs === null) {
+        throw new BookingIntentError(400, "holdDeadlineMs is required for refundable_hold bookings.");
+      }
+      if (input.holdDeadlineMs <= this.nowMs()) {
+        throw new BookingIntentError(400, "holdDeadlineMs must be in the future for refundable_hold bookings.");
+      }
+    }
     const status = bookingType === "refundable_hold" ? "hold_placed" : "pending";
     const holdPlacedAt = bookingType === "refundable_hold" ? this.now() : undefined;
     const holdUntilMs = bookingType === "refundable_hold" ? input.holdDeadlineMs : undefined;
@@ -346,6 +354,15 @@ export class BookingIntentService {
     const canConfirm = intent.status === "pending" || intent.status === "hold_placed";
     if (!canConfirm) {
       throw new BookingIntentError(409, `Cannot confirm intent with status "${intent.status}".`);
+    }
+
+    if (
+      intent.bookingType === "refundable_hold" &&
+      intent.holdUntilMs !== undefined &&
+      intent.holdUntilMs <= this.nowMs()
+    ) {
+      this.expireIntent(intentId);
+      throw new BookingIntentError(409, "Hold has expired.", ERROR_CODES.HOLD_EXPIRED.code);
     }
 
     return this.bookingIntentRepository.updateStatus(intentId, "confirmed");
