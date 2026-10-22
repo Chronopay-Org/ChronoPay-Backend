@@ -395,7 +395,7 @@ describe("concurrent booking-intent creates — one active per slot", () => {
 
     // Create the first intent and cancel it (terminal state releases the slot).
     const first = await service.createIntent({ slotId: ALICE_SLOT_ID }, actor);
-    service.cancelIntent(first.id, actor);
+    await service.cancelIntent(first.id, actor);
 
     // A second create for the same slot should now succeed because the prior
     // intent is no longer active (the in-memory analogue of the partial index).

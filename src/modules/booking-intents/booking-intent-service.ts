@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { AuthContext } from "../../middleware/auth.js";
 import type { SlotRepository } from "../slots/slot-repository.js";
 import type {
@@ -268,9 +267,36 @@ export class BookingIntentService {
       throw new BookingIntentError(409, "Selected slot already has an active booking intent.");
     }
 
-    const pricingSnapshot = slot.pricingStrategy
-      ? resolvePricingSnapshot(slot, await this.bookingIntentRepository.listAll(), this.nowMs())
-      : undefined;
+    let pricingSnapshot: PricingSnapshot | undefined;
+    if (slot.pricingStrategy) {
+      const ps = slot.pricingStrategy;
+      const allIntents = await this.bookingIntentRepository.listAll();
+      const activeBookings = allIntents.filter(
+        (i) => i.slotId === slot.id && (i.status === "pending" || i.status === "confirmed"),
+      ).length;
+      const capacity = ps.capacity ?? 1;
+      const currentMs = this.nowMs();
+
+      const result = resolvePrice(ps.strategyId, {
+        basePrice: ps.basePrice,
+        slotStartMs: slot.startTime,
+        nowMs: currentMs,
+        activeBookings,
+        capacity,
+        config: ps.config,
+      });
+
+      pricingSnapshot = {
+        strategyId: result.strategyId,
+        resolvedPrice: result.price,
+        basePrice: ps.basePrice,
+        slotStartMs: slot.startTime,
+        nowMs: currentMs,
+        activeBookings,
+        capacity,
+        config: ps.config,
+      };
+    }
 
     const cancellationPolicySnapshot = this.captureCancellationPolicySnapshot();
     const holdFeePolicySnapshot = this.captureHoldFeePolicySnapshot(slot.professional);
@@ -287,8 +313,9 @@ export class BookingIntentService {
           targetCurrency: input.buyerCurrency,
           capturedAtMs: this.nowMs(),
         };
-      } catch (err: any) {
-        throw new BookingIntentError(500, err.message ?? "Failed to fetch FX rate");
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Failed to fetch FX rate";
+        throw new BookingIntentError(500, message);
       }
     }
 
@@ -320,8 +347,8 @@ export class BookingIntentService {
     return intent;
   }
 
-  getIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async getIntent(intentId: string, actor: AuthContext): Promise<BookingIntentRecord> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -333,7 +360,7 @@ export class BookingIntentService {
     return intent;
   }
 
-  listIntents(actor: AuthContext): BookingIntentRecord[] {
+  async listIntents(actor: AuthContext): Promise<BookingIntentRecord[]> {
     if (actor.role === "admin") {
       return this.bookingIntentRepository.listAll();
     }
@@ -349,8 +376,11 @@ export class BookingIntentService {
       bookingIntentRepository: this.bookingIntentRepository,
       now: this.now,
       assertBundleTransferable: (slot, act) =>
-        this.bundleTransferabilityService.assertBundleTransferable(slot, act as AuthContext),
-      nowMs: this.nowMs,
+        this.bundleTransferabilityService.assertBundleTransferable(slot, {
+          userId: String(act.userId),
+          role: (act.role ?? "customer") as AuthContext["role"],
+          claims: {} as import("../../utils/jwt.js").VerifiedJwtPayload,
+        }),
       capturePolicySnapshots: (professionalId) => ({
         cancellationPolicySnapshot: this.captureCancellationPolicySnapshot(),
         holdFeePolicySnapshot: this.captureHoldFeePolicySnapshot(professionalId),
@@ -358,7 +388,10 @@ export class BookingIntentService {
     });
 
     try {
-      const report = await engine.createRecurringBookings(input.rrule, actor as never, {
+      const recurringActor: import("../../services/schedulingService.js").RecurringBookingActor = {
+        ...actor,
+      };
+      const report = await engine.createRecurringBookings(input.rrule, recurringActor, {
         note: input.note,
         bookingType: input.bookingType,
         holdDeadlineMs: input.holdDeadlineMs,
@@ -372,8 +405,8 @@ export class BookingIntentService {
     }
   }
 
-  confirmIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async confirmIntent(intentId: string, actor: AuthContext): Promise<BookingIntentRecord> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -393,8 +426,8 @@ export class BookingIntentService {
     return this.bookingIntentRepository.updateStatus(intentId, "confirmed");
   }
 
-  cancelIntent(intentId: string, actor: AuthContext): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async cancelIntent(intentId: string, actor: AuthContext): Promise<BookingIntentRecord> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -425,15 +458,15 @@ export class BookingIntentService {
           status: "cancelled",
         };
 
-    const updated = this.bookingIntentRepository.update(intentId, updates);
+    const updated = await this.bookingIntentRepository.update(intentId, updates);
 
     this.releaseSlotBestEffort(intent.slotId);
 
     return updated;
   }
 
-  previewCancel(intentId: string, actor: AuthContext): RefundBreakdown {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async previewCancel(intentId: string, actor: AuthContext): Promise<RefundBreakdown> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -456,10 +489,10 @@ export class BookingIntentService {
    * Applies the same ownership rule as cancelIntent: only the intent owner or
    * an admin may read it.
    */
-  getHoldStatus(
+  async getHoldStatus(
     intentId: string,
     actor: AuthContext,
-  ): {
+  ): Promise<{
     intentId: string;
     bookingType: BookingIntentRecord["bookingType"];
     status: BookingIntentRecord["status"];
@@ -468,8 +501,8 @@ export class BookingIntentService {
     holdPlacedAt: string | undefined;
     refundableNow: boolean;
     refundAmountCents: number;
-  } {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  }> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -493,18 +526,18 @@ export class BookingIntentService {
     };
   }
 
-  refundIntent(
+  async refundIntent(
     intentId: string,
     actor: AuthContext,
     input: { reason?: string; cancelledAtMs?: number } = {},
-  ): {
+  ): Promise<{
     intent: BookingIntentRecord;
     refundAmountCents: number;
     refundRatio: number;
     consumedRatio: number;
     reason: string;
-  } {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  }> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -565,7 +598,7 @@ export class BookingIntentService {
     });
 
     const reason = (input.reason ?? "partial_refund").trim() || "partial_refund";
-    const updated = this.bookingIntentRepository.update(intentId, {
+    const updated = await this.bookingIntentRepository.update(intentId, {
       status: "cancelled",
       refundedAt: this.now(),
       refundMetadata: {
@@ -586,8 +619,8 @@ export class BookingIntentService {
     };
   }
 
-  expireIntent(intentId: string): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async expireIntent(intentId: string): Promise<BookingIntentRecord> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -597,7 +630,7 @@ export class BookingIntentService {
       throw new BookingIntentError(409, `Cannot expire intent with status "${intent.status}".`);
     }
 
-    const updated = this.bookingIntentRepository.updateStatus(intentId, "expired");
+    const updated = await this.bookingIntentRepository.updateStatus(intentId, "expired");
 
     this.releaseSlotBestEffort(intent.slotId);
 
@@ -611,13 +644,13 @@ export class BookingIntentService {
     return 0;
   }
 
-  autoRefundHold(intentId: string): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
+  async autoRefundHold(intentId: string): Promise<BookingIntentRecord> {
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
     const refundAmount = this.resolveIntentPrice(intent);
-    const updated = this.bookingIntentRepository.update(intentId, {
+    const updated = await this.bookingIntentRepository.update(intentId, {
       status: "hold_refunded",
       refundedAt: this.now(),
       refundMetadata: {
@@ -657,7 +690,7 @@ export class BookingIntentService {
     autoSuspended: boolean;
     reason: string;
   }> {
-    const intent = this.bookingIntentRepository.findById(intentId);
+    const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
     }
@@ -695,17 +728,7 @@ export class BookingIntentService {
     const reason = (input.reason ?? "Buyer no-show").trim();
     const normalizedReason = reason.length > 0 ? reason : "Buyer no-show";
 
-    // Issue the strike first: if it throws, the intent keeps its confirmed
-    // status and the slot stays reserved (no half-applied transition).
-    const strikeOutcome = await this.strikeService.issueStrike({
-      buyerId: intent.customerId,
-      intentId: intent.id,
-      slotId: intent.slotId,
-      reason: normalizedReason,
-      issuedAt: this.nowMs(),
-    });
-
-    const updated = this.bookingIntentRepository.update(intentId, {
+    const updated = await this.bookingIntentRepository.update(intentId, {
       status: "no_show",
     });
 
