@@ -1,6 +1,7 @@
 import request from "supertest";
 import { createApp } from "../../app.js";
 import { setFeatureFlagsFromEnv } from "../../flags/service.js";
+import { createTestAuthorization } from "../../../test/auth.js";
 
 // DEFAULT_SLOTS in InMemorySlotRepository. Only these start times are bookable.
 const SLOT_A_START = "2030-03-17T17:46:40.000Z"; // slot-1111... bookable
@@ -15,8 +16,7 @@ describe("POST /api/v1/booking-intents (recurring / RRULE)", () => {
   const app = createApp({ apiKey: "test-api-key" });
 
   const headers = (userId = "recurring-buyer-1", role = "customer") => ({
-    "x-chronopay-user-id": userId,
-    "x-chronopay-role": role,
+    Authorization: createTestAuthorization(userId, role),
   });
 
   const RULE_SLOT_A = `DTSTART:20300317T174640Z\nRRULE:FREQ=DAILY;COUNT=1`;

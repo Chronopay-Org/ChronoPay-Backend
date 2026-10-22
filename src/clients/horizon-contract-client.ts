@@ -17,6 +17,7 @@ import {
   RateLimitRetryConfig,
 } from "../utils/retry-policy.js";
 import { recordRateLimitRemaining, recordQueueDepth } from "../metrics/horizonMetrics.js";
+import { AmountUtils } from "../utils/amount.js";
 
 export interface StellarAsset {
   asset_type: "native" | "credit_alphanum4" | "credit_alphanum12";
@@ -1346,17 +1347,28 @@ export class HorizonContractClient implements IContractClient {
    */
   async findPathPaymentQuote(options: PathPaymentQuoteOptions): Promise<ExecutedPathPaymentQuote> {
     const rawSourceAmount = options.sourceAmount;
-    let numericSourceAmount: number;
+    let sourceAmountStroops: bigint;
     if (typeof rawSourceAmount === "number") {
-      numericSourceAmount = rawSourceAmount;
+      if (!Number.isInteger(rawSourceAmount)) {
+        throw new ContractInvalidRequestError("Source amount must be an integer in stroops when provided as number");
+      }
+      sourceAmountStroops = BigInt(Math.trunc(rawSourceAmount));
+    } else if (typeof rawSourceAmount === "string") {
+      try {
+        sourceAmountStroops = BigInt(AmountUtils.parseFromMajorString(rawSourceAmount, "XLM"));
+      } catch (err: unknown) {
+        throw new ContractInvalidRequestError(
+          `Invalid source amount: ${(err as Error).message}`,
+        );
+      }
     } else {
-      numericSourceAmount = parseFloat(rawSourceAmount);
+      throw new ContractInvalidRequestError("Source amount must be a number or string");
     }
 
     const dustThreshold = options.dustThresholdStroops ?? 100;
-    if (!Number.isFinite(numericSourceAmount) || numericSourceAmount <= 0 || numericSourceAmount < dustThreshold) {
+    if (sourceAmountStroops <= 0n || sourceAmountStroops < BigInt(dustThreshold)) {
       throw new ContractInvalidRequestError(
-        `Dust amount error: Source amount ${numericSourceAmount} is below minimum threshold ${dustThreshold}`,
+        `Dust amount error: Source amount ${sourceAmountStroops.toString()} is below minimum threshold ${dustThreshold}`,
       );
     }
 
@@ -1376,12 +1388,16 @@ export class HorizonContractClient implements IContractClient {
       }
     }
 
+    const formatXlm = (stroops: bigint): string => {
+      const sign = stroops < 0n ? "-" : "";
+      const abs = stroops < 0n ? -stroops : stroops;
+      const major = abs / 10000000n;
+      const minor = abs % 10000000n;
+      return sign + major.toString() + "." + minor.toString().padStart(7, "0");
+    };
     const queryParams: Record<string, string> = {
       source_asset_type: options.sourceAsset.asset_type,
-      source_amount:
-        typeof rawSourceAmount === "number"
-          ? (rawSourceAmount / 1e7).toFixed(7)
-          : rawSourceAmount,
+      source_amount: formatXlm(sourceAmountStroops),
     };
     if (options.sourceAsset.asset_code) {
       queryParams.source_asset_code = options.sourceAsset.asset_code;
@@ -1450,8 +1466,22 @@ export class HorizonContractClient implements IContractClient {
       }
     }
 
-    const minDestNum = quotedDestAmountNum * (1 - tolerance / 100);
-    const minDestinationAmount = (Math.floor(minDestNum * 1e7) / 1e7).toFixed(7);
+    const toleranceBps = Math.round(tolerance * 100);
+    let quotedDestStroops: bigint;
+    try {
+      quotedDestStroops = BigInt(AmountUtils.parseFromMajorString(bestRecord.destination_amount, "XLM"));
+    } catch (err) {
+      quotedDestStroops = BigInt(Math.trunc(quotedDestAmountNum * 1e7 + 1e-12));
+    }
+    const minDestStroops = (quotedDestStroops * BigInt(10000 - toleranceBps)) / BigInt(10000);
+    const formatXlmBig = (stroops: bigint): string => {
+      const sign = stroops < 0n ? "-" : "";
+      const abs = stroops < 0n ? -stroops : stroops;
+      const major = abs / 10000000n;
+      const minor = abs % 10000000n;
+      return sign + major.toString() + "." + minor.toString().padStart(7, "0");
+    };
+    const minDestinationAmount = formatXlmBig(minDestStroops);
 
     const nowSeconds = Math.floor(Date.now() / 1000);
     const oracleAgeSeconds =

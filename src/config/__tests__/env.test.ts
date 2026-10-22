@@ -44,6 +44,30 @@ describe("defaults", () => {
   it("applies default trustProxy=false when omitted", () => {
     expect(load().trustProxy).toBe(false);
   });
+
+  it("applies default enableTestRoutes=false when omitted", () => {
+    expect(load().enableTestRoutes).toBe(false);
+  });
+});
+
+// ─── ENABLE_TEST_ROUTES ──────────────────────────────────────────────────────
+
+describe("ENABLE_TEST_ROUTES", () => {
+  it("accepts true", () => {
+    expect(load({ ENABLE_TEST_ROUTES: "true" }).enableTestRoutes).toBe(true);
+  });
+
+  it("accepts 1", () => {
+    expect(load({ ENABLE_TEST_ROUTES: "1" }).enableTestRoutes).toBe(true);
+  });
+
+  it("accepts false", () => {
+    expect(load({ ENABLE_TEST_ROUTES: "false" }).enableTestRoutes).toBe(false);
+  });
+
+  it("rejects invalid ENABLE_TEST_ROUTES value", () => {
+    expectIssue({ ...VALID, ENABLE_TEST_ROUTES: "yes" }, "ENABLE_TEST_ROUTES");
+  });
 });
 
 // ─── NODE_ENV ─────────────────────────────────────────────────────────────────
