@@ -129,9 +129,9 @@ export function createBookingIntentsRouter(
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const intents = bookingIntentService.listIntents(req.auth!);
+        const intents = await bookingIntentService.listIntents(req.auth!);
         res.status(200).json({
           success: true,
           intents,
@@ -147,9 +147,9 @@ export function createBookingIntentsRouter(
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const intent = bookingIntentService.getIntent(req.params.id, req.auth!);
+        const intent = await bookingIntentService.getIntent(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           intent,
@@ -166,9 +166,9 @@ export function createBookingIntentsRouter(
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
     auditMiddleware("CONFIRM_BOOKING_INTENT"),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const intent = bookingIntentService.confirmIntent(req.params.id, req.auth!);
+        const intent = await bookingIntentService.confirmIntent(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           intent,
@@ -185,9 +185,9 @@ export function createBookingIntentsRouter(
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
     auditMiddleware("CANCEL_BOOKING_INTENT"),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const intent = bookingIntentService.cancelIntent(req.params.id, req.auth!);
+        const intent = await bookingIntentService.cancelIntent(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           intent,
@@ -265,9 +265,9 @@ export function createBookingIntentsRouter(
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "admin"]),
     createAuthAwareRateLimiter(),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const preview = bookingIntentService.previewCancel(req.params.id, req.auth!);
+        const preview = await bookingIntentService.previewCancel(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           preview,
@@ -283,9 +283,9 @@ export function createBookingIntentsRouter(
     requireFeatureFlag("CREATE_BOOKING_INTENT"),
     requireAuthenticatedActor(["customer", "professional", "admin"]),
     createAuthAwareRateLimiter(),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const status = bookingIntentService.getHoldStatus(req.params.id, req.auth!);
+        const status = await bookingIntentService.getHoldStatus(req.params.id, req.auth!);
         res.status(200).json({
           success: true,
           holdStatus: status,
@@ -302,9 +302,9 @@ export function createBookingIntentsRouter(
     requireAuthenticatedActor(["admin"]),
     createAuthAwareRateLimiter(),
     auditMiddleware("AUTO_REFUND_HOLD"),
-    (req: Request, res: Response): void => {
+    async (req: Request, res: Response): Promise<void> => {
       try {
-        const intent = bookingIntentService.autoRefundHold(req.params.id);
+        const intent = await bookingIntentService.autoRefundHold(req.params.id);
         res.status(200).json({
           success: true,
           intent,
