@@ -189,6 +189,12 @@ app.post(
 );
 ```
 
+> **Ordering:** `idempotencyMiddleware` namespaces its Redis storage key by the
+> verified caller principal, so it must be mounted **after** authentication
+> middleware (`requireAuth`, `requireAuthenticatedActor`, `apiKeyAuth`, or
+> `optionalAuth` on routes where authentication is optional). See
+> `docs/idempotency.md`.
+
 ---
 
 ## Error Response Format

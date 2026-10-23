@@ -133,6 +133,54 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
   };
 }
 
+/**
+ * Best-effort authentication for routes where authentication is OPTIONAL
+ * (e.g. POST /api/v1/checkout/sessions).
+ *
+ * When a `Bearer` token is present and verifies against the configured JWT
+ * secrets, `req.auth` is attached exactly like `requireAuth()`. Missing,
+ * malformed or invalid tokens fall through unauthenticated — this middleware
+ * never rejects a request.
+ *
+ * Mount it BEFORE middleware that derives per-caller state from `req.auth`
+ * (such as `idempotencyMiddleware`, which namespaces Idempotency-Key entries by
+ * the verified principal). Enforcing REQUIRED authentication remains the job
+ * of `requireAuth()`.
+ */
+export function optionalAuth(expectedIssuer?: string) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const token = readBearerToken(req);
+      if (!token) {
+        next();
+        return;
+      }
+
+      const payload = await verifyJwt(token, {
+        issuer: expectedIssuer ?? configService.jwtIssuer ?? undefined,
+      });
+
+      const userId = getUserId(payload);
+      if (!userId) {
+        next();
+        return;
+      }
+
+      req.auth = {
+        userId,
+        role: parseJwtRole(payload.role),
+        claims: payload,
+      };
+
+      next();
+    } catch {
+      // Invalid/expired token: treat as anonymous. Routes that REQUIRE auth
+      // must use requireAuth() instead.
+      next();
+    }
+  };
+}
+
 // eslint-disable-next-line unused-imports/no-unused-vars
 function emitAuthAudit(
   req: Request,

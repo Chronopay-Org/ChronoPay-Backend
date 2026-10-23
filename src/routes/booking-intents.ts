@@ -109,6 +109,9 @@ export function createBookingIntentsRouter(
     // expanding the public request contract.
     captureRequestBody,
     validateBody(CreateBookingIntentBodySchema),
+    // Ordering requirement: must run after requireAuthenticatedActor so
+    // idempotencyMiddleware can namespace Idempotency-Key entries by the
+    // verified caller (req.auth.userId) instead of a global key.
     idempotencyMiddleware,
     createAuthAwareRateLimiter(),
     auditMiddleware("CREATE_BOOKING_INTENT"),
