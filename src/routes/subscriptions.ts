@@ -26,6 +26,13 @@ import {
 import {
   type SubscriptionRecord,
 } from "../modules/subscriptions/subscription-repository.js";
+  InMemorySubscriptionProductRepository,
+} from "../modules/subscriptions/subscription-product-repository.js";
+import {
+  InMemorySubscriptionRepository,
+  type SubscriptionRecord,
+} from "../modules/subscriptions/subscription-repository.js";
+import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 import { authenticateToken } from "../middleware/auth.middleware.js";
 
 import { subscriptionService } from "../services/subscriptionContainer.js";

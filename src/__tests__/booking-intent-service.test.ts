@@ -4,6 +4,7 @@ import {
   BookingIntentError,
   BookingIntentService,
   type BookingIntentRepository,
+  type BookingIntent,
   type CreateBookingIntentInput,
 } from "../modules/booking-intents/booking-intent-service.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";

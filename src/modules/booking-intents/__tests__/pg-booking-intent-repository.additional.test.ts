@@ -1,4 +1,5 @@
 import { PgBookingIntentRepository } from "../pg-booking-intent-repository.js";
+import { ConflictError } from "../../../errors/AppError.js";
 
 describe('PgBookingIntentRepository additional edge cases', () => {
   let mockQuery: jest.Mock;

@@ -44,6 +44,7 @@ import {
   GraceWindowService,
   getGraceWindowService,
 } from "../../services/graceWindowService.js";
+import { writeReputationScore } from "../../services/reputationWriteAudit.js";
 import { defaultAuditLogger } from "../../services/auditLogger.js";
 
 export interface CreateBookingIntentInput {

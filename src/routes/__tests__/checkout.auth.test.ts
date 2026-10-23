@@ -40,6 +40,11 @@ let _sessionStore: Map<string, CheckoutSession>;
 function makeInMemoryRepo(): PgCheckoutSessionRepository {
   const store = new Map<string, CheckoutSession>();
   _sessionStore = store;
+let sessionStore: Map<string, CheckoutSession>;
+
+function makeInMemoryRepo(): PgCheckoutSessionRepository {
+  const store = new Map<string, CheckoutSession>();
+  sessionStore = store;
   return {
     create: async (session: CheckoutSession): Promise<CheckoutSession> => {
       store.set(session.id, { ...session });

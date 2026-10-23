@@ -3,6 +3,12 @@ import { setRedisClient } from "../../src/cache/redisClient.js";
 import {
   getCachedSlotsPage,
   getCachedSlots,
+import { setRedisClient, getRedisClient } from "../../src/cache/redisClient.js";
+import {
+  getCachedSlotsPage,
+  setCachedSlotsPage,
+  getCachedSlots,
+  setCachedSlots,
   PaginatedSlotsResult,
   Slot,
 } from "../../src/cache/slotCache.js";

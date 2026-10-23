@@ -1,4 +1,6 @@
 import { WINDOWS_MS, RouteMetrics, recordRouteTraffic, resetSloMetrics, SLO_OBJECTIVES, RouteName, WindowName } from '../sloMetrics.js';
+import { WINDOWS_MS, RouteMetrics, recordRouteTraffic, resetSloMetrics, SLO_OBJECTIVES } from '../sloMetrics.js';
+import { RouteName, WindowName } from '../sloMetrics.js';
 
 describe('sloMetrics', () => {
   beforeEach(() => {

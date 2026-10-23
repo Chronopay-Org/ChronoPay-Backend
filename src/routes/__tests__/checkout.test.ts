@@ -12,6 +12,7 @@ import { setFeatureFlagsFromEnv } from "../../flags/service.js";
 import { CheckoutSession, CheckoutSessionStatus } from "../../types/checkout.js";
 import {
   CheckoutSessionService,
+  setCheckoutPaymentProvider,
   setCheckoutRepository,
 } from "../../services/checkout.js";
 import { PgCheckoutSessionRepository } from "../../modules/checkout/pg-checkout-session-repository.js";

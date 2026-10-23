@@ -183,6 +183,7 @@ describe("RequestLogger middleware", () => {
       });
       app.use(errorLoggerMiddleware);
       app.use((err: any, req: any, res: any, _next: any) => {
+      app.use((err: any, req: any, res: any, next: any) => {
         res.status(500).json({ msg: err.message });
       });
 

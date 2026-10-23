@@ -164,6 +164,15 @@ async function captureError(promise: Promise<unknown>): Promise<BookingIntentErr
   }
 }
 
+/** Runs `fn` and returns the thrown error, or undefined when it does not throw. */
+function captureSyncError(fn: () => unknown): BookingIntentError | undefined {
+  try {
+    fn();
+    return undefined;
+  } catch (err) {
+    return err as BookingIntentError;
+  }
+}
 
 /**
  * Async repository wrapper that wraps every InMemoryBookingIntentRepository

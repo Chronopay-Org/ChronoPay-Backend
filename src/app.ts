@@ -5,6 +5,9 @@ import express, { type Request, type Response } from "express";
 import { getCORSConfig, validateCORSConfig } from "./config/cors.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { parseCookies } from "./middleware/cookieParser.js";
+import { requireApiKey } from "./middleware/apiKeyAuth.js";
+import { parseCookies } from "./middleware/cookieParser.js";
+import { authenticateTokenIfPresent } from "./middleware/auth.middleware.js";
 import {
   genericErrorHandler,
   jsonParseErrorHandler,

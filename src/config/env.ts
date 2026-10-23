@@ -151,6 +151,11 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
 
+  const idempotencyProcessingLockTtlSeconds = parseOptionalPositiveInteger(
+    env.IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS,
+    "IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS",
+    issues,
+  );
 
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
@@ -213,6 +218,33 @@ function parsePositiveInteger(
   issues: string[],
 ): number {
   return parseIntegerInRange(rawValue, key, defaultValue, 1, Number.MAX_SAFE_INTEGER, issues);
+}
+
+function parseOptionalPositiveInteger(
+  rawValue: string | undefined,
+  key: string,
+  issues: string[],
+): number | undefined {
+  if (rawValue === undefined) return undefined;
+
+  const value = rawValue.trim();
+  if (value.length === 0) {
+    issues.push(`${key} must be a non-empty integer when provided.`);
+    return undefined;
+  }
+
+  if (!/^\d+$/.test(value)) {
+    issues.push(`${key} must be a whole number between 1 and ${Number.MAX_SAFE_INTEGER}.`);
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > Number.MAX_SAFE_INTEGER) {
+    issues.push(`${key} must be a whole number between 1 and ${Number.MAX_SAFE_INTEGER}.`);
+    return undefined;
+  }
+
+  return parsed;
 }
 
 function parseIntegerInRange(
