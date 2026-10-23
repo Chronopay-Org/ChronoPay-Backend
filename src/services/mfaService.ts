@@ -9,10 +9,8 @@ import {
   TOTP_PERIOD_SECONDS,
 } from "../utils/totp.js";
 import { encryptTotpSecret, decryptTotpSecret } from "./mfaCrypto.js";
-import {
-  getMfaRepository,
-  type MfaRepository,
-} from "../repositories/mfaRepository.js";
+import { getMfaRepository } from "../repositories/mfaRepository.js";
+import type { MfaRepository } from "../models/mfaEnrollment.js";
 import { signJwt, verifyJwtWithKey } from "../utils/jwt.js";
 import {
   MfaAlreadyEnrolledError,
@@ -20,6 +18,7 @@ import {
   MfaChallengeInvalidError,
   MfaConfigurationError,
   MfaInvalidCodeError,
+  MfaLockedError,
   MfaNotEnrolledError,
   MfaReplayDetectedError,
 } from "../errors/mfaErrors.js";
@@ -60,6 +59,21 @@ export interface MfaServiceOptions {
   challengeTtlSec?: number;
   freshnessMs?: number;
   nowMs?: number;
+  maxFailedAttempts?: number;
+  lockoutDurationMs?: number;
+}
+
+const DEFAULT_MFA_MAX_FAILED_ATTEMPTS = 5;
+const DEFAULT_MFA_LOCKOUT_DURATION_MS = 15 * 60 * 1000;
+
+function configuredPositiveInteger(name: string, defaultValue: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return defaultValue;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new MfaConfigurationError(`${name} must be a positive integer`);
+  }
+  return value;
 }
 
 function configuredMasterKey(): string {
@@ -98,6 +112,10 @@ export class MfaService {
       challengeTtlSec: options.challengeTtlSec ?? configService.mfaChallengeTtlSec,
       freshnessMs: options.freshnessMs ?? configService.mfaFreshnessMs,
       nowMs: options.nowMs ?? Date.now(),
+      maxFailedAttempts: options.maxFailedAttempts
+        ?? configuredPositiveInteger("MFA_MAX_FAILED_ATTEMPTS", DEFAULT_MFA_MAX_FAILED_ATTEMPTS),
+      lockoutDurationMs: options.lockoutDurationMs
+        ?? configuredPositiveInteger("MFA_LOCKOUT_DURATION_MS", DEFAULT_MFA_LOCKOUT_DURATION_MS),
     };
   }
 
@@ -118,6 +136,9 @@ export class MfaService {
    * A *pending* enrolment is replaced so the user can re-scan after a miss.
    */
   async enroll(userId: string, options: MfaServiceOptions = {}): Promise<EnrollMfaResult> {
+    if (typeof userId !== "string" || userId.trim().length === 0) {
+      throw new Error("Token subject missing");
+    }
     const config = this.buildConfig(options);
     const masterKey = this.resolveMasterKey(options);
     const existing = await this.getRepository().findByUserId(userId);
@@ -171,13 +192,28 @@ export class MfaService {
    * with the same code cannot both win — exactly one is accepted.
    */
   async verifyCode(userId: string, code: string, options: MfaServiceOptions = {}): Promise<VerifyMfaCodeResult> {
+    if (typeof userId !== "string" || userId.trim().length === 0) {
+      throw new Error("Token subject missing");
+    }
     const config = this.buildConfig(options);
-    const masterKey = this.resolveMasterKey(options);
-    const enrollment = await this.getRepository().findByUserId(userId);
+    const repository = this.getRepository();
+    let enrollment = await repository.findByUserId(userId);
     if (!enrollment) {
       throw new MfaNotEnrolledError();
     }
 
+    if (enrollment.locked_until && new Date(enrollment.locked_until).getTime() > config.nowMs) {
+      this.auditMfaLocked(userId, enrollment.failed_attempts, enrollment.locked_until);
+      throw new MfaLockedError();
+    }
+
+    if (enrollment.locked_until) {
+      await repository.clearExpiredLockout(userId, new Date(config.nowMs));
+      enrollment = await repository.findByUserId(userId);
+      if (!enrollment) throw new MfaNotEnrolledError();
+    }
+
+    const masterKey = this.resolveMasterKey(options);
     const secret = decryptTotpSecret(
       {
         ciphertext: Buffer.from(enrollment.secret_ciphertext, "hex"),
@@ -195,18 +231,28 @@ export class MfaService {
       config.nowMs,
     );
     if (matchedStep === null) {
+      const lockedUntil = new Date(config.nowMs + config.lockoutDurationMs);
+      const failure = await repository.recordFailedAttempt(
+        userId,
+        config.maxFailedAttempts,
+        lockedUntil,
+      );
+      if (failure?.lockedUntil && failure.failedAttempts >= config.maxFailedAttempts) {
+        this.auditMfaLocked(userId, failure.failedAttempts, failure.lockedUntil);
+      }
       throw new MfaInvalidCodeError();
     }
 
-    const advance = await this.getRepository().advanceLastUsedCounter(userId, matchedStep);
+    const advance = await repository.advanceLastUsedCounter(userId, matchedStep);
     if (!advance.advanced) {
       throw new MfaReplayDetectedError();
     }
+    await repository.resetFailedAttempts(userId);
 
     if (!enrollment.verified) {
       // First confirmed code activates the enrolment. If two requests race,
       // the second markVerified is a no-op — still a success for that user.
-      await this.getRepository().markVerified(userId);
+      await repository.markVerified(userId);
     }
 
     const challenge = await this.issueChallenge(userId, {
@@ -227,6 +273,16 @@ export class MfaService {
       .catch(() => {});
 
     return { ...challenge, alreadyVerified: enrollment.verified };
+  }
+
+  private auditMfaLocked(userId: string, failedAttempts: number, lockedUntil: string): void {
+    defaultAuditLogger
+      .log({
+        action: "AUTH_MFA_LOCKED",
+        status: 429,
+        metadata: { userId, failedAttempts, lockedUntil },
+      })
+      .catch(() => {});
   }
 
   /**

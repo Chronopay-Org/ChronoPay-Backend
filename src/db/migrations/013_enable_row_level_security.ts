@@ -10,7 +10,7 @@ const SHARED_TABLES = [
 ] as const;
 
 export const migration: Migration = {
-  id: "017",
+  id: "018",
   name: "enable_row_level_security",
 
   async up(client: PoolClient): Promise<void> {

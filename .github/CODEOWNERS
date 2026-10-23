@@ -1,0 +1,14 @@
+# Supply-chain hardening: changes to these paths require review by the owner.
+/.vscode/                 @thlpkee20-wq
+/.devcontainer/           @thlpkee20-wq
+/.github/                 @thlpkee20-wq
+**/package.json           @thlpkee20-wq
+**/*.woff                 @thlpkee20-wq
+**/*.woff2                @thlpkee20-wq
+**/*.eot                  @thlpkee20-wq
+**/*.ttf                  @thlpkee20-wq
+/dist/                    @thlpkee20-wq
+*.config.js              @thlpkee20-wq
+*.config.cjs             @thlpkee20-wq
+*.config.mjs             @thlpkee20-wq
+*.config.ts              @thlpkee20-wq

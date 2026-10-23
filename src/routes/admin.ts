@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { Router, type Request, type Response } from "express";
-import { requireAdminToken } from "../middleware/authorization.js";
+import { populateAdminActor, requireAdminToken } from "../middleware/authorization.js";
+import { requireFreshMfa } from "../middleware/requireFreshMfa.js";
 import { auditExportService } from "../services/auditExportService.js";
 import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
@@ -27,7 +28,6 @@ import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-ses
 import { query } from "../db/pool.js";
 import { DisputeArbitrationQueueService } from "../services/disputeArbitrationQueue.js";
 import {
-  addSeniorArbiter,
   appendFinalityLink,
   canTransition,
   decideByMajority,
@@ -44,8 +44,13 @@ import {
 } from "../services/disputeDeadlineService.js";
 import { isDisputeDeadlineSchedulerRunning } from "../scheduler/disputeDeadlineScheduler.js";
 import { getPayoutQuarantineService } from "../services/quarantineStore.js";
+import { getPayoutDlqStore, type PayoutDlqStatus } from "../services/payoutDlqStore.js";
 import { strikeService } from "../services/strikeService.js";
 import type { Dispute as DisputeDomainType, SeniorPanelVote } from "../types/dispute.js";
+import { AUDIT_SCHEMA_VERSION } from "../types/auditEvent.js";
+import gdprDsrRouter, { setDsrSlaService } from "./adminGdprDsr.js";
+import accessReviewRouter from "./adminAccessReview.js";
+import cancellationOverridesRouter from "./adminCancellationOverrides.js";
 
 /**
  * Singleton cancellation-reversal service. The route handlers reuse
@@ -100,12 +105,20 @@ export function setCancellationReversalService(
   _cancellationReversalService = service;
 }
 
-export function setDsrSlaService(_service: any): void {}
+// Re-exported so tests and production bootstrap can swap the DSR SLA service
+// without importing the sub-router module directly.
+export { setDsrSlaService };
 
 // Re-export for route-level test convenience.
 export { setReversalTenantPausedResolver };
 
 const router = Router();
+
+// GDPR DSR SLA and SOC2 access-review endpoints. Mounted as sub-routers so
+// their HTTP edges (validation + error mapping) stay out of this large module.
+router.use(gdprDsrRouter);
+router.use(accessReviewRouter);
+router.use(cancellationOverridesRouter);
 const disputeQueueService = new DisputeArbitrationQueueService();
 
 // In-memory dispute state for E2E tests
@@ -184,9 +197,50 @@ router.get("/audit/export/download", async (req: Request, res: Response) => {
 /**
  * @route POST /api/v1/admin/webhooks/rotate
  * @desc Promote the NEXT webhook secret to CURRENT and move the previous CURRENT to PREVIOUS.
- * @access Private (admin token only)
+ * @header x-chronopay-mfa — fresh MFA challenge token (from POST /api/v1/auth/mfa/verify).
+ *       401 when missing/expired, 403 when bound to a different subject.
+ * @access Private (admin token + MFA step-up)
  */
-router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response) => {
+/**
+ * @openapi
+ * /api/v1/admin/webhooks/rotate:
+ *   post:
+ *     summary: Rotate the settlement webhook secret
+ *     description: >
+ *       Promotes the NEXT webhook secret to CURRENT and moves the previous
+ *       CURRENT to PREVIOUS. Requires admin token authentication plus a
+ *       fresh MFA step-up challenge (subject bound to the caller, default
+ *       freshness 15 minutes).
+ *     tags: [Admin]
+ *     security:
+ *       - adminTokenAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: x-chronopay-mfa
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: >
+ *           Fresh MFA challenge token from POST /api/v1/auth/mfa/verify.
+ *           401 when missing or older than the freshness window, 403 when
+ *           issued for a different subject.
+ *     responses:
+ *       200:
+ *         description: Secret rotated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *       401:
+ *         description: Missing admin token, or missing/expired MFA challenge
+ *       403:
+ *         description: Invalid admin token, or MFA challenge for another subject
+ */
+router.post("/webhooks/rotate", requireAdminToken, populateAdminActor, requireFreshMfa(), (req: Request, res: Response) => {
   const next = process.env.SETTLEMENTS_WEBHOOK_SECRET_NEXT;
   if (!next) {
     return res.status(400).json({ success: false, error: "No NEXT webhook secret configured" });
@@ -209,9 +263,52 @@ router.post("/webhooks/rotate", requireAdminToken, (req: Request, res: Response)
  * @route POST /api/v1/admin/refunds
  * @desc Create a partial refund against a completed payment session.
  *       Enforces the invariant that sum of refunds <= captured amount.
- * @access Private (admin token only)
+ * @header x-chronopay-mfa — fresh MFA challenge token (from POST /api/v1/auth/mfa/verify).
+ *       401 when missing/expired, 403 when bound to a different subject.
+ * @access Private (admin token + MFA step-up)
  */
-router.post("/refunds", requireAdminToken, async (req: Request, res: Response) => {
+/**
+ * @openapi
+ * /api/v1/admin/refunds:
+ *   post:
+ *     summary: Create a partial refund
+ *     description: >
+ *       Creates a partial refund against a completed payment session.
+ *       Requires admin token authentication plus a fresh MFA step-up
+ *       challenge (subject bound to the caller, default freshness 15 minutes).
+ *     tags: [Admin]
+ *     security:
+ *       - adminTokenAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: x-chronopay-mfa
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: >
+ *           Fresh MFA challenge token from POST /api/v1/auth/mfa/verify.
+ *           401 when missing or older than the freshness window, 403 when
+ *           issued for a different subject.
+ *     responses:
+ *       201:
+ *         description: Refund created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 refund:
+ *                   type: object
+ *                   description: The created refund
+ *       401:
+ *         description: Missing admin token, or missing/expired MFA challenge
+ *       403:
+ *         description: Invalid admin token, or MFA challenge for another subject
+ */
+router.post("/refunds", requireAdminToken, populateAdminActor, requireFreshMfa(), async (req: Request, res: Response) => {
   try {
     const { paymentId, amountCents, currency, reason, refundedBy } = req.body;
 
@@ -569,11 +666,57 @@ router.post(
 /**
  * @route POST /api/v1/admin/payouts/:transactionId/replay/approve
  * @desc Approve a pending replay request for a failed supplier payout. Must be a different admin.
- * @access Private (admin role required)
+ * @header x-chronopay-mfa — fresh MFA challenge token (from POST /api/v1/auth/mfa/verify).
+ *       401 when missing/expired, 403 when bound to a different subject.
+ * @access Private (admin role + MFA step-up)
+ */
+/**
+ * @openapi
+ * /api/v1/admin/payouts/{transactionId}/replay/approve:
+ *   post:
+ *     summary: Approve a pending payout replay
+ *     description: >
+ *       Approves a pending replay request for a failed supplier payout. The
+ *       approver must be a different admin from the initiator. Requires a
+ *       fresh MFA step-up challenge bound to the approving admin.
+ *     tags: [Admin]
+ *     security:
+ *       - chronoPayAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: transactionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: header
+ *         name: x-chronopay-mfa
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: >
+ *           Fresh MFA challenge token from POST /api/v1/auth/mfa/verify.
+ *           401 when missing or older than the freshness window, 403 when
+ *           issued for a different subject.
+ *     responses:
+ *       200:
+ *         description: Replay approved
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *       401:
+ *         description: Missing identity, or missing/expired MFA challenge
+ *       403:
+ *         description: MFA challenge for another subject, or same-admin approval
  */
 router.post(
   "/payouts/:transactionId/replay/approve",
   requireAuthenticatedActor(["admin"]),
+  requireFreshMfa(),
   (req: Request, res: Response) => {
     const { transactionId } = req.params;
     const approverId = req.auth?.userId;
@@ -671,9 +814,60 @@ router.post("/fraud/hitl/:id/decision", requireAuthenticatedActor(["admin"]), (r
 /**
  * @route POST /api/v1/admin/escrow/pause
  * @desc Admin endpoint to toggle escrow paused state during migration.
- * @access Private (admin role required)
+ * @header x-chronopay-mfa — fresh MFA challenge token (from POST /api/v1/auth/mfa/verify).
+ *       401 when missing/expired, 403 when bound to a different subject.
+ * @access Private (admin role + MFA step-up)
  */
-router.post("/escrow/pause", requireAuthenticatedActor(["admin"]), (req: Request, res: Response) => {
+/**
+ * @openapi
+ * /api/v1/admin/escrow/pause:
+ *   post:
+ *     summary: Pause or unpause escrow holds
+ *     description: >
+ *       Toggles the escrow paused state during migration. Requires a fresh
+ *       MFA step-up challenge bound to the authenticated admin.
+ *     tags: [Admin]
+ *     security:
+ *       - chronoPayAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: x-chronopay-mfa
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: >
+ *           Fresh MFA challenge token from POST /api/v1/auth/mfa/verify.
+ *           401 when missing or older than the freshness window, 403 when
+ *           issued for a different subject.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [paused]
+ *             properties:
+ *               paused:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Escrow pause state updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 paused:
+ *                   type: boolean
+ *       401:
+ *         description: Missing identity, or missing/expired MFA challenge
+ *       403:
+ *         description: MFA challenge issued for a different subject
+ */
+router.post("/escrow/pause", requireAuthenticatedActor(["admin"]), requireFreshMfa(), (req: Request, res: Response) => {
   const { paused } = req.body;
   if (typeof paused !== "boolean") {
     return res.status(400).json({ success: false, error: "paused must be a boolean" });
