@@ -2,13 +2,14 @@ import fs from "fs";
 import { Request, Response, NextFunction } from "express";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import {
-  BadRequestError,
   ForbiddenError,
   InternalServerError,
   UnauthorizedError,
 } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
+import { getUserId, MissingBearerTokenError, verifyRequestJwt } from "./jwtIdentity.js";
+import type { VerifiedJwtPayload } from "../utils/jwt.js";
 import {
   permissionCatalog,
   hasPermission,
@@ -17,7 +18,6 @@ import {
   type Permission,
 } from "../services/permissionCatalog.js";
 
-const ROLE_HEADER = "x-user-role";
 const ROLES_CONFIG_URL = new URL("../config/roles.json", import.meta.url);
 
 export type UserRole = string;
@@ -72,11 +72,11 @@ function immutableSet<T>(values: Iterable<T>): ReadonlySet<T> {
  * immutable set, so the resolved role hierarchy cannot be altered at runtime.
  */
 function immutableHierarchyMap<K, V>(
-  entries: Iterable<readonly [K, V]>,
+  entries: Iterable<readonly [K, ReadonlySet<V>]>,
 ): ReadonlyMap<K, ReadonlySet<V>> {
   const map = new Map<K, ReadonlySet<V>>();
   for (const [key, value] of entries) {
-    map.set(key, immutableSet(value as Iterable<V>));
+    map.set(key, immutableSet(value));
   }
   return new Proxy(map, {
     get(target, prop, _receiver) {
@@ -221,26 +221,38 @@ export function requireRole(requiredRoles: UserRole | UserRole[]) {
     }
   }
 
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    let claims: VerifiedJwtPayload;
     try {
-      const parsedRole = normalizeRole(req.header(ROLE_HEADER));
+      claims = await verifyRequestJwt(req);
+    } catch (error) {
+      emitRbacAudit(req, "RBAC_MISSING", 401);
+      return sendErrorResponse(
+        res,
+        new UnauthorizedError(
+          error instanceof MissingBearerTokenError
+            ? "Authentication required"
+            : "Invalid or expired token",
+          ERROR_CODES.AUTHENTICATION_REQUIRED.code,
+        ),
+        req,
+      );
+    }
 
-      if (!parsedRole) {
+    try {
+      const userId = getUserId(claims);
+      if (!userId) {
         emitRbacAudit(req, "RBAC_MISSING", 401);
         return sendErrorResponse(
           res,
-          new UnauthorizedError(
-            `Missing required authentication header: ${ROLE_HEADER}`,
-            ERROR_CODES.AUTHENTICATION_REQUIRED.code,
-          ),
+          new UnauthorizedError("Authentication required", ERROR_CODES.AUTHENTICATION_REQUIRED.code),
           req,
         );
       }
 
-      if (!isKnownRole(parsedRole)) {
-        emitRbacAudit(req, "RBAC_INVALID_ROLE", 400);
-        return sendErrorResponse(res, new BadRequestError("Invalid user role"), req);
-      }
+      const rawRole = normalizeRole(claims.role);
+      const parsedRole = isKnownRole(rawRole) ? rawRole : "customer";
+      req.auth = { userId, role: parsedRole, claims };
 
       const authorized = [...requiredRoleSet].some((requiredRole) =>
         roleSatisfies(parsedRole, requiredRole),
@@ -288,25 +300,37 @@ export function requirePermission(requiredPermission: Permission) {
   }
 
   return async (req: Request, res: Response, next: NextFunction) => {
+    let claims: VerifiedJwtPayload;
     try {
-      const parsedRole = normalizeRole(req.header(ROLE_HEADER));
+      claims = await verifyRequestJwt(req);
+    } catch (error) {
+      emitRbacAudit(req, "RBAC_MISSING", 401);
+      return sendErrorResponse(
+        res,
+        new UnauthorizedError(
+          error instanceof MissingBearerTokenError
+            ? "Authentication required"
+            : "Invalid or expired token",
+          ERROR_CODES.AUTHENTICATION_REQUIRED.code,
+        ),
+        req,
+      );
+    }
 
-      if (!parsedRole) {
+    try {
+      const userId = getUserId(claims);
+      if (!userId) {
         emitRbacAudit(req, "RBAC_MISSING", 401);
         return sendErrorResponse(
           res,
-          new UnauthorizedError(
-            `Missing required authentication header: ${ROLE_HEADER}`,
-            ERROR_CODES.AUTHENTICATION_REQUIRED.code,
-          ),
+          new UnauthorizedError("Authentication required", ERROR_CODES.AUTHENTICATION_REQUIRED.code),
           req,
         );
       }
 
-      if (!isKnownRole(parsedRole)) {
-        emitRbacAudit(req, "RBAC_INVALID_ROLE", 400);
-        return sendErrorResponse(res, new BadRequestError("Invalid user role"), req);
-      }
+      const rawRole = normalizeRole(claims.role);
+      const parsedRole = isKnownRole(rawRole) ? rawRole : "customer";
+      req.auth = { userId, role: parsedRole, claims };
 
       const granted = hasPermission(permissionCatalog, parsedRole, normalizedPermission);
 

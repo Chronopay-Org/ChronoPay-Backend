@@ -4,6 +4,7 @@ import { ContractInteractionArgs, ContractCallResult, TransactionResult } from "
 import { ContractService } from "../services/contract.service.js";
 import { withTimeout, withRetry } from "../utils/outbound-helper.js";
 import { timeoutConfig } from "../config/timeouts.js";
+import { ContractInvalidRequestError } from "../errors/contractErrors.js";
 
 /**
  * Ethers.js implementation of the IContractClient.
@@ -74,7 +75,6 @@ export class EthersContractClient implements IContractClient {
    */
   async sendTransaction(args: ContractInteractionArgs): Promise<TransactionResult> {
     if (!this.signer) {
-      // @ts-expect-error - Auto-fixed by script
       throw new ContractInvalidRequestError("Signer is required for sending transactions");
     }
 

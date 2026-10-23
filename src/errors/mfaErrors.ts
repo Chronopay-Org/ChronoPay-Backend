@@ -49,6 +49,16 @@ export class MfaInvalidCodeError extends Error implements MfaErrorShape {
   }
 }
 
+export class MfaLockedError extends Error implements MfaErrorShape {
+  readonly statusCode = 429;
+  readonly errorCode = "MFA_LOCKED";
+
+  constructor() {
+    super("MFA verification is temporarily locked; try again later");
+    this.name = "MfaLockedError";
+  }
+}
+
 export class MfaReplayDetectedError extends Error implements MfaErrorShape {
   readonly statusCode = 409;
   readonly errorCode = "MFA_REPLAY_DETECTED";
@@ -80,10 +90,7 @@ export class MfaChallengeInvalidError extends Error implements MfaErrorShape {
 }
 
 export function isMfaError(error: unknown): error is Error & MfaErrorShape {
-  return (
-    error instanceof Error &&
-    "statusCode" in error &&
-    typeof (error as MfaErrorShape).statusCode === "number" &&
-    "errorCode" in error
-  );
+  if (!(error instanceof Error)) return false;
+  const candidate = error as { statusCode?: unknown };
+  return typeof candidate.statusCode === "number" && "errorCode" in error;
 }

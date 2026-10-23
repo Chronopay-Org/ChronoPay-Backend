@@ -1,132 +1,179 @@
 import { jest } from '@jest/globals';
+import express from 'express';
 import request from 'supertest';
-import express, { Request, Response } from 'express';
+import { createHash } from 'node:crypto';
 
-// 1. Mock ioredis (used by rateLimitStore)
-const storage = new Map<string, string>();
-const mockRedis: any = {
-  // @ts-expect-error - Auto-fixed by script
-  multi: jest.fn<any, any>().mockReturnThis(),
-  // @ts-expect-error - Auto-fixed by script
-  incr: jest.fn<any, any>().mockImplementation(function(this: any, key: string) {
-    const current = parseInt(storage.get(key) || '0', 10);
-    storage.set(key, (current + 1).toString());
-    return this; 
-  }),
-  // @ts-expect-error - Auto-fixed by script
-  expire: jest.fn<any, any>().mockReturnThis(),
-  // @ts-expect-error - Auto-fixed by script
-  exec: jest.fn<any, any>().mockImplementation(async function(this: any) {
-    const lastIncr = this.incr.mock.calls[this.incr.mock.calls.length - 1];
-    const key = lastIncr[0];
-    const val = parseInt(storage.get(key) || '1', 10);
-    return [[null, val]];
-  }),
-  // @ts-expect-error - Auto-fixed by script
-  decr: jest.fn<any, any>().mockImplementation(async (key: string) => {
-    const current = parseInt(storage.get(key) || '0', 10);
-    storage.set(key, (current - 1).toString());
-    return current - 1;
-  }),
-  // @ts-expect-error - Auto-fixed by script
-  del: jest.fn<any, any>().mockImplementation(async (key: string) => {
-    storage.delete(key);
-    return 1;
-  }),
-  // @ts-expect-error - Auto-fixed by script
-  on: jest.fn<any, any>().mockReturnThis(),
-  // @ts-expect-error - Auto-fixed by script
-  quit: jest.fn<any, any>().mockResolvedValue('OK'),
-};
+const requestCounts = new Map<string, number>();
+const rateLimitFactory = jest.fn((options: any) => {
+  return (req: any, res: any, next: () => void) => {
+    if (typeof options.skip === 'function' && options.skip(req)) {
+      return next();
+    }
 
-jest.unstable_mockModule('ioredis', () => {
-  return {
-    // @ts-expect-error - Auto-fixed by script
-    Redis: jest.fn<any, any>().mockImplementation(() => mockRedis),
-    // @ts-expect-error - Auto-fixed by script
-    default: jest.fn<any, any>().mockImplementation(() => mockRedis),
+    const key = typeof options.keyGenerator === 'function' ? options.keyGenerator(req) : 'default';
+    const currentCount = requestCounts.get(key) ?? 0;
+    const nextCount = currentCount + 1;
+    requestCounts.set(key, nextCount);
+
+    const limit = Number(options.limit ?? 0);
+    const remaining = Math.max(limit - nextCount, 0);
+
+    if (limit > 0 && nextCount > limit) {
+      res.setHeader('ratelimit-limit', String(limit));
+      res.setHeader('ratelimit-remaining', String(remaining));
+      res.setHeader('ratelimit-reset', String(Math.ceil(Date.now() / 1000) + 60));
+      return options.handler(req, res);
+    }
+
+    res.setHeader('ratelimit-limit', String(limit));
+    res.setHeader('ratelimit-remaining', String(remaining));
+    res.setHeader('ratelimit-reset', String(Math.ceil(Date.now() / 1000) + 60));
+    return next();
   };
 });
 
-// 2. Import modules AFTER mocking
-const { createAuthAwareRateLimiter } = await import('../rateLimiter.js');
-const { _setTestMock, _resetStore } = await import('../rateLimitStore.js');
+jest.unstable_mockModule('express-rate-limit', () => ({
+  __esModule: true,
+  default: rateLimitFactory,
+}));
+
+const {
+  createAuthAwareRateLimiter,
+  createRateLimiter,
+  generateRateLimitKey,
+} = await import('../rateLimiter.js');
+
+describe('generateRateLimitKey', () => {
+  it('prefers the authenticated user id over JWT, API key, and IP', () => {
+    const req = {
+      auth: { userId: 'user-123' },
+      user: { sub: 'jwt-456', id: 'jwt-789' },
+      apiKeyId: 'api-key-999',
+      ip: '203.0.113.10',
+    } as any;
+
+    expect(generateRateLimitKey(req)).toBe('rl:user:user-123');
+  });
+
+  it('falls back to the JWT user id when auth is absent', () => {
+    const req = {
+      user: { sub: 'jwt-456' },
+      apiKeyId: 'api-key-999',
+      ip: '203.0.113.11',
+    } as any;
+
+    expect(generateRateLimitKey(req)).toBe('rl:user:jwt-456');
+  });
+
+  it('uses the API key as the next available identifier', () => {
+    const req = {
+      apiKeyId: 'api-key-777',
+      ip: '203.0.113.12',
+    } as any;
+
+    expect(generateRateLimitKey(req)).toBe('rl:apiKey:api-key-777');
+  });
+
+  it('hashes the client IP for anonymous requests', () => {
+    const req = { ip: '203.0.113.13' } as any;
+    const expected = `rl:ip:${createHash('sha256').update('203.0.113.13', 'utf8').digest('hex')}`;
+
+    expect(generateRateLimitKey(req)).toBe(expected);
+  });
+
+  it('handles missing or malformed values deterministically', () => {
+    const anonymousHash = createHash('sha256').update('anonymous', 'utf8').digest('hex');
+
+    expect(generateRateLimitKey({} as any)).toBe(`rl:ip:${anonymousHash}`);
+    expect(generateRateLimitKey(undefined as any)).toBe(`rl:ip:${anonymousHash}`);
+    expect(generateRateLimitKey({ user: { sub: '' }, apiKeyId: '', ip: null } as any)).toBe(`rl:ip:${anonymousHash}`);
+  });
+});
+
+describe('createRateLimiter', () => {
+  beforeEach(() => {
+    requestCounts.clear();
+    rateLimitFactory.mockClear();
+  });
+
+  it('enforces the configured limit and returns the standard 429 payload', async () => {
+    const app = express();
+    app.get('/limited', createRateLimiter(60_000, 2), (_req, res) => {
+      res.status(200).json({ ok: true });
+    });
+
+    await request(app).get('/limited').expect(200);
+    await request(app).get('/limited').expect(200);
+
+    const response = await request(app).get('/limited').expect(429);
+    expect(response.headers['ratelimit-limit']).toBe('2');
+    expect(response.body).toMatchObject({
+      success: false,
+      error: 'Too many requests, please try again later.',
+    });
+  });
+});
 
 describe('createAuthAwareRateLimiter', () => {
-  let app: express.Express;
-  const WINDOW_MS = 60000;
-  const LIMIT = 2;
-
-  beforeAll(() => {
-    _setTestMock(true);
-  });
-
-  afterAll(() => {
-    _setTestMock(false);
-    _resetStore();
-  });
-
   beforeEach(() => {
-    storage.clear();
-    jest.clearAllMocks();
-    _resetStore();
+    requestCounts.clear();
+    rateLimitFactory.mockClear();
+  });
 
-    app = express();
-    app.use(express.json());
+  it('builds auth-aware keys and skips bypassed requests', () => {
+    const limiter = createAuthAwareRateLimiter(60_000, 2);
+    const config = rateLimitFactory.mock.calls.at(-1)?.[0];
 
-    // Mock auth middleware to simulate different actors
-    app.use((req: any, _res: any, next: any) => {
-      req._skipRateLimit = false; // Force rate limiting in tests
+    expect(typeof limiter).toBe('function');
+    expect(config.keyGenerator).toBeDefined();
+    expect(config.store).toBeDefined();
+    expect(config.skip({ internalBypassActor: 'internal' } as any)).toBe(true);
+    expect(config.skip({ _skipRateLimit: false } as any)).toBe(false);
+  });
+
+  it('allows requests within the limit for a single tenant and blocks the next one', async () => {
+    const app = express();
+    app.use((req: any, _res, next) => {
+      req._skipRateLimit = false;
       const userId = req.header('x-user-id');
-      if (userId) {
-        req.auth = { userId };
-      }
+      if (userId) req.auth = { userId };
       next();
     });
 
-    const limiter = createAuthAwareRateLimiter(WINDOW_MS, LIMIT);
-    
-    app.get('/test', limiter, (_req: Request, res: Response) => {
+    app.get('/test', createAuthAwareRateLimiter(60_000, 2), (_req, res) => {
       res.status(200).json({ success: true });
     });
-  });
 
-  it('should allow requests within the limit', async () => {
     await request(app).get('/test').expect(200);
     await request(app).get('/test').expect(200);
-  });
-
-  it('should return 429 when limit is exceeded', async () => {
-    await request(app).get('/test').expect(200);
-    await request(app).get('/test').expect(200);
-    
     const response = await request(app).get('/test').expect(429);
+
     expect(response.body).toMatchObject({
       success: false,
-      error: 'Too many requests, please try again later.'
+      error: 'Too many requests, please try again later.',
     });
   });
 
-  it('should include draft-7 standard headers', async () => {
-    const response = await request(app).get('/test');
-    expect(response.headers).toHaveProperty('ratelimit-limit');
-    expect(response.headers).toHaveProperty('ratelimit-remaining');
-    expect(response.headers).toHaveProperty('ratelimit-reset');
-  });
+  it('separates the counter by authenticated principal and falls back to IP for anonymous users', async () => {
+    const app = express();
+    app.use((req: any, _res, next) => {
+      req._skipRateLimit = false;
+      const userId = req.header('x-user-id');
+      if (userId) req.auth = { userId };
+      next();
+    });
 
-  it('should have separate buckets for different users', async () => {
-    // User A hits limit
+    app.get('/test', createAuthAwareRateLimiter(60_000, 2), (_req, res) => {
+      res.status(200).json({ success: true });
+    });
+
     await request(app).get('/test').set('x-user-id', 'user-a').expect(200);
     await request(app).get('/test').set('x-user-id', 'user-a').expect(200);
     await request(app).get('/test').set('x-user-id', 'user-a').expect(429);
 
-    // User B is still fine
     await request(app).get('/test').set('x-user-id', 'user-b').expect(200);
     await request(app).get('/test').set('x-user-id', 'user-b').expect(200);
-  });
 
-  it('should fallback to IP-based limits for anonymous users', async () => {
-    // Anonymous user (IP 1) hits limit
     await request(app).get('/test').expect(200);
     await request(app).get('/test').expect(200);
     await request(app).get('/test').expect(429);

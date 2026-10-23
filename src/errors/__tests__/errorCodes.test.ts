@@ -20,7 +20,9 @@ import {
   type ErrorCode,
   type ErrorType,
   type InternalError,
+  type InternalErrorCode,
   type PublicError,
+  type PublicErrorCode,
 } from "../errorCodes.js";
 import {
   getMessageCatalog,
@@ -61,8 +63,12 @@ describe("Error Code Taxonomy", () => {
       const publicSet = new Set(PUBLIC_ERROR_CODES);
       const internalSet = new Set(INTERNAL_ERROR_CODES);
       Object.keys(ERROR_TAXONOMY).forEach((code) => {
-        expect(publicSet.has(code as ErrorCode) || internalSet.has(code as ErrorCode)).toBe(true);
-        expect(publicSet.has(code as ErrorCode) && internalSet.has(code as ErrorCode)).toBe(false);
+        expect(
+          publicSet.has(code as PublicErrorCode) || internalSet.has(code as InternalErrorCode),
+        ).toBe(true);
+        expect(
+          publicSet.has(code as PublicErrorCode) && internalSet.has(code as InternalErrorCode),
+        ).toBe(false);
       });
       expect(publicSet.size + internalSet.size).toBe(Object.keys(ERROR_TAXONOMY).length);
     });

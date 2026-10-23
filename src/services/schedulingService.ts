@@ -2,7 +2,10 @@
 import type {
   BookingIntentRecord,
   BookingIntentRepository,
+  BookingType,
+  PricingSnapshot,
 } from "../modules/booking-intents/booking-intent-repository.js";
+import { resolvePricingSnapshot } from "../modules/booking-intents/pricing-snapshot.js";
 import type { SlotRecord, SlotRepository } from "../modules/slots/slot-repository.js";
 import { GraceWindowService, getGraceWindowService } from "./graceWindowService.js";
 import { EventEmitter } from "node:events";
@@ -202,11 +205,7 @@ export interface ConfirmRescheduleResult {
 import { escrowMigrationState } from "./escrowMigrationState.js";
 
 export type EscrowRefundStatus =
-  | "requested"
-  | "ledger_written"
-  | "chain_settling"
-  | "completed"
-  | "failed";
+  "requested" | "ledger_written" | "chain_settling" | "completed" | "failed";
 
 export interface EscrowRefundLedgerEntry {
   id: string;
@@ -253,8 +252,7 @@ export function deriveRefundLedgerHash(
   netRefund: number,
   createdAtIso: string,
 ): string {
-  const input =
-    `${refundRequestId}|${prevHash}|${grossAmount}|${feeReversed}|${taxReversed}|${netRefund}|${createdAtIso}`;
+  const input = `${refundRequestId}|${prevHash}|${grossAmount}|${feeReversed}|${taxReversed}|${netRefund}|${createdAtIso}`;
   return crypto.createHash("sha256").update(input, "utf8").digest("hex");
 }
 
@@ -300,7 +298,8 @@ export class SchedulingService {
 
   resolveGraceWindow(slotId: string): number {
     const slot = this.slotRepository.findById(slotId);
-    return this.graceWindowService.resolveGraceWindow(slot?.category);
+    if (!slot) throw new SlotNotFoundError(slotId);
+    return this.graceWindowService.resolve(slot.category);
   }
 
   noShowDeadlineMs(slotId: string): number {
@@ -536,7 +535,8 @@ export class SchedulingService {
   verifyRefundLedgerChain(): { valid: boolean; firstBrokenIndex: number; entriesChecked: number } {
     for (let i = 0; i < this.refundLedger.length; i++) {
       const entry = this.refundLedger[i];
-      const expectedPrev = i === 0 ? REFUND_LEDGER_GENESIS_HASH : this.refundLedger[i - 1].ledgerHash;
+      const expectedPrev =
+        i === 0 ? REFUND_LEDGER_GENESIS_HASH : this.refundLedger[i - 1].ledgerHash;
       if (entry.prevLedgerHash !== expectedPrev) {
         return { valid: false, firstBrokenIndex: i, entriesChecked: i + 1 };
       }
@@ -650,7 +650,7 @@ export class SchedulingService {
 
     const legConfigs = sortedLegs.map((leg, index) => {
       const override = legOverridesMap.get(leg.legId);
-      const defaultOffset = leg.offsetMs ?? (leg.startTime - leg0StartTime);
+      const defaultOffset = leg.offsetMs ?? leg.startTime - leg0StartTime;
       const offsetMs =
         override?.offsetOverrideMs !== undefined ? override.offsetOverrideMs : defaultOffset;
       const durationMs = leg.endTime - leg.startTime;
@@ -660,8 +660,7 @@ export class SchedulingService {
         offsetMs,
         durationMs,
         override,
-        isOverridden:
-          override?.offsetOverrideMs !== undefined || override?.newSlotId !== undefined,
+        isOverridden: override?.offsetOverrideMs !== undefined || override?.newSlotId !== undefined,
         skipReschedule: override?.skipReschedule ?? false,
       };
     });
@@ -960,6 +959,8 @@ export interface RecurringBookingRulesEngineOptions {
   /** Injectable RRULE expander; defaults to recurrenceService.expandRRule. */
   expand?: (rruleText: string) => Date[];
   now?: () => string;
+  /** Injectable Unix epoch clock used when capturing occurrence prices. */
+  nowMs?: () => number;
   /** Bundle-transferability gate; throws BundleNotTransferableError on block. */
   assertBundleTransferable?: (slot: SlotRecord, actor: RecurringBookingActor) => void;
   /** Captures cancellation / hold-fee policy snapshots for a slot owner. */
@@ -978,10 +979,12 @@ export class RecurringBookingRulesEngine {
   private readonly expandRule: (rruleText: string) => Date[];
   private readonly scheduling: SchedulingService;
   private readonly now: () => string;
+  private readonly nowMs: () => number;
 
   constructor(private readonly options: RecurringBookingRulesEngineOptions) {
     this.expandRule = options.expand ?? defaultExpandRRule;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.nowMs = options.nowMs ?? Date.now;
     this.scheduling = new SchedulingService(
       options.slotRepository,
       options.bookingIntentRepository,
@@ -1014,9 +1017,7 @@ export class RecurringBookingRulesEngine {
     // Anchoring a recurring booking on a wall-clock with no zone makes the
     // occurrence local time ambiguous across DST transitions, so reject it.
     const normalized = rrule.trim();
-    const dtstartLine = normalized
-      .split(/\r?\n/)
-      .find((line) => line.startsWith("DTSTART"));
+    const dtstartLine = normalized.split(/\r?\n/).find((line) => line.startsWith("DTSTART"));
     if (dtstartLine) {
       // Extract the value after the first ':' (params like ;TZID= are before
       // it). Line-based parsing is linear and avoids backtracking regexes.
@@ -1049,19 +1050,23 @@ export class RecurringBookingRulesEngine {
    *
    * @param rrule  Strictly validated RRULE (see {@link validateRRule}).
    * @param actor  Authenticated buyer (or admin) creating the booking.
-   * @param opts   Optional `note` propagated to each created intent.
+   * @param opts   Booking options propagated to each created intent.
    * @returns      Partial-success {@link RecurringBookingReport}.
    */
   async createRecurringBookings(
     rrule: string,
     actor: RecurringBookingActor,
-    opts: { note?: string } = {},
+    opts: {
+      note?: string;
+      bookingType?: BookingType;
+      holdDeadlineMs?: number;
+    } = {},
   ): Promise<RecurringBookingReport> {
     const occurrences = this.expand(rrule);
 
     const report: RecurringBookingReport = { successes: [], failures: [] };
     for (const occurrence of occurrences) {
-      const outcome = await this.materializeOccurrence(occurrence, actor, opts.note);
+      const outcome = await this.materializeOccurrence(occurrence, actor, opts);
       if (outcome.ok) {
         report.successes.push(outcome.intent);
       } else {
@@ -1074,7 +1079,11 @@ export class RecurringBookingRulesEngine {
   private async materializeOccurrence(
     occurrence: Date,
     actor: RecurringBookingActor,
-    note: string | undefined,
+    opts: {
+      note?: string;
+      bookingType?: BookingType;
+      holdDeadlineMs?: number;
+    },
   ): Promise<{ ok: true; intent: BookingIntentRecord } | { ok: false; reason: string }> {
     const startEpoch = occurrence.getTime();
     const slot = this.options.slotRepository
@@ -1137,15 +1146,28 @@ export class RecurringBookingRulesEngine {
     // reservation so the slot is never left dangling.
     try {
       const snapshots = this.options.capturePolicySnapshots?.(slot.professional) ?? {};
+      const pricingSnapshot: PricingSnapshot | undefined = slot.pricingStrategy
+        ? resolvePricingSnapshot(
+            slot,
+            await this.options.bookingIntentRepository.listAll(),
+            this.nowMs(),
+          )
+        : undefined;
+      const bookingType = opts.bookingType ?? "standard";
+      const isRefundableHold = bookingType === "refundable_hold";
       const intent = await this.options.bookingIntentRepository.create({
         slotId: slot.id,
         professional: slot.professional,
         customerId: actor.userId,
         startTime: slot.startTime,
         endTime: slot.endTime,
-        status: "pending",
-        note,
+        status: isRefundableHold ? "hold_placed" : "pending",
+        note: opts.note,
         createdAt: this.now(),
+        bookingType,
+        holdPlacedAt: isRefundableHold ? this.now() : undefined,
+        holdUntilMs: isRefundableHold ? opts.holdDeadlineMs : undefined,
+        pricingSnapshot,
         cancellationPolicySnapshot: snapshots.cancellationPolicySnapshot,
         holdFeePolicySnapshot: snapshots.holdFeePolicySnapshot,
       });

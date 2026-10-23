@@ -1,11 +1,34 @@
 // @ts-nocheck
+import { jest, beforeAll } from "@jest/globals";
 import { createHmac } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { registerWebhookRoutes, _resetProcessedTransactions } from "../webhooks.js";
 import { _settlements } from "../../services/settlementReconciler.js";
+import { WebhookIdempotencyStore } from "../../services/webhookIdempotencyStore.js";
 
 const SECRET = "test-webhook-secret";
+
+// The `pg` module is replaced by a stateless mock in tests (test/mocks/pg.ts:
+// every query returns zero rows), so the real WebhookIdempotencyStore can
+// never observe a key it saved itself. Back it with an in-memory map here so
+// replay/idempotency behaviour is actually exercisable.
+const idempotencyMem = new Map<string, any>();
+
+beforeAll(() => {
+  jest
+    .spyOn(WebhookIdempotencyStore, "getExistingResponse")
+    .mockImplementation(async (_tenantId: string, key: string) =>
+      idempotencyMem.has(key) ? idempotencyMem.get(key) : null,
+    );
+  jest
+    .spyOn(WebhookIdempotencyStore, "saveKey")
+    .mockImplementation(async (_tenantId: string, key: string, body: any) => {
+      if (idempotencyMem.has(key)) return false;
+      idempotencyMem.set(key, body);
+      return true;
+    });
+});
 
 function buildApp() {
   const app = express();
@@ -50,6 +73,7 @@ describe("POST /api/v1/webhooks/settlements", () => {
   let app: ReturnType<typeof buildApp>;
 
   beforeEach(() => {
+    idempotencyMem.clear();
     app = buildApp();
     _resetProcessedTransactions();
   });

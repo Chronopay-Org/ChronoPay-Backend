@@ -84,10 +84,30 @@ export class MarketplaceSearchService {
 
   constructor(
     private pool: Pool,
-    private queryTracker?: SearchQueryTracker,
-    facetCache?: FacetCountsCache,
+    queryTrackerOrReranker?: SearchQueryTracker | LtrReranker,
+    facetCacheOrEmitter?: FacetCountsCache | LtrEventEmitter,
     diversificationConfig: DiversificationConfig = {}
   ) {
+    // The 2nd/3rd constructor slots are duck-typed: legacy callers pass
+    // (queryTracker, facetCache), while the LTR-aware callers pass
+    // (reranker, eventEmitter). Distinguish by shape so both work.
+    const isQueryTracker = (v: unknown): v is SearchQueryTracker =>
+      Boolean(v) && "recordQuery" in (v as object);
+    const isReranker = (v: unknown): v is LtrReranker =>
+      Boolean(v) && "rerank" in (v as object);
+    const isFacetCache = (v: unknown): v is FacetCountsCache =>
+      Boolean(v) && "getFacetCounts" in (v as object);
+    const isEventEmitter = (v: unknown): v is LtrEventEmitter =>
+      Boolean(v) && "emitImpression" in (v as object);
+
+    const queryTracker = isQueryTracker(queryTrackerOrReranker) ? queryTrackerOrReranker : undefined;
+    const reranker = isReranker(queryTrackerOrReranker) ? queryTrackerOrReranker : undefined;
+    const facetCache = isFacetCache(facetCacheOrEmitter) ? facetCacheOrEmitter : undefined;
+    const eventEmitter = isEventEmitter(facetCacheOrEmitter) ? facetCacheOrEmitter : undefined;
+
+    this.queryTracker = queryTracker;
+    this.reranker = reranker;
+    this.eventEmitter = eventEmitter;
     this.facetCache = facetCache ?? new FacetCountsCache(pool);
     this.diversificationConfig = {
       defaultCap: diversificationConfig.defaultCap ?? DEFAULT_DIVERSIFICATION_CONFIG.defaultCap,

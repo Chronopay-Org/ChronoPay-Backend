@@ -285,6 +285,45 @@ describe("impersonationRecorder middleware", () => {
     });
   });
 
+  // ── ImpersonationContext state transitions ───────────────────────────────
+
+  describe("ImpersonationContext state transitions", () => {
+    it("keeps only the latest captureSnapshot when multiple snapshots are registered", async () => {
+      const sessionId = "test-session-context-latest";
+      await store.openSession({
+        sessionId,
+        adminId: "admin123",
+        targetUserId: "user456",
+        reason: "Test",
+      });
+
+      app.use((req: Request, _res: Response, next: any) => {
+        req.impersonation = {
+          sessionId,
+          adminId: "admin123",
+          targetUserId: "user456",
+          captureSnapshot: jest.fn() as any,
+        };
+        next();
+      });
+      app.use(impersonationRecorder({ store }));
+      app.put("/api/profile", (req: Request, res: Response) => {
+        req.impersonation?.captureSnapshot({ name: "old" }, { name: "new" });
+        req.impersonation?.captureSnapshot({ name: "earlier" }, { name: "latest" });
+        res.status(200).json({ name: "latest" });
+      });
+
+      await request(app).put("/api/profile");
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const session = await store.getSession(sessionId);
+      const record = session!.requests[0];
+      expect(record.beforeSnapshot).toEqual({ name: "earlier" });
+      expect(record.afterSnapshot).toEqual({ name: "latest" });
+      expect(record.diff).toContainEqual({ field: "name", before: "earlier", after: "latest" });
+    });
+  });
+
   // ── computeDiff helper ────────────────────────────────────────────────────
 
   describe("computeDiff helper", () => {
@@ -312,6 +351,16 @@ describe("impersonationRecorder middleware", () => {
       expect(diff[0].field).toBe("temp");
       expect(diff[0].before).toBe("value");
       expect(diff[0].after).toBeUndefined();
+    });
+
+    it("should handle malformed top-level scalar inputs deterministically", () => {
+      expect(computeDiff(null, "value" as any)).toEqual([
+        { field: "value", before: undefined, after: "value" },
+      ]);
+      expect(computeDiff("before" as any, null)).toEqual([
+        { field: "value", before: "before", after: undefined },
+      ]);
+      expect(computeDiff(undefined as any, undefined as any)).toEqual([]);
     });
 
     it("should detect array changes (atomic comparison)", () => {
@@ -351,6 +400,13 @@ describe("impersonationRecorder middleware", () => {
       const hash2 = hashBody("content B");
 
       expect(hash1).not.toBe(hash2);
+    });
+
+    it("should normalize null, undefined, and non-string values without throwing", () => {
+      expect(hashBody(null)).toBe(hashBody(""));
+      expect(hashBody(undefined)).toBe(hashBody(""));
+      expect(hashBody(0)).toBe(hashBody("0"));
+      expect(hashBody({ hello: "world" })).toBe(hashBody('{"hello":"world"}'));
     });
   });
 

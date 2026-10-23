@@ -181,6 +181,10 @@ export class SorobanEscrowClient {
    * `EscrowDuplicateHoldError` if a hold already exists.
    */
   async hold(params: EscrowHoldParams): Promise<EscrowTxResult> {
+    if (!params.bookingIntentId) throw new Error("bookingIntentId cannot be empty");
+    if (!params.buyerAddress) throw new Error("buyerAddress cannot be empty");
+    if (params.amountStroops <= 0) throw new Error("amountStroops must be strictly positive");
+
     await this.assertContractIntegrity();
 
     if (this.holds.has(params.bookingIntentId)) {
@@ -208,6 +212,7 @@ export class SorobanEscrowClient {
    * `EscrowHoldNotFoundError` if the booking has no active hold.
    */
   async release(params: EscrowSettleParams): Promise<EscrowTxResult> {
+    if (!params.bookingIntentId) throw new Error("bookingIntentId cannot be empty");
     await this.assertContractIntegrity();
 
     const hold = this.holds.get(params.bookingIntentId);
@@ -230,6 +235,7 @@ export class SorobanEscrowClient {
    * `EscrowHoldNotFoundError` if the booking has no active hold.
    */
   async refund(params: EscrowSettleParams): Promise<EscrowTxResult> {
+    if (!params.bookingIntentId) throw new Error("bookingIntentId cannot be empty");
     await this.assertContractIntegrity();
 
     const hold = this.holds.get(params.bookingIntentId);
