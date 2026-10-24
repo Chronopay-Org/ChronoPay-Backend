@@ -3,6 +3,7 @@ import { jest } from "@jest/globals";
 import { setFeatureFlagsFromEnv } from "../flags/index.js";
 import { setRedisClient, type RedisClient } from "../cache/redisClient.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { createTestAuthorization } from "../../test/auth.js";
 
 type StoredValue = { value: string; expiresAt?: number };
 
@@ -49,6 +50,17 @@ class InMemoryRedisMock implements RedisClient {
     });
 
     return "OK";
+  }
+
+  async ttl(key: string): Promise<number> {
+    const entry = this.store.get(key);
+    if (!entry) return -2;
+    if (entry.expiresAt && Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return -2;
+    }
+    if (!entry.expiresAt) return -1;
+    return Math.max(0, Math.ceil((entry.expiresAt - Date.now()) / 1000));
   }
 
   async del(key: string): Promise<unknown> {
@@ -100,12 +112,11 @@ describe("POST /api/v1/booking-intents idempotency", () => {
   });
 
   const actorHeaders = {
-    "x-chronopay-user-id": "customer-123",
-    "x-chronopay-role": "customer",
+    Authorization: createTestAuthorization("customer-123", "customer"),
   };
 
   const url = "/api/v1/booking-intents";
-  const body = { slotId: "slot-100", note: "window seat" };
+  const body = { slotId: "slot-11111111-1111-4111-8111-111111111111", note: "window seat" };
 
   it("replays original response for same key and same body", async () => {
     const redisMock = new InMemoryRedisMock();
@@ -137,8 +148,11 @@ describe("POST /api/v1/booking-intents idempotency", () => {
     expect(stored.status).toBe("completed");
     expect(stored.statusCode).toBe(201);
 
-    // Audit middleware should have been called only for the first (original) request
-    expect(auditSpy).toHaveBeenCalledTimes(1);
+    // Audit events only for the first (original) request, and only for new
+    // intents: the CREATE_BOOKING_INTENT action plus the per-intent fraud_score
+    // event (issue #807). Idempotent replays short-circuit before the audit and
+    // anti-fraud middleware, so they emit nothing.
+    expect(auditSpy).toHaveBeenCalledTimes(2);
   });
 
   it("returns 422 for same key with different payload", async () => {
@@ -156,7 +170,7 @@ describe("POST /api/v1/booking-intents idempotency", () => {
       .set(actorHeaders)
       .set("x-forwarded-for", "127.0.0.1")
       .set("Idempotency-Key", "booking-intent-key-2")
-      .send({ slotId: "slot-100", note: "different payload" });
+      .send({ slotId: "slot-11111111-1111-4111-8111-111111111111", note: "different payload" });
 
     expect(first.status).toBe(201);
     expect(second.status).toBe(422);
@@ -166,8 +180,16 @@ describe("POST /api/v1/booking-intents idempotency", () => {
   it("without idempotency key does normal non-idempotent behavior", async () => {
     setRedisClient(new InMemoryRedisMock());
 
-    const first = await request(app).post(url).set(actorHeaders).set("x-forwarded-for", "127.0.0.1").send(body);
-    const second = await request(app).post(url).set(actorHeaders).set("x-forwarded-for", "127.0.0.1").send(body);
+    const first = await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .send(body);
+    const second = await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .send(body);
 
     expect(first.status).toBe(201);
     // second attempt without key follows regular business rules (duplicate conflict)
@@ -194,6 +216,114 @@ describe("POST /api/v1/booking-intents idempotency", () => {
 
     const statuses = [r1.status, r2.status].sort((a, b) => a - b);
     expect(statuses).toEqual([201, 409]);
+  });
+
+  it("caches 201 completion for the completed TTL", async () => {
+    const redisMock = new InMemoryRedisMock();
+    setRedisClient(redisMock);
+
+    const resp = await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .set("Idempotency-Key", "booking-intent-key-ttl-201")
+      .send(body);
+
+    expect(resp.status).toBe(201);
+    const storageKey = `idempotency:req:booking-intent-key-ttl-201`;
+    const raw = await redisMock.get(storageKey);
+    expect(raw).not.toBeNull();
+    const stored = JSON.parse(raw as string);
+    expect(stored.status).toBe("completed");
+    expect(stored.statusCode).toBe(201);
+    const remaining = await redisMock.ttl(storageKey);
+    expect(remaining).toBeGreaterThan(60);
+  });
+
+  it("caches 422 completion for the completed TTL", async () => {
+    const redisMock = new InMemoryRedisMock();
+    setRedisClient(redisMock);
+
+    await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .set("Idempotency-Key", "booking-intent-key-ttl-422")
+      .send(body);
+
+    const second = await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .set("Idempotency-Key", "booking-intent-key-ttl-422")
+      .send({ slotId: "slot-11111111-1111-4111-8111-111111111111", note: "different" });
+
+    expect(second.status).toBe(422);
+    const storageKey = `idempotency:req:booking-intent-key-ttl-422`;
+    const raw = await redisMock.get(storageKey);
+    expect(raw).not.toBeNull();
+    const stored = JSON.parse(raw as string);
+    expect(stored.status).toBe("completed");
+    expect(stored.statusCode).toBe(422);
+    const remaining = await redisMock.ttl(storageKey);
+    expect(remaining).toBeGreaterThan(60);
+  });
+
+  it("does not cache 5xx responses and allows retry with same key", async () => {
+    const redisMock = new InMemoryRedisMock();
+    setRedisClient(redisMock);
+
+    // Force the handler to fail with a 5xx by making the audit logger throw.
+    auditSpy.mockRejectedValueOnce(new Error("transient failure"));
+
+    const first = await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .set("Idempotency-Key", "booking-intent-key-5xx")
+      .send(body);
+
+    expect(first.status).toBeGreaterThanOrEqual(500);
+
+    const storageKey = `idempotency:req:booking-intent-key-5xx`;
+    const raw = await redisMock.get(storageKey);
+    expect(raw).toBeNull();
+
+    // Retry with the same key must execute the handler again and succeed.
+    const second = await request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .set("Idempotency-Key", "booking-intent-key-5xx")
+      .send(body);
+
+    expect(second.status).toBe(201);
+  });
+
+  it("uses a short TTL for the processing lock", async () => {
+    const redisMock = new InMemoryRedisMock(80);
+    setRedisClient(redisMock);
+
+    const pending = request(app)
+      .post(url)
+      .set(actorHeaders)
+      .set("x-forwarded-for", "127.0.0.1")
+      .set("Idempotency-Key", "booking-intent-key-lock-ttl")
+      .send(body);
+
+    // Give the middleware time to acquire the lock but not complete.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const storageKey = `idempotency:req:booking-intent-key-lock-ttl`;
+    const raw = await redisMock.get(storageKey);
+    expect(raw).not.toBeNull();
+    const stored = JSON.parse(raw as string);
+    expect(stored.status).toBe("processing");
+    const remaining = await redisMock.ttl(storageKey);
+    expect(remaining).toBeGreaterThan(0);
+    expect(remaining).toBeLessThanOrEqual(60);
+
+    await pending;
   });
 
   it("returns 503 when Redis is unavailable and Idempotency-Key provided", async () => {

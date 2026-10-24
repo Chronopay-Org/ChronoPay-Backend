@@ -1,13 +1,24 @@
 import { describe, it, expect, jest, beforeEach } from "@jest/globals";
 import { Request, Response, NextFunction } from "express";
 import { requirePermission, getUserPermissions } from "../middleware/rbac.js";
+import { configService } from "../config/config.service.js";
+import { createTestAuthorization } from "../../test/auth.js";
+
+const TEST_SECRET = "chronopay-test-jwt-secret-at-least-32-characters";
 
 describe("RBAC Permission Middleware", () => {
   let mockRequest: Partial<Request>;
   let mockResponse: Partial<Response>;
   let mockNext: NextFunction;
 
+  function setJwtRole(role: string) {
+    mockRequest.headers = {
+      authorization: createTestAuthorization("permission-user", role),
+    };
+  }
+
   beforeEach(() => {
+    jest.spyOn(configService, "getAllSecretVersions").mockReturnValue([TEST_SECRET]);
     mockRequest = {
       header: jest.fn<any>(),
       ip: "192.168.1.1",
@@ -27,87 +38,62 @@ describe("RBAC Permission Middleware", () => {
 
   describe("requirePermission", () => {
     it("should allow access when user has exact permission", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue("customer");
-      
+      setJwtRole("customer");
+
       const middleware = requirePermission("bookings:create");
-      await middleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
 
       expect(mockNext).toHaveBeenCalled();
       expect(mockResponse.status).not.toHaveBeenCalled();
     });
 
     it("should allow access when user has wildcard permission", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue("admin");
-      
+      setJwtRole("admin");
+
       const middleware = requirePermission("bookings:create");
-      await middleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
 
       expect(mockNext).toHaveBeenCalled();
       expect(mockResponse.status).not.toHaveBeenCalled();
     });
 
     it("should allow access when user has resource wildcard", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue("professional");
-      
+      setJwtRole("professional");
+
       const middleware = requirePermission("slots:create");
-      await middleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
 
       expect(mockNext).toHaveBeenCalled();
       expect(mockResponse.status).not.toHaveBeenCalled();
     });
 
     it("should deny access when user lacks permission", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue("customer");
-      
+      setJwtRole("customer");
+
       const middleware = requirePermission("users:delete");
-      await middleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
 
       expect(mockNext).not.toHaveBeenCalled();
       expect(mockResponse.status).toHaveBeenCalledWith(403);
     });
 
     it("should return 401 when role header is missing", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue(undefined);
-      
+      mockRequest.headers = {};
+
       const middleware = requirePermission("bookings:read");
-      await middleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
 
       expect(mockNext).not.toHaveBeenCalled();
       expect(mockResponse.status).toHaveBeenCalledWith(401);
     });
 
-    it("should return 400 when role is invalid", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue("invalid_role");
-      
-      const middleware = requirePermission("bookings:read");
-      await middleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+    it("should use customer permissions when the JWT role is invalid", async () => {
+      setJwtRole("invalid_role");
 
-      expect(mockNext).not.toHaveBeenCalled();
-      expect(mockResponse.status).toHaveBeenCalledWith(400);
+      const middleware = requirePermission("bookings:read");
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
+
+      expect(mockNext).toHaveBeenCalled();
     });
 
     it("should throw error when permission is unknown", () => {
@@ -122,29 +108,21 @@ describe("RBAC Permission Middleware", () => {
       }).toThrow("must specify a permission");
     });
 
-    it("should handle case insensitive role header", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue("ADMIN");
-      
+    it("should handle case insensitive JWT roles", async () => {
+      setJwtRole("ADMIN");
+
       const middleware = requirePermission("bookings:create");
-      await middleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
 
       expect(mockNext).toHaveBeenCalled();
     });
 
     it("should handle different permission requirements correctly", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue("support");
-      
+      setJwtRole("support");
+
       // Support should have bookings:* (including read)
       const readMiddleware = requirePermission("bookings:read");
-      await readMiddleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await readMiddleware(mockRequest as Request, mockResponse as Response, mockNext);
       expect(mockNext).toHaveBeenCalledTimes(1);
 
       // Reset mocks
@@ -152,25 +130,17 @@ describe("RBAC Permission Middleware", () => {
 
       // Support should NOT have users:delete
       const deleteMiddleware = requirePermission("users:delete");
-      await deleteMiddleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await deleteMiddleware(mockRequest as Request, mockResponse as Response, mockNext);
       expect(mockNext).not.toHaveBeenCalled();
       expect(mockResponse.status).toHaveBeenCalledWith(403);
     });
 
     it("should handle auditor role correctly", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue("auditor");
-      
+      setJwtRole("auditor");
+
       // Auditor should have audit:*
       const auditMiddleware = requirePermission("audit:read");
-      await auditMiddleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await auditMiddleware(mockRequest as Request, mockResponse as Response, mockNext);
       expect(mockNext).toHaveBeenCalledTimes(1);
 
       // Reset mocks
@@ -178,11 +148,7 @@ describe("RBAC Permission Middleware", () => {
 
       // Auditor should NOT have bookings permissions
       const bookingMiddleware = requirePermission("bookings:create");
-      await bookingMiddleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await bookingMiddleware(mockRequest as Request, mockResponse as Response, mockNext);
       expect(mockNext).not.toHaveBeenCalled();
       expect(mockResponse.status).toHaveBeenCalledWith(403);
     });
@@ -232,7 +198,7 @@ describe("RBAC Permission Middleware", () => {
       const permissions1 = getUserPermissions("admin");
       const permissions2 = getUserPermissions("ADMIN");
       const permissions3 = getUserPermissions("Admin");
-      
+
       expect(permissions1.size).toBe(permissions2.size);
       expect(permissions2.size).toBe(permissions3.size);
     });
@@ -240,45 +206,61 @@ describe("RBAC Permission Middleware", () => {
 
   describe("Edge Cases and Security", () => {
     it("should prevent privilege escalation via case manipulation", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue("cUsToMeR");
-      
+      setJwtRole("cUsToMeR");
+
       const middleware = requirePermission("users:delete");
-      await middleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
 
       expect(mockNext).not.toHaveBeenCalled();
       expect(mockResponse.status).toHaveBeenCalledWith(403);
     });
 
-    it("should handle whitespace in role header", async () => {
-      (mockRequest.header as jest.Mock).mockReturnValue("  admin  ");
-      
+    it("should handle whitespace in JWT role claims", async () => {
+      setJwtRole("  admin  ");
+
       const middleware = requirePermission("bookings:create");
-      await middleware(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext
-      );
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
 
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it("should handle missing socket when IP is unavailable", async () => {
-      // Force an error by passing invalid request
+    it("should reject a request without a verified bearer token", async () => {
       const badRequest = {} as Request;
-      
+
       const middleware = requirePermission("bookings:read");
-      await middleware(
-        badRequest,
-        mockResponse as Response,
-        mockNext
-      );
+      await middleware(badRequest, mockResponse as Response, mockNext);
 
       expect(mockNext).not.toHaveBeenCalled();
-      expect(mockResponse.status).toHaveBeenCalledWith(500);
+      expect(mockResponse.status).toHaveBeenCalledWith(401);
+    });
+
+    it("should fall back to socket address in audit metadata when req.ip is absent", async () => {
+      setJwtRole("customer");
+      (mockRequest as { ip?: string }).ip = undefined;
+      mockRequest.socket = { remoteAddress: "10.0.0.9" } as any;
+
+      const middleware = requirePermission("users:delete");
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
+
+      expect(mockNext).not.toHaveBeenCalled();
+      expect(mockResponse.status).toHaveBeenCalledWith(403);
+    });
+
+    it("should tolerate audit logger failures on a denied permission", async () => {
+      setJwtRole("customer");
+      (mockRequest as { ip?: string }).ip = "192.168.1.1";
+
+      const auditLogger = await import("../services/auditLogger.js");
+      const auditSpy = jest
+        .spyOn(auditLogger.defaultAuditLogger, "log")
+        .mockRejectedValue(new Error("audit backend down"));
+
+      const middleware = requirePermission("users:delete");
+      await middleware(mockRequest as Request, mockResponse as Response, mockNext);
+
+      expect(mockNext).not.toHaveBeenCalled();
+      expect(mockResponse.status).toHaveBeenCalledWith(403);
+      auditSpy.mockRestore();
     });
   });
 });

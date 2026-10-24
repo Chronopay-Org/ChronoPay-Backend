@@ -11,9 +11,38 @@ export interface VerifiedJwtPayload extends JWTPayload {
 }
 
 export async function verifyJwt(token: string, options?: { issuer?: string; audience?: string }) {
+  // The config service loads secrets asynchronously from the provider. Until
+  // that preload lands, the version list is empty and every token would be
+  // rejected as invalid — so fall back to the environment, which is what the
+  // default env-backed provider reads anyway.
   const secrets = configService.getAllSecretVersions("JWT_SECRET");
-  const encoder = new TextEncoder();
-  const verifyOptions: { issuer?: string; audience?: string } = {};
+  if (secrets.length === 0) {
+    const fromEnv = process.env.JWT_SECRET?.trim();
+    if (fromEnv) {
+      return verifyJwtWithKey(token, fromEnv, buildVerifyOptions(options));
+    }
+  }
+
+  const verifyOptions = buildVerifyOptions(options);
+
+  for (const secret of secrets) {
+    try {
+      return await verifyJwtWithKey(token, secret, verifyOptions);
+    } catch {
+      // try next secret
+    }
+  }
+
+  throw new Error("INVALID_TOKEN");
+}
+
+export interface VerifyJwtKeyOptions {
+  issuer?: string;
+  audience?: string;
+}
+
+function buildVerifyOptions(options?: VerifyJwtKeyOptions): VerifyJwtKeyOptions {
+  const verifyOptions: VerifyJwtKeyOptions = {};
 
   if (options?.issuer ?? configService.jwtIssuer) {
     verifyOptions.issuer = options?.issuer ?? configService.jwtIssuer;
@@ -23,37 +52,47 @@ export async function verifyJwt(token: string, options?: { issuer?: string; audi
     verifyOptions.audience = options?.audience ?? configService.jwtAudience;
   }
 
-  for (const secret of secrets) {
-    try {
-      const { payload: decoded } = await jwtVerify(token, encoder.encode(secret), verifyOptions);
+  return verifyOptions;
+}
 
-      // Audience shape validation
-      const aud = decoded.aud;
-      if (aud !== undefined) {
-        if (typeof aud !== "string" && !Array.isArray(aud)) {
-          throw new Error("Invalid audience shape: must be string or array of strings");
-        }
-        if (Array.isArray(aud) && !aud.every((a) => typeof a === "string")) {
-          throw new Error("Invalid audience shape: array must contain only strings");
-        }
-      }
+/**
+ * Verifies a JWT against a single explicit key. Used by `verifyJwt` across all
+ * active secret versions and by the `requireFreshMfa` middleware, which
+ * validates MFA challenge tokens signed with the dedicated MFA secret.
+ */
+export async function verifyJwtWithKey(
+  token: string,
+  secret: string,
+  options?: VerifyJwtKeyOptions,
+): Promise<VerifiedJwtPayload> {
+  const encoder = new TextEncoder();
+  const verifyOptions: { issuer?: string; audience?: string } = {};
 
-      if (typeof decoded.exp !== "number" || typeof decoded.iat !== "number") {
-        throw new Error("Token missing required numeric exp or iat claims");
-      }
+  if (options?.issuer) verifyOptions.issuer = options.issuer;
+  if (options?.audience) verifyOptions.audience = options.audience;
 
-      const now = Math.floor(Date.now() / 1000);
-      if (decoded.iat > now + 300) {
-        throw new Error("Token iat is too far in the future");
-      }
+  const { payload: decoded } = await jwtVerify(token, encoder.encode(secret), verifyOptions);
 
-      return decoded as VerifiedJwtPayload;
-    } catch {
-      // try next secret
+  const aud = decoded.aud;
+  if (aud !== undefined) {
+    if (typeof aud !== "string" && !Array.isArray(aud)) {
+      throw new Error("Invalid audience shape: must be string or array of strings");
+    }
+    if (Array.isArray(aud) && !aud.every((a) => typeof a === "string")) {
+      throw new Error("Invalid audience shape: array must contain only strings");
     }
   }
 
-  throw new Error("INVALID_TOKEN");
+  if (typeof decoded.exp !== "number" || typeof decoded.iat !== "number") {
+    throw new Error("Token missing required numeric exp or iat claims");
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (decoded.iat > now + 300) {
+    throw new Error("Token iat is too far in the future");
+  }
+
+  return decoded as VerifiedJwtPayload;
 }
 
 export async function signJwt(

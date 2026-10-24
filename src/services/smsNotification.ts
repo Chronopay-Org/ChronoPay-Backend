@@ -3,6 +3,8 @@ import { timeoutConfig } from "../config/timeouts.js";
 import { OutboundBadResponseError } from "../errors/OutboundErrors.js";
 import { redactPhone } from "../utils/redact.js";
 import { RetryPolicy } from "../utils/retry-policy.js";
+import { logger } from "../utils/logger.js";
+
 
 export interface SmsSendResult {
   success: boolean;
@@ -144,7 +146,7 @@ export class SmsNotificationService {
       } catch (err) {
         // All retries exhausted for this provider — record error and try next
         lastError = err instanceof Error ? err.message : String(err);
-        console.warn(
+        logger.warn(
           `[SMS] Provider "${provider.name}" failed for ${redactPhone(to)}: ${lastError}`,
         );
       }

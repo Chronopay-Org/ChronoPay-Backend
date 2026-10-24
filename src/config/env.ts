@@ -1,3 +1,5 @@
+import os from "os";
+
 export type NodeEnv = "development" | "test" | "production";
 
 export interface EncryptionKey {
@@ -26,17 +28,41 @@ export interface EnvConfig {
   rateLimitWindowMs: number;
   rateLimitMax: number;
   trustProxy: boolean;
+  /**
+   * Explicit opt-in for test-only routes (e.g. /__test__/explode, /api/v1/test/auth).
+   * Always false unless ENABLE_TEST_ROUTES is set to a truthy value.
+   */
+  enableTestRoutes: boolean;
   timeoutMs?: number;
   webhookSecret?: string;
   jwtIssuer?: string;
   jwtAudience?: string;
   corsAllowedOrigins?: string[];
-  /** Stellar Horizon base URL (e.g. https://horizon-testnet.stellar.org) */
-  horizonUrl?: string;
+  /** Stellar Horizon base URLs (comma-separated, first is primary) */
+  horizonUrls?: string[];
   /** Stellar network passphrase used to identify the target network */
   networkPassphrase?: string;
   /** Pinned hash for the current active escrow contract */
   escrowContractHash?: string;
+  /** Secret used to verify the internal fair-queue rate-limit bypass HMAC signature. */
+  internalOverrideSecret?: string;
+  /** Previous secret for zero-downtime rotation of the bypass signing key. */
+  internalOverrideSecretPrev?: string;
+  /** Acceptable clock skew (ms) for the bypass timestamp. Default 30 000. */
+  internalBypassToleranceMs: number;
+  /** Issuer label embedded in TOTP otpauth URIs and QR code labels. */
+  mfaIssuer?: string;
+  /** Max age (ms) of an MFA Challenge before `requireFreshMfa` rejects it. Default 15 min. */
+  mfaFreshnessMs: number;
+  /** Clock-skew windows accepted around the current TOTP step on verification. Default 1. */
+  mfaWindowPeriods: number;
+  /** Lifetime (seconds) of an issued MFA challenge token. Default 300. */
+  mfaChallengeTtlSec: number;
+  /**
+   * Require a fresh MFA challenge on customer booking refunds.
+   * Default: enabled when NODE_ENV=production, disabled otherwise.
+   */
+  mfaRequiredForRefunds: boolean;
 }
 
 export class EnvValidationError extends Error {
@@ -65,14 +91,71 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   );
   const rateLimitMax = parsePositiveInteger(env.RATE_LIMIT_MAX, "RATE_LIMIT_MAX", 100, issues);
   const trustProxy = parseBoolean(env.TRUST_PROXY, "TRUST_PROXY", false, issues);
+  const enableTestRoutes = parseBoolean(
+    env.ENABLE_TEST_ROUTES,
+    "ENABLE_TEST_ROUTES",
+    false,
+    issues,
+  );
 
   const webhookSecret = parseOptionalString(env.WEBHOOK_SECRET);
   const jwtIssuer = parseOptionalString(env.JWT_ISSUER);
   const jwtAudience = parseOptionalString(env.JWT_AUDIENCE);
   const corsAllowedOrigins = parseStringList(env.CORS_ALLOWED_ORIGINS);
-  const horizonUrl = parseOptionalUrl(env.HORIZON_URL, "HORIZON_URL", issues);
+  
+  let horizonUrls: string[] | undefined;
+  if (env.HORIZON_URLS) {
+    horizonUrls = parseUrlList(env.HORIZON_URLS, "HORIZON_URLS", issues);
+  } else if (env.HORIZON_URL) {
+    const singleUrl = parseOptionalUrl(env.HORIZON_URL, "HORIZON_URL", issues);
+    if (singleUrl) {
+      horizonUrls = [singleUrl];
+    }
+  }
+
   const networkPassphrase = parseOptionalString(env.STELLAR_NETWORK_PASSPHRASE);
   const escrowContractHash = parseOptionalString(env.ESCROW_CONTRACT_HASH);
+
+  const internalOverrideSecret = parseOptionalString(env.INTERNAL_OVERRIDE_SECRET);
+  const internalOverrideSecretPrev = parseOptionalString(env.INTERNAL_OVERRIDE_SECRET_PREV);
+  const internalBypassToleranceMs = parsePositiveInteger(
+    env.INTERNAL_BYPASS_TOLERANCE_MS,
+    "INTERNAL_BYPASS_TOLERANCE_MS",
+    30_000,
+    issues,
+  );
+
+  const mfaIssuer = parseOptionalString(env.MFA_ISSUER);
+  const mfaFreshnessMs = parsePositiveInteger(
+    env.MFA_FRESHNESS_MS,
+    "MFA_FRESHNESS_MS",
+    15 * 60 * 1000,
+    issues,
+  );
+  const mfaWindowPeriods = parsePositiveInteger(
+    env.MFA_WINDOW_PERIODS,
+    "MFA_WINDOW_PERIODS",
+    1,
+    issues,
+  );
+  const mfaChallengeTtlSec = parsePositiveInteger(
+    env.MFA_CHALLENGE_TTL_SEC,
+    "MFA_CHALLENGE_TTL_SEC",
+    300,
+    issues,
+  );
+  const mfaRequiredForRefunds = parseBoolean(
+    env.MFA_REQUIRED_FOR_REFUNDS,
+    "MFA_REQUIRED_FOR_REFUNDS",
+    nodeEnv === "production",
+    issues,
+  );
+
+  const idempotencyProcessingLockTtlSeconds = parseOptionalPositiveInteger(
+    env.IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS,
+    "IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS",
+    issues,
+  );
 
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
@@ -85,14 +168,23 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     rateLimitWindowMs,
     rateLimitMax,
     trustProxy,
+    enableTestRoutes,
     timeoutMs,
     webhookSecret,
     jwtIssuer,
     jwtAudience,
     corsAllowedOrigins,
-    horizonUrl,
+    horizonUrls,
     networkPassphrase,
     escrowContractHash,
+    internalOverrideSecret,
+    internalOverrideSecretPrev,
+    internalBypassToleranceMs,
+    mfaIssuer,
+    mfaFreshnessMs,
+    mfaWindowPeriods,
+    mfaChallengeTtlSec,
+    mfaRequiredForRefunds,
   };
 }
 
@@ -126,6 +218,33 @@ function parsePositiveInteger(
   issues: string[],
 ): number {
   return parseIntegerInRange(rawValue, key, defaultValue, 1, Number.MAX_SAFE_INTEGER, issues);
+}
+
+function parseOptionalPositiveInteger(
+  rawValue: string | undefined,
+  key: string,
+  issues: string[],
+): number | undefined {
+  if (rawValue === undefined) return undefined;
+
+  const value = rawValue.trim();
+  if (value.length === 0) {
+    issues.push(`${key} must be a non-empty integer when provided.`);
+    return undefined;
+  }
+
+  if (!/^\d+$/.test(value)) {
+    issues.push(`${key} must be a whole number between 1 and ${Number.MAX_SAFE_INTEGER}.`);
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > Number.MAX_SAFE_INTEGER) {
+    issues.push(`${key} must be a whole number between 1 and ${Number.MAX_SAFE_INTEGER}.`);
+    return undefined;
+  }
+
+  return parsed;
 }
 
 function parseIntegerInRange(
@@ -167,7 +286,7 @@ function parseRedisUrl(rawValue: string | undefined, issues: string[]): string {
   const value = rawValue.trim();
 
   if (value.length === 0) {
-    issues.push("REDIS_URL must be a non-empty value.");
+    issues.push("REDIS_ULL must be a non-empty value.");
     return "redis://localhost:6379";
   }
 
@@ -181,7 +300,7 @@ function parseRedisUrl(rawValue: string | undefined, issues: string[]): string {
     }
 
     if (!url.hostname) {
-      issues.push("REDIS_URL must include a host.");
+      issues.push("REDIS_ULL must include a host.");
       return "redis://localhost:6379";
     }
 
@@ -223,13 +342,24 @@ function parseStringList(rawValue: string | undefined): string[] {
   return rawValue.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
+function parseUrlList(rawValue: string, key: string, issues: string[]): string[] {
+  const urls: string[] = [];
+  for (const entry of parseStringList(rawValue)) {
+    const url = parseOptionalUrl(entry, key, issues);
+    if (url) {
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
 function parseOptionalUrl(rawValue: string | undefined, key: string, issues: string[]): string | undefined {
   if (rawValue === undefined) return undefined;
   const value = rawValue.trim();
   if (value.length === 0) return undefined;
   try {
     const url = new URL(value);
-    if (!["http:", "https:"].includes(url.protocol)) {
+    if (!["http:", "https::"].includes(url.protocol)) {
       issues.push(`${key} must use http or https scheme.`);
       return undefined;
     }
@@ -238,4 +368,32 @@ function parseOptionalUrl(rawValue: string | undefined, key: string, issues: str
     issues.push(`${key} must be a valid URL.`);
     return undefined;
   }
+}
+
+function _parseReplicaId(rawValue: string | undefined): string {
+  if (rawValue === undefined || rawValue.trim().length === 0) {
+    // Fall back to the OS hostname so each pod/container gets a distinct ID
+    // without requiring explicit config.
+    try {
+      return os.hostname();
+    } catch {
+      return "unknown-replica";
+    }
+  }
+  return rawValue.trim();
+}
+
+function _parseFloat01(rawValue: string | undefined, key: string, defaultValue: number, issues: string[]): number {
+  if (rawValue === undefined) return defaultValue;
+  const value = rawValue.trim();
+  if (value.length === 0) {
+    issues.push(`${key} must be a number between 0 and 1.`);
+    return defaultValue;
+  }
+  const parsed = Number(value);
+  if (isNaN(parsed) || parsed < 0 || parsed > 1) {
+    issues.push(`${key} must be a number between 0.0 and 1.0.`);
+    return defaultValue;
+  }
+  return parsed;
 }

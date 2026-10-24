@@ -18,13 +18,12 @@ ChronoPay's error code taxonomy is a typed, discriminated union system that dist
 
 ```
 src/errors/
-├── errorTaxonomy.ts          # Typed discriminated unions
-├── AppError.ts               # Error classes with i18n support
-├── typeSafeError.ts          # Type-safe error sender functions
-├── errorCodes.ts             # Backward compatibility export
+├── errorCodes.ts              # Typed discriminated unions (single source of truth)
+├── AppError.ts                # Error classes with i18n support
+├── sendError.ts               # Type-safe error sender functions
 └── __tests__/
-    ├── errorTaxonomy.test.ts
-    └── typeSafeError.test.ts
+    ├── errorCodes.test.ts
+    └── sendError.test.ts
 
 src/i18n/
 ├── messageLoader.ts          # Message resolution logic
@@ -44,7 +43,7 @@ type PublicErrorCode =
   | "UNAUTHORIZED"
   | "FORBIDDEN"
   | "NOT_FOUND"
-  | ... (27 total public codes)
+  | ... (29 total public codes)
 
 // Internal errors (never exposed, masked in production)
 type InternalErrorCode =
@@ -68,7 +67,7 @@ type PublicError =
 **For public errors** (expose to API clients):
 
 ```typescript
-import { sendPublicError } from "./errors/typeSafeError.js";
+import { sendPublicError } from "./errors/sendError.js";
 
 // TypeScript will reject invalid codes at compile time
 sendPublicError(res, "NOT_FOUND", "User not found", {
@@ -83,7 +82,7 @@ sendPublicError(res, "DB_ERROR", "..."); // ❌ Not a public code
 **For internal errors** (production-safe):
 
 ```typescript
-import { sendInternalError } from "./errors/typeSafeError.js";
+import { sendInternalError } from "./errors/sendError.js";
 
 try {
   const result = await database.query(...);
@@ -98,7 +97,7 @@ try {
 **For dynamic error handling**:
 
 ```typescript
-import { sendError } from "./errors/typeSafeError.js";
+import { sendError } from "./errors/sendError.js";
 
 const code = getErrorCode(err); // Returns ErrorCode
 sendError(res, code, message, { locale: "es" });
@@ -373,7 +372,7 @@ npm run typecheck
 
 ```bash
 # Run all error taxonomy tests
-npm test -- errorTaxonomy typeSafeError messageLoader
+npm test -- errorCodes sendError messageLoader
 
 # With coverage
 npm run test:coverage
@@ -386,8 +385,8 @@ npm test -- --watch
 
 All components maintain **>95% test coverage**:
 
-- `errorTaxonomy.ts`: Type safety, public/internal separation, HTTP status mapping
-- `typeSafeError.ts`: Request sending, i18n resolution, security in production
+- `errorCodes.ts`: Type safety, public/internal separation, HTTP status mapping
+- `sendError.ts`: Request sending, i18n resolution, security in production
 - `messageLoader.ts`: Locale support, fallback behavior, message consistency
 
 ## Migration from Legacy Code
@@ -404,7 +403,7 @@ throw new AppError("User not found", ERROR_CODES.NOT_FOUND.status, ERROR_CODES.N
 
 ```typescript
 import { NotFoundError } from "./errors/AppError.js";
-import { sendPublicError } from "./errors/typeSafeError.js";
+import { sendPublicError } from "./errors/sendError.js";
 
 // Creating errors
 throw new NotFoundError("User not found");
@@ -429,7 +428,7 @@ const code = ERROR_CODES.NOT_FOUND.code; // "NOT_FOUND"
 
 ```typescript
 import { Router } from "express";
-import { sendPublicError } from "../errors/typeSafeError.js";
+import { sendPublicError } from "../errors/sendError.js";
 import { ValidationError } from "../errors/AppError.js";
 
 const router = Router();
@@ -462,7 +461,7 @@ export default router;
 ### Example: Database Error Handling
 
 ```typescript
-import { sendInternalError } from "../errors/typeSafeError.js";
+import { sendInternalError } from "../errors/sendError.js";
 
 async function getUser(id: string, res: Response) {
   try {

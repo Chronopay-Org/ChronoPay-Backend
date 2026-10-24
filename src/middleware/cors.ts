@@ -25,6 +25,8 @@ export function createCORSMiddleware(config: CORSConfig) {
   return (req: Request, res: Response, next: NextFunction) => {
     const origin = req.get("Origin");
 
+    res.vary("Origin");
+
     // Check if origin is allowed
     if (isOriginAllowed(origin, config.allowedOrigins)) {
       // Set CORS headers only for allowed origins
@@ -34,6 +36,18 @@ export function createCORSMiddleware(config: CORSConfig) {
         config.allowedMethods.join(", "),
       );
       res.set("Access-Control-Allow-Headers", config.allowedHeaders.join(", "));
+      res.set(
+        "Access-Control-Expose-Headers",
+        [
+          "RateLimit",
+          "RateLimit-Limit",
+          "RateLimit-Remaining",
+          "RateLimit-Reset",
+          "RateLimit-Policy",
+          "Retry-After",
+          "X-Cache",
+        ].join(", "),
+      );
       res.set("Access-Control-Max-Age", config.maxAge.toString());
 
       if (config.allowCredentials) {

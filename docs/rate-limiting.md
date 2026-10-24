@@ -190,5 +190,144 @@ To migrate, simply replace any usage of `createRateLimiter()` with `createAuthAw
 
 ---
 
-**Last Updated**: 2026-04-26  
-**Version**: 1.0.0
+## Internal Fair-Queue Override (Signed Bypass Header)
+
+Certain internal services (e.g. payout workers, settlement reconcilers) must
+be able to bypass the fair-queue rate limiter without acquiring a user or API
+key identity. ChronoPay provides a **signed override header** mechanism for
+this purpose.
+
+### Design Goals
+
+- **Secure** — signatures are short-lived (30 s default tolerance) and
+  scoped to a specific route, preventing replay attacks across endpoints.
+- **Auditable** — every successful bypass is logged with the actor ID and route.
+- **Observable** — all bypass attempts (valid and invalid) increment the
+  `fair_queue_bypass_attempts_total` Prometheus counter, labelled by `result`.
+- **Zero-downtime rotation** — supports a current and a previous signing
+  secret simultaneously so secrets can be rotated without a coordinated deploy.
+
+### Headers
+
+Callers must send **all three** headers:
+
+| Header | Format | Description |
+|--------|--------|-------------|
+| `x-bypass-actor` | Printable ASCII, 1–128 chars | Stable identifier for the calling service (e.g. `payout-worker`) |
+| `x-bypass-ts` | Integer (Unix seconds) | Current time, used to enforce the tolerance window |
+| `x-bypass-sig` | `sha256=<64-char hex>` or raw 64-char hex | HMAC-SHA256 of the signed message |
+
+If any header is present but the others are absent, the middleware returns
+`401` immediately. If none are present, the request passes through to normal
+rate-limiting logic.
+
+### Signature Scope
+
+The signed message is the following newline-delimited string:
+
+```
+<actorId>\n<route>\n<timestamp>
+```
+
+- `<actorId>` — value of `x-bypass-actor`
+- `<route>` — `req.path` on the server (e.g. `/api/v1/slots`)
+- `<timestamp>` — integer value of `x-bypass-ts`
+
+This binds the signature to the exact combination of actor, endpoint, and time.
+
+### Generating a Signature
+
+```ts
+import { createHmac } from "node:crypto";
+
+const actorId = "payout-worker";
+const route   = "/api/v1/slots";
+const ts      = Math.floor(Date.now() / 1000);
+const secret  = process.env.INTERNAL_OVERRIDE_SECRET!;
+
+const message = `${actorId}\n${route}\n${ts}`;
+const sig     = "sha256=" + createHmac("sha256", secret).update(message).digest("hex");
+
+// Attach to request:
+headers["x-bypass-actor"] = actorId;
+headers["x-bypass-ts"]    = String(ts);
+headers["x-bypass-sig"]   = sig;
+```
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `INTERNAL_OVERRIDE_SECRET` | No | — | Current signing secret. Bypass is disabled if absent. |
+| `INTERNAL_OVERRIDE_SECRET_PREV` | No | — | Previous signing secret (zero-downtime rotation). |
+| `INTERNAL_BYPASS_TOLERANCE_MS` | No | `30000` | Clock-skew tolerance in milliseconds. |
+
+### Secret Rotation
+
+To rotate without downtime:
+
+1. Set `INTERNAL_OVERRIDE_SECRET_PREV` to the current value of
+   `INTERNAL_OVERRIDE_SECRET`.
+2. Set `INTERNAL_OVERRIDE_SECRET` to the new secret.
+3. Deploy callers one by one, switching them to sign with the new secret.
+4. Once all callers have been migrated, remove `INTERNAL_OVERRIDE_SECRET_PREV`.
+
+Both secrets are accepted during the overlap window.
+
+### Middleware Mounting
+
+Mount `fairQueueBypass` **before** `createAuthAwareRateLimiter`:
+
+```ts
+import { fairQueueBypass } from "../middleware/internalHmacAuth.js";
+import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
+
+router.get(
+  "/api/v1/slots",
+  fairQueueBypass(),       // sets req.internalBypassActor on success
+  createAuthAwareRateLimiter(), // skips rate limiting when req.internalBypassActor is set
+  handler,
+);
+```
+
+Or mount globally in `app.ts` before any rate-limited router:
+
+```ts
+app.use(fairQueueBypass());
+```
+
+### Error Responses
+
+| HTTP Status | Condition |
+|------------|-----------|
+| `401` | Incomplete or malformed headers (bad actor, bad timestamp, bad sig format) |
+| `403` | Valid format but signature check failed — expired, wrong route, HMAC mismatch, or secret not configured |
+
+### Observability
+
+The counter `fair_queue_bypass_attempts_total` is incremented for every attempt:
+
+| `result` label | Meaning |
+|---------------|---------|
+| `valid` | Bypass granted |
+| `missing` | No bypass headers present (normal request) |
+| `expired` | Timestamp outside tolerance window |
+| `invalid_sig` | HMAC did not match any known secret |
+| `bad_format` | Headers present but malformed |
+
+### Security Notes
+
+- **Replay protection** — The 30 s tolerance window means a captured token
+  is only usable for at most 30 s. Combined with route-binding, a replay
+  on a different endpoint is rejected.
+- **Timing-safe comparison** — Signatures are compared with `timingSafeEqual`
+  from `node:crypto` to prevent timing oracles.
+- **No secret → no bypass** — If `INTERNAL_OVERRIDE_SECRET` is not set, any
+  bypass attempt returns `403`. The feature is disabled by default.
+- **Never expose secrets in responses** — Validation errors do not echo any
+  secret material back to the caller.
+
+---
+
+**Last Updated**: 2026-07-29  
+**Version**: 1.1.0

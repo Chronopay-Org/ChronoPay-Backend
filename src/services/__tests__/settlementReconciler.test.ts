@@ -1,11 +1,31 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { SettlementReconciler, _settlements, settlementEvents } from "../settlementReconciler.js";
+import {
+  SettlementReconciler,
+  startSettlementReconciler,
+  _settlements,
+  settlementEvents,
+} from "../settlementReconciler.js";
 import { settlementsPendingFinality } from "../../metrics.js";
 import { payoutRetryRollup } from "../../scheduler/payoutRetryMetrics.js";
 import { providerRetryRegistry } from "../../scheduler/payoutRetryPolicy.js";
+import type { ChainFinalityStatus } from "../../clients/horizon-contract-client.js";
+
+interface ProbeMock {
+  getLatestLedgerSequence: jest.Mock<() => Promise<number>>;
+  getTransactionFinality: jest.Mock<
+    (txHash: string, options?: { latestLedger?: number }) => Promise<ChainFinalityStatus>
+  >;
+}
+
+function makeProbeMock(): ProbeMock {
+  return {
+    getLatestLedgerSequence: jest.fn() as any,
+    getTransactionFinality: jest.fn() as any,
+  };
+}
 
 describe("SettlementReconciler Worker & Service", () => {
-  let mockHorizonClient: any;
+  let mockHorizonClient: ProbeMock;
   let reconciler: SettlementReconciler;
   const transactionId = "txn-test-hash-123";
 
@@ -16,9 +36,7 @@ describe("SettlementReconciler Worker & Service", () => {
     payoutRetryRollup.reset();
     providerRetryRegistry.clear();
 
-    mockHorizonClient = {
-      call: jest.fn() as any,
-    };
+    mockHorizonClient = makeProbeMock();
 
     reconciler = new SettlementReconciler(mockHorizonClient as any, {
       minConfirmations: 3,
@@ -30,6 +48,40 @@ describe("SettlementReconciler Worker & Service", () => {
   afterEach(() => {
     reconciler.stop();
   });
+
+  function ledger(sequence = 1008) {
+    mockHorizonClient.getLatestLedgerSequence.mockResolvedValueOnce(sequence as never);
+  }
+
+  function probeNotFound() {
+    mockHorizonClient.getTransactionFinality.mockResolvedValueOnce({
+      found: false,
+      txHash: transactionId,
+      confirmations: 0,
+      latestLedger: 1008,
+    } as never);
+  }
+
+  function probeTx(overrides: Partial<ChainFinalityStatus> = {}) {
+    const base: ChainFinalityStatus = {
+      found: true,
+      txHash: transactionId,
+      successful: true,
+      ledger: 1005,
+      latestLedger: 1008,
+      confirmations: 4,
+    };
+    mockHorizonClient.getTransactionFinality.mockResolvedValueOnce({
+      ...base,
+      ...overrides,
+    } as never);
+  }
+
+  function probeTransientError() {
+    mockHorizonClient.getTransactionFinality.mockRejectedValueOnce(
+      Object.assign(new Error("Horizon HTTP 503"), { statusCode: 503 }) as never,
+    );
+  }
 
   it("successfully starts and stops the reconciler worker loop", () => {
     reconciler.start();
@@ -56,23 +108,9 @@ describe("SettlementReconciler Worker & Service", () => {
       attempts: 0,
     });
 
-    // 1. Mock latest ledger = 1008
-    mockHorizonClient.call.mockResolvedValueOnce({
-      data: {
-        _embedded: {
-          records: [{ sequence: 1008 }],
-        },
-      },
-    });
-
-    // 2. Mock getTransaction returning tx ledger = 1005 (1008 - 1005 + 1 = 4 confirmations >= 3)
-    mockHorizonClient.call.mockResolvedValueOnce({
-      data: {
-        id: transactionId,
-        ledger: 1005,
-        successful: true,
-      },
-    });
+    // Latest ledger = 1008; tx ledger = 1005 → probe reports 4 confirmations
+    ledger(1008);
+    probeTx({ ledger: 1005, latestLedger: 1008, confirmations: 4 });
 
     await reconciler.reconcile();
 
@@ -97,23 +135,9 @@ describe("SettlementReconciler Worker & Service", () => {
       attempts: 0,
     });
 
-    // 1. Mock latest ledger = 1006
-    mockHorizonClient.call.mockResolvedValueOnce({
-      data: {
-        _embedded: {
-          records: [{ sequence: 1006 }],
-        },
-      },
-    });
-
-    // 2. Mock getTransaction returning tx ledger = 1005 (1006 - 1005 + 1 = 2 confirmations < 3)
-    mockHorizonClient.call.mockResolvedValueOnce({
-      data: {
-        id: transactionId,
-        ledger: 1005,
-        successful: true,
-      },
-    });
+    // Latest ledger = 1006; tx ledger = 1005 → probe reports 2 confirmations < 3
+    ledger(1006);
+    probeTx({ ledger: 1005, latestLedger: 1006, confirmations: 2 });
 
     await reconciler.reconcile();
 
@@ -123,6 +147,26 @@ describe("SettlementReconciler Worker & Service", () => {
 
     // Verify gauge still shows 1 pending
     expect((await settlementsPendingFinality.get()).values[0]?.value ?? 0).toBe(1);
+  });
+
+  it("marks payout_ready exactly when confirmations equal MIN_LEDGER_CONFIRMATIONS (boundary)", async () => {
+    _settlements.set(transactionId, {
+      transactionId,
+      eventType: "settlement_completed",
+      amount: 250,
+      timestamp: Date.now(),
+      status: "pending_finality",
+      confirmations: 0,
+      attempts: 0,
+    });
+
+    ledger(1008);
+    probeTx({ ledger: 1006, latestLedger: 1008, confirmations: 3 });
+
+    await reconciler.reconcile();
+
+    expect(_settlements.get(transactionId)?.status).toBe("payout_ready");
+    expect(_settlements.get(transactionId)?.confirmations).toBe(3);
   });
 
   it("respects jittered backoff delay before polling Horizon again", async () => {
@@ -156,19 +200,13 @@ describe("SettlementReconciler Worker & Service", () => {
       lastPolledAt,
     });
 
-    mockHorizonClient.call.mockResolvedValueOnce({
-      data: {
-        _embedded: {
-          records: [{ sequence: 1008 }],
-        },
-      },
-    });
+    ledger(1008);
 
     await reconciler.reconcile();
 
-    // Latest ledger was queried, but the backoff gate skips getTransaction
-    expect(mockHorizonClient.call).toHaveBeenCalledTimes(1);
-    expect(mockHorizonClient.call.mock.calls[0][0].method).toBe("getLatestLedger");
+    // Latest ledger was queried, but the backoff gate skips getTransactionFinality
+    expect(mockHorizonClient.getLatestLedgerSequence).toHaveBeenCalledTimes(1);
+    expect(mockHorizonClient.getTransactionFinality).not.toHaveBeenCalled();
     const settlement = _settlements.get(transactionId);
     expect(settlement?.attempts).toBe(2);
     expect(settlement?.lastPolledAt).toBe(lastPolledAt);
@@ -185,22 +223,8 @@ describe("SettlementReconciler Worker & Service", () => {
       attempts: 0,
     });
 
-    mockHorizonClient.call.mockResolvedValueOnce({
-      data: {
-        _embedded: {
-          records: [{ sequence: 1008 }],
-        },
-      },
-    });
-
-    // Mock successful: false returned from Horizon
-    mockHorizonClient.call.mockResolvedValueOnce({
-      data: {
-        id: transactionId,
-        ledger: 1005,
-        successful: false,
-      },
-    });
+    ledger(1008);
+    probeTx({ successful: false });
 
     await reconciler.reconcile();
 
@@ -219,24 +243,57 @@ describe("SettlementReconciler Worker & Service", () => {
       attempts: 4, // Next failure will make it 5 >= maxAttempts
     });
 
-    mockHorizonClient.call.mockResolvedValueOnce({
-      data: {
-        _embedded: {
-          records: [{ sequence: 1008 }],
-        },
-      },
-    });
-
-    // Mock 404 error from Horizon client call
-    const notFoundError = new Error("Horizon HTTP 404: transaction not found");
-    (notFoundError as any).statusCode = 404;
-    mockHorizonClient.call.mockRejectedValueOnce(notFoundError);
+    ledger(1008);
+    // Probe reports the transaction is simply not known (not an exception)
+    probeNotFound();
 
     await reconciler.reconcile();
 
     const settlement = _settlements.get(transactionId);
     expect(settlement?.status).toBe("failed");
     expect(settlement?.attempts).toBe(5);
+  });
+
+  it("does not exhaust attempts while the transaction is merely not yet visible", async () => {
+    _settlements.set(transactionId, {
+      transactionId,
+      eventType: "settlement_completed",
+      amount: 250,
+      timestamp: Date.now(),
+      status: "pending_finality",
+      confirmations: 0,
+      attempts: 0,
+    });
+
+    ledger(1008);
+    probeNotFound();
+
+    await reconciler.reconcile();
+
+    const settlement = _settlements.get(transactionId);
+    expect(settlement?.status).toBe("pending_finality");
+    expect(settlement?.attempts).toBe(1);
+  });
+
+  it("keeps settlement pending on a transient Horizon error and does not increment attempts", async () => {
+    _settlements.set(transactionId, {
+      transactionId,
+      eventType: "settlement_completed",
+      amount: 250,
+      timestamp: Date.now(),
+      status: "pending_finality",
+      confirmations: 0,
+      attempts: 1,
+    });
+
+    ledger(1008);
+    probeTransientError();
+
+    await reconciler.reconcile();
+
+    const settlement = _settlements.get(transactionId);
+    expect(settlement?.status).toBe("pending_finality");
+    expect(settlement?.attempts).toBe(1);
   });
 
   it("detects chain fork and raises alert event when payout_ready transaction subsequently disappears from Horizon", async () => {
@@ -251,18 +308,8 @@ describe("SettlementReconciler Worker & Service", () => {
       attempts: 0,
     });
 
-    mockHorizonClient.call.mockResolvedValueOnce({
-      data: {
-        _embedded: {
-          records: [{ sequence: 1008 }],
-        },
-      },
-    });
-
-    // Mock 404 error from Horizon client call
-    const notFoundError = new Error("Horizon HTTP 404: transaction not found");
-    (notFoundError as any).statusCode = 404;
-    mockHorizonClient.call.mockRejectedValueOnce(notFoundError);
+    ledger(1008);
+    probeNotFound();
 
     // Track the emitted alert event
     let alertEmitted: any = null;
@@ -286,7 +333,7 @@ describe("SettlementReconciler Worker & Service", () => {
 // ─── Per-provider ceiling enforcement ────────────────────────────────────────
 
 describe("SettlementReconciler — per-provider ceiling", () => {
-  let mockHorizonClient: any;
+  let mockHorizonClient: ProbeMock;
   let reconciler: SettlementReconciler;
   const txId = "txn-ceiling-test";
 
@@ -301,21 +348,24 @@ describe("SettlementReconciler — per-provider ceiling", () => {
     payoutRetryRollup.reset();
     providerRetryRegistry.clear();
 
-    mockHorizonClient = { call: jest.fn() as any };
+    mockHorizonClient = makeProbeMock();
   });
 
   afterEach(() => {
     reconciler?.stop();
   });
 
-  function ledgerResponse(sequence = 1008) {
-    return { data: { _embedded: { records: [{ sequence }] } } };
+  function ledger(sequence = 1008) {
+    mockHorizonClient.getLatestLedgerSequence.mockResolvedValueOnce(sequence as never);
   }
 
-  function notFoundError() {
-    const e = new Error("Horizon HTTP 404: transaction not found");
-    (e as any).statusCode = 404;
-    return e;
+  function probeNotFound() {
+    mockHorizonClient.getTransactionFinality.mockResolvedValueOnce({
+      found: false,
+      txHash: txId,
+      confirmations: 0,
+      latestLedger: 1008,
+    } as never);
   }
 
   it("honours a tight provider ceiling — capMs is bounded by the registered ceiling", async () => {
@@ -323,7 +373,7 @@ describe("SettlementReconciler — per-provider ceiling", () => {
       providerId: "ach",
       baseDelayMs: 1_000,
       multiplier: 2,
-      maxDelayCeilingMs: 3_000,   // tight ceiling
+      maxDelayCeilingMs: 3_000, // tight ceiling
       maxRetries: 10,
     });
 
@@ -340,12 +390,12 @@ describe("SettlementReconciler — per-provider ceiling", () => {
       timestamp: Date.now(),
       status: "pending_finality",
       confirmations: 0,
-      attempts: 5,        // without ceiling: cap = 1000*2^5 = 32_000 >> 3_000
+      attempts: 5, // without ceiling: cap = 1000*2^5 = 32_000 >> 3_000
       providerId: "ach",
     });
 
-    mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
-    mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+    ledger();
+    probeNotFound();
 
     await reconciler.reconcile();
 
@@ -377,12 +427,12 @@ describe("SettlementReconciler — per-provider ceiling", () => {
       timestamp: Date.now(),
       status: "pending_finality",
       confirmations: 0,
-      attempts: 1,    // cap = 500*2^1 = 1_000 << ceiling of 60_000
+      attempts: 1, // cap = 500*2^1 = 1_000 << ceiling of 60_000
       providerId: "sepa",
     });
 
-    mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
-    mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+    ledger();
+    probeNotFound();
 
     await reconciler.reconcile();
 
@@ -414,12 +464,12 @@ describe("SettlementReconciler — per-provider ceiling", () => {
       timestamp: Date.now(),
       status: "pending_finality",
       confirmations: 0,
-      attempts: 3,    // nextAttempt=4 > maxRetries=3 → exhausted
+      attempts: 3, // nextAttempt=4 > maxRetries=3 → exhausted
       providerId: "wire",
     });
 
-    mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
-    mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+    ledger();
+    probeNotFound();
 
     await reconciler.reconcile();
 
@@ -459,8 +509,8 @@ describe("SettlementReconciler — per-provider ceiling", () => {
       providerId: "fast-rail",
     });
 
-    mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
-    mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+    ledger();
+    probeNotFound();
 
     await reconciler.reconcile();
 
@@ -469,7 +519,7 @@ describe("SettlementReconciler — per-provider ceiling", () => {
     expect(snap.ceilingHits).toBe(1);
   });
 
-  it("multiple 404s accumulate attempts and emit one metric per reconcile call", async () => {
+  it("multiple missing-transaction probes accumulate attempts and emit one metric per reconcile call", async () => {
     providerRetryRegistry.set("ach", {
       providerId: "ach",
       baseDelayMs: 1_000,
@@ -497,10 +547,10 @@ describe("SettlementReconciler — per-provider ceiling", () => {
       providerId: "ach",
     });
 
-    // Three reconcile loops, each returning 404
+    // Three reconcile loops, each reporting the transaction as missing
     for (let i = 0; i < 3; i++) {
-      mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
-      mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+      ledger();
+      probeNotFound();
       await reconciler.reconcile();
     }
 
@@ -531,13 +581,51 @@ describe("SettlementReconciler — per-provider ceiling", () => {
       providerId: "unknown-provider",
     });
 
-    mockHorizonClient.call.mockResolvedValueOnce(ledgerResponse());
-    mockHorizonClient.call.mockRejectedValueOnce(notFoundError());
+    ledger();
+    probeNotFound();
 
     // Should not throw — defaults kick in
     await expect(reconciler.reconcile()).resolves.not.toThrow();
 
     const snap = payoutRetryRollup.snapshot();
     expect(snap.attempts).toBe(1);
+  });
+});
+
+// ─── Boot helper ─────────────────────────────────────────────────────────────
+
+describe("startSettlementReconciler", () => {
+  it("constructs a reconciler with the injected probe and starts the poll loop", () => {
+    const probe = makeProbeMock();
+
+    const worker = startSettlementReconciler({
+      horizonClient: probe as any,
+      minConfirmations: 3,
+      pollIntervalMs: 60_000,
+    });
+
+    expect(worker).toBeInstanceOf(SettlementReconciler);
+    // @ts-expect-error - testing private instance variable status
+    expect(worker.isRunning).toBe(true);
+    // @ts-expect-error - testing private instance variable status
+    expect(worker.intervalId).not.toBeNull();
+
+    worker.stop();
+    // @ts-expect-error - testing private instance variable status
+    expect(worker.isRunning).toBe(false);
+  });
+
+  it("leaves probe invocation to the poll loop only (no eager reconcile on start)", () => {
+    const probe = makeProbeMock();
+
+    const worker = startSettlementReconciler({
+      horizonClient: probe as any,
+      pollIntervalMs: 60_000,
+    });
+
+    expect(probe.getLatestLedgerSequence).not.toHaveBeenCalled();
+    expect(probe.getTransactionFinality).not.toHaveBeenCalled();
+
+    worker.stop();
   });
 });

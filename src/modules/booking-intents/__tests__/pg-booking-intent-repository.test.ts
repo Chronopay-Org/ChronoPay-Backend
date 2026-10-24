@@ -1,5 +1,6 @@
 import { jest } from "@jest/globals";
 import { PgBookingIntentRepository } from "../pg-booking-intent-repository.js";
+import { ConflictError } from "../../../errors/AppError.js";
 import { QueryResult } from "pg";
 
 describe("PgBookingIntentRepository", () => {
@@ -71,6 +72,70 @@ describe("PgBookingIntentRepository", () => {
       );
 
       expect(result).toEqual(expectedRecord);
+    });
+
+    it("throws ConflictError when postgres reports a unique_violation (23505)", async () => {
+      const pgUniqueViolation = Object.assign(new Error("duplicate key value"), {
+        code: "23505",
+      });
+      mockQuery.mockRejectedValueOnce(pgUniqueViolation);
+
+      const intentData = {
+        slotId: "slot-123",
+        professional: "prof-456",
+        customerId: "cust-789",
+        startTime: 1000,
+        endTime: 2000,
+        status: "pending" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+
+      await expect(repository.create(intentData)).rejects.toBeInstanceOf(ConflictError);
+    });
+
+    it("ConflictError from 23505 carries a 409 status code", async () => {
+      const pgUniqueViolation = Object.assign(new Error("duplicate key value"), {
+        code: "23505",
+      });
+      mockQuery.mockRejectedValueOnce(pgUniqueViolation);
+
+      const intentData = {
+        slotId: "slot-123",
+        professional: "prof-456",
+        customerId: "cust-789",
+        startTime: 1000,
+        endTime: 2000,
+        status: "pending" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+
+      let caught: any;
+      try {
+        await repository.create(intentData);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictError);
+      expect(caught.statusCode).toBe(409);
+      expect(caught.message).toMatch(/active booking intent/i);
+    });
+
+    it("re-throws non-23505 database errors unchanged", async () => {
+      const dbError = Object.assign(new Error("connection timeout"), { code: "08006" });
+      mockQuery.mockRejectedValueOnce(dbError);
+
+      const intentData = {
+        slotId: "slot-123",
+        professional: "prof-456",
+        customerId: "cust-789",
+        startTime: 1000,
+        endTime: 2000,
+        status: "pending" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+
+      await expect(repository.create(intentData)).rejects.toThrow("connection timeout");
     });
   });
 

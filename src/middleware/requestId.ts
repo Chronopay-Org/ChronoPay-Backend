@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
+import { runWithReqId } from "../utils/logContext.js";
 
 declare module "express" {
   interface Request {
@@ -29,5 +30,7 @@ export function requestIdMiddleware(req: Request, res: Response, next: NextFunct
   const requestId = resolveRequestId(req.header(REQUEST_ID_HEADER));
   req.requestId = requestId;
   res.setHeader(REQUEST_ID_HEADER, requestId);
-  next();
+  // Store req_id in AsyncLocalStorage so pino's mixin can inject it as a
+  // top-level field on every log line emitted during this request.
+  runWithReqId(requestId, () => next());
 }

@@ -1,6 +1,13 @@
 import type { StrategyId, StrategyConfig } from "../../services/pricingStrategy.js";
 import type { HoldFeePolicySnapshot } from "../../services/holdFeePolicy.js";
 
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConflictError";
+  }
+}
+
 export type BookingIntentStatus =
   | "pending"
   | "confirmed"
@@ -8,7 +15,12 @@ export type BookingIntentStatus =
   | "cancelled"
   | "expired"
   | "hold_placed"
-  | "hold_refunded";
+  | "hold_refunded"
+  | "escrow_held"
+  | "escrow_released"
+  | "escrow_refunded"
+  | "escrow_disputed"
+  | "no_show";
 
 export type BookingType = "standard" | "refundable_hold";
 
@@ -78,19 +90,41 @@ export interface BookingIntentRecord {
   pricingSnapshot?: PricingSnapshot;
   cancellationPolicySnapshot?: CancellationPolicySnapshot;
   holdFeePolicySnapshot?: HoldFeePolicySnapshot;
+  fxRateSnapshot?: {
+    rate: number;
+    baseCurrency: string;
+    targetCurrency: string;
+    capturedAtMs: number;
+  };
 }
 
 export interface BookingIntentRepository {
-  create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord>;
-  findById(id: string): BookingIntentRecord | undefined;
-  findBySlotId(slotId: string): BookingIntentRecord | undefined;
-  findBySlotIdAndCustomer(slotId: string, customerId: string): BookingIntentRecord | undefined;
-  findLatestBySlotId?(slotId: string): BookingIntentRecord | undefined;
-  listByCustomer(customerId: string): BookingIntentRecord[];
-  listAll(): BookingIntentRecord[];
-  updateStatus(id: string, status: BookingIntentStatus): BookingIntentRecord;
-  update(id: string, updates: Partial<Omit<BookingIntentRecord, "id">>): BookingIntentRecord;
-  findExpiredHolds(nowMs: number): BookingIntentRecord[];
+  create(
+    intent: Omit<BookingIntentRecord, "id">,
+  ): Promise<BookingIntentRecord> | BookingIntentRecord;
+  findById(id: string): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findBySlotId(
+    slotId: string,
+  ): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findBySlotIdAndCustomer(
+    slotId: string,
+    customerId: string,
+  ): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  findLatestBySlotId?(
+    slotId: string,
+  ): BookingIntentRecord | undefined | Promise<BookingIntentRecord | undefined>;
+  listByCustomer(customerId: string): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
+  listAll(): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
+  updateStatus(
+    id: string,
+    status: BookingIntentStatus,
+  ): BookingIntentRecord | Promise<BookingIntentRecord>;
+  update(
+    id: string,
+    updates: Partial<Omit<BookingIntentRecord, "id">>,
+  ): BookingIntentRecord | Promise<BookingIntentRecord>;
+  updateTokenInfo?(id: string, tokenAsset: string, mintTxHash: string): Promise<void> | void;
+  findExpiredHolds(nowMs: number): BookingIntentRecord[] | Promise<BookingIntentRecord[]>;
 }
 
 const ACTIVE_HOLD_STATUSES: BookingIntentStatus[] = ["pending", "hold_placed"];
@@ -100,6 +134,24 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
   private sequence = 1;
 
   async create(intent: Omit<BookingIntentRecord, "id">): Promise<BookingIntentRecord> {
+    // Uniqueness guard mirroring the partial unique index on active intents per slot
+    // (migration 019_add_active_booking_intent_unique_idx): at most one active
+    // intent may exist for a given slot. This check and the push below are
+    // synchronous (no await between them), so two concurrent calls cannot both
+    // pass the guard.
+    if (ACTIVE_HOLD_STATUSES.includes(intent.status)) {
+      const existing = this.intents.find(
+        (entry) =>
+          entry.slotId === intent.slotId &&
+          ACTIVE_HOLD_STATUSES.includes(entry.status),
+      );
+      if (existing) {
+        throw new ConflictError(
+          `BookingIntent already exists for slot "${intent.slotId}"`,
+        );
+      }
+    }
+
     const created: BookingIntentRecord = {
       id: `intent-${this.sequence++}`,
       bookingType: "standard",
@@ -163,6 +215,17 @@ export class InMemoryBookingIntentRepository implements BookingIntentRepository 
     }
     this.intents[index] = { ...this.intents[index], ...updates };
     return { ...this.intents[index] };
+  }
+
+  updateTokenInfo(id: string, tokenAsset: string, mintTxHash: string): void {
+    const index = this.intents.findIndex((entry) => entry.id === id);
+    if (index !== -1) {
+      this.intents[index] = {
+        ...this.intents[index],
+        tokenAsset,
+        mintTxHash,
+      };
+    }
   }
 
   findExpiredHolds(nowMs: number): BookingIntentRecord[] {

@@ -12,7 +12,7 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
       expect(() => parseCreateBookingIntentBody(ambiguousInput)).toThrow(/offset|timezone/i);
     });
 
-    it("should accept RRULEs with Z offset", () => {
+    it("should accept RRULE with Z offset", () => {
       const validInput = {
         rrule: "DTSTART:20261101T013000Z\nFREQ=DAILY;COUNT=3"
       };
@@ -28,6 +28,24 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
 
       const result = parseCreateBookingIntentBody(validInput);
       expect(result).toHaveProperty("rrule");
+    });
+
+    it("should accept CRLF RRULE with a Z offset", () => {
+      const validInput = {
+        rrule: "DTSTART:20260101T090000Z\r\nRRULE:FREQ=DAILY;COUNT=2"
+      };
+
+      const result = parseCreateBookingIntentBody(validInput);
+      expect(result).toHaveProperty("rrule");
+    });
+
+    it("should reject CRLF RRULEs with a floating DTSTART", () => {
+      const ambiguousInput = {
+        rrule: "DTSTART:20260101T090000\r\nRRULE:FREQ=DAILY;COUNT=2"
+      };
+
+      expect(() => parseCreateBookingIntentBody(ambiguousInput)).toThrow(BookingIntentError);
+      expect(() => parseCreateBookingIntentBody(ambiguousInput)).toThrow(/offset|timezone/i);
     });
   });
 

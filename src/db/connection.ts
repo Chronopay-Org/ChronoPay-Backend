@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { Pool, PoolClient } from "pg";
+import { Pool, PoolClient, PoolConfig } from "pg";
 import { logger } from "../utils/logger.js";
 import { slowQueryCounter, slowQueryDuration, queryBudgetBreaches } from "../metrics.js";
 import { getQueryBudgetContext } from "./queryBudgetContext.js";
@@ -13,14 +13,14 @@ let pool: Pool | null = null;
 
 /**
  * Replaceable pool factory. Defaults to creating a real pg.Pool.
- * Tests inject a mock factory via _setPoolFactory() to avoid needing to
+ * Tests inject a mock factory via _setPoolFactorx() to avoid needing to
  * mock the `pg` module (which is a CommonJS module and harder to mock in ESM).
  *
  * @internal
  */
-const defaultPoolFactory: (connectionString: string) => Pool = (connectionString) =>
-  new Pool({ connectionString });
-let _poolFactory: (connectionString: string) => Pool = defaultPoolFactory;
+const defaultPoolFactory: (connectionString: string, config?: PoolConfig) => Pool =
+  (connectionString, config) => new Pool({ connectionString, ...config });
+let _poolFactory: (connectionString: string, config?: PoolConfig) => Pool = defaultPoolFactory;
 
 /**
  * Replaces the pool factory used by getPool(). For testing only.
@@ -28,7 +28,7 @@ let _poolFactory: (connectionString: string) => Pool = defaultPoolFactory;
  *
  * @internal
  */
-export function _setPoolFactory(factory: (connectionString: string) => Pool): void {
+export function _setPoolFactory(factory: (connectionString: string, config?: PoolConfig) => Pool): void {
   _poolFactory = factory;
 }
 
@@ -112,28 +112,67 @@ export async function instrumentQuery<T>(
 }
 
 /**
+ * Resolve the connection URL from the environment.
+ *
+ * DATABASE_URL is the canonical variable. POSTGRESQL_URL is accepted as a
+ * deprecated alias and logs a warning when used.
+ */
+function resolveConnectionUrl(): string {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (databaseUrl) {
+    return databaseUrl;
+  }
+
+  const legacyUrl = process.env.POSTGRESQL_URL;
+  if (legacyUrl) {
+    logger.warn(
+      "POSTGRESQL_URL is deprecated; use DATABASE_URL instead.",
+    );
+    return legacyUrl;
+  }
+
+  throw new Error(
+    "Database connection URL is not set. " +
+      "Set DATABASE_URL to a PostgreSQL connection string, e.g. " +
+      "postgresql://user:password@localhost:5432/chronopay",
+  );
+}
+
+/**
+ * Resolve the configurable pool size from DB_POOL_MAX.
+ * Defaults to 10 (pg default) when unset or invalid.
+ */
+function resolvePoolMax(): number | undefined {
+  const raw = process.env.DB_POOL_MAX;
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    logger.warn({ value: raw }, "invalid DB_POOL_MAX, ignoring");
+    return undefined;
+  }
+  return Math.floor(parsed);
+}
+
+/**
  * Returns the shared pg.Pool, creating it on first call.
  *
- * Reads DATABASE_URL from the environment. Throws a descriptive error if the
- * variable is absent rather than letting pg fail silently with a cryptic message.
+ * Reads DATABASE_URL (or the deprecated POSTGRESQL_URL alias) from the
+ * environment. Throws a descriptive error if the variable is absent rather
+ * than letting pg fail silently with a cryptic message.
  */
 export function getPool(): Pool {
   if (!pool) {
-    const url = process.env.DATABASE_URL;
-    if (!url) {
-      throw new Error(
-        "DATABASE_URL environment variable is not set. " +
-          "Set it to a PostgreSQL connection string, e.g. " +
-          "postgresql://user:password@localhost:5432/chronopay",
-      );
-    }
+    const url = resolveConnectionUrl();
+    const max = resolvePoolMax();
 
-    pool = _poolFactory(url);
+    pool = _poolFactory(url, max !== undefined ? { max } : undefined);
 
     // Surface idle-client background errors to stderr instead of crashing
     // the process or swallowing them silently.
     pool.on("error", (err: Error) => {
-      console.error("[db/connection] Unexpected pool error:", err.message);
+      logger.error({ err }, "unexpected db pool error");
     });
   }
 
@@ -161,8 +200,8 @@ export async function closePool(): Promise<void> {
  *
  * Acquires a client from the pool, issues BEGIN, and invokes `fn`. On success,
  * COMMIT is issued and the result is returned. On any error thrown by `fn`,
- * ROLLBACK is attempted (failure to roll back is logged but does not mask the
- * original error), the client is released, and the original error is re-thrown.
+ * ROLLBACK is attempted (failure to roll back is logged but does not mask
+ * the original error), the client is released, and the original error is re-thrown.
  *
  * The client is always released in a finally block regardless of outcome.
  */
@@ -194,10 +233,7 @@ export async function withTransaction<T>(
       await client.query("ROLLBACK");
     } catch (rollbackErr) {
       // Log but do not mask — the caller needs to see the original failure.
-      console.error(
-        "[db/connection] ROLLBACK failed:",
-        (rollbackErr as Error).message,
-      );
+      logger.error({ err: rollbackErr }, "db ROLLBACK failed");
     }
     throw originalErr;
   } finally {

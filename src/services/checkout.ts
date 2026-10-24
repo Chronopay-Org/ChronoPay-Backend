@@ -5,7 +5,7 @@
  * Expiry is computed from the `expires_at` column — no in-process timer.
  */
 
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID } from "crypto";
 import {
   CheckoutSession,
   CreateCheckoutSessionRequest,
@@ -13,10 +13,16 @@ import {
   CheckoutError,
   CheckoutErrorCode,
 } from "../types/checkout.js";
+import { verifyJwt } from "../utils/jwt.js";
 import { defaultAuditLogger } from "./auditLogger.js";
 import { withSpan } from "../tracing/hooks.js";
 import { PgCheckoutSessionRepository } from "../modules/checkout/pg-checkout-session-repository.js";
 import { query } from "../db/pool.js";
+import {
+  MockPaymentProvider,
+  type PaymentProvider,
+} from "./paymentProvider.js";
+
 import {
   HorizonContractClient,
   StellarAsset,
@@ -27,10 +33,27 @@ const SESSION_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 
 // Singleton repository — can be overridden in tests via setCheckoutRepository().
 let _repo: PgCheckoutSessionRepository = new PgCheckoutSessionRepository(query);
+let _paymentProvider: PaymentProvider | undefined;
+
+// Lazily instantiated in non-production so importing this module in production
+// never triggers the MockPaymentProvider constructor guard.
+let _mockPaymentProvider: MockPaymentProvider | undefined;
 
 /** Replace the repository (for testing). */
 export function setCheckoutRepository(repo: PgCheckoutSessionRepository): void {
   _repo = repo;
+}
+
+/** Configure the provider used for checkout charges. */
+export function setCheckoutPaymentProvider(provider?: PaymentProvider): void {
+  if (provider instanceof MockPaymentProvider && process.env.NODE_ENV === "production") {
+    throw new CheckoutError(
+      CheckoutErrorCode.PAYMENT_PROVIDER_UNAVAILABLE,
+      "Mock payment provider cannot be used in production",
+      503,
+    );
+  }
+  _paymentProvider = provider;
 }
 
 export class CheckoutSessionService {
@@ -49,6 +72,33 @@ export class CheckoutSessionService {
       .catch(console.error);
   }
 
+  private static async updateSession(
+    sessionId: string,
+    fields: {
+      status: CheckoutSessionStatus;
+      updatedAt: number;
+      paymentToken?: string;
+      metadata?: Record<string, string | number | boolean>;
+    },
+    expectedStatus: CheckoutSessionStatus,
+    action: string,
+  ): Promise<CheckoutSession> {
+    const updated = await _repo.updateSession(sessionId, fields, expectedStatus);
+    if (!updated) {
+      this.emitAuditEvent(action, "failed", `session:${sessionId}`, {
+        reason: `Session state changed before ${action}`,
+        expectedState: expectedStatus,
+      });
+      throw new CheckoutError(
+        CheckoutErrorCode.INVALID_SESSION_STATE,
+        `Session state changed before ${action}`,
+        409,
+        { expectedState: expectedStatus },
+      );
+    }
+    return updated;
+  }
+
   static async createSession(
     request: CreateCheckoutSessionRequest,
     authorizationToken?: string,
@@ -59,11 +109,33 @@ export class CheckoutSessionService {
       paymentMethod: request.payment.paymentMethod,
     });
 
-    if (process.env.REQUIRE_AUTH === "true" && !authorizationToken) {
-      this.emitAuditEvent("validated", "failed", `customer:${request.customer.customerId}`, {
-        reason: "Authorization required",
-      });
-      throw new CheckoutError(CheckoutErrorCode.UNAUTHORIZED, "Authorization required", 401);
+    // When a JWT is present, verify it and bind the token subject to the
+    // requested customer.customerId.  This prevents a caller from forging a
+    // session for an arbitrary customer ID while still authenticated.
+    if (authorizationToken) {
+      let payload: Awaited<ReturnType<typeof verifyJwt>>;
+      try {
+        payload = await verifyJwt(authorizationToken);
+      } catch {
+        this.emitAuditEvent("validated", "failed", `customer:${request.customer.customerId}`, {
+          reason: "Invalid or expired token",
+        });
+        throw new CheckoutError(CheckoutErrorCode.UNAUTHORIZED, "Invalid or expired token", 401);
+      }
+
+      const tokenSubject: string | undefined = payload.sub;
+      if (tokenSubject && tokenSubject !== request.customer.customerId) {
+        this.emitAuditEvent("validated", "failed", `customer:${request.customer.customerId}`, {
+          reason: "Token subject does not match customerId",
+          tokenSubject,
+          requestedCustomerId: request.customer.customerId,
+        });
+        throw new CheckoutError(
+          CheckoutErrorCode.UNAUTHORIZED,
+          "Token subject does not match customer.customerId",
+          403,
+        );
+      }
     }
 
     this.emitAuditEvent("validated", "success", `customer:${request.customer.customerId}`, {});
@@ -108,10 +180,15 @@ export class CheckoutSessionService {
     const now = Math.floor(Date.now() / 1000);
     if (now > session.expiresAt && session.status === CheckoutSessionStatus.PENDING) {
       // Persist the expired status so subsequent reads are consistent.
-      await _repo.updateSession(sessionId, {
-        status: CheckoutSessionStatus.EXPIRED,
-        updatedAt: now,
-      });
+      await this.updateSession(
+        sessionId,
+        {
+          status: CheckoutSessionStatus.EXPIRED,
+          updatedAt: now,
+        },
+        CheckoutSessionStatus.PENDING,
+        "expired",
+      );
       throw new CheckoutError(
         CheckoutErrorCode.SESSION_EXPIRED,
         "Checkout session has expired",
@@ -148,11 +225,16 @@ export class CheckoutSessionService {
       );
     }
 
-    const updated = await _repo.updateSession(sessionId, {
-      status: CheckoutSessionStatus.COMPLETED,
-      updatedAt: Math.floor(Date.now() / 1000),
-      paymentToken,
-    });
+    const updated = await this.updateSession(
+      sessionId,
+      {
+        status: CheckoutSessionStatus.COMPLETED,
+        updatedAt: Math.floor(Date.now() / 1000),
+        paymentToken,
+      },
+      CheckoutSessionStatus.PENDING,
+      "paid",
+    );
 
     this.emitAuditEvent("paid", "success", `session:${sessionId}`, {
       customerId: session.customer.customerId,
@@ -182,11 +264,16 @@ export class CheckoutSessionService {
     }
 
     const metadata = { ...(session.metadata ?? {}), failureReason: reason ?? "Unknown" };
-    const updated = await _repo.updateSession(sessionId, {
-      status: CheckoutSessionStatus.FAILED,
-      updatedAt: Math.floor(Date.now() / 1000),
-      metadata,
-    });
+    const updated = await this.updateSession(
+      sessionId,
+      {
+        status: CheckoutSessionStatus.FAILED,
+        updatedAt: Math.floor(Date.now() / 1000),
+        metadata,
+      },
+      CheckoutSessionStatus.PENDING,
+      "failed",
+    );
 
     this.emitAuditEvent("failed", "success", `session:${sessionId}`, {
       customerId: session.customer.customerId,
@@ -212,10 +299,15 @@ export class CheckoutSessionService {
       );
     }
 
-    const updated = await _repo.updateSession(sessionId, {
-      status: CheckoutSessionStatus.CANCELLED,
-      updatedAt: Math.floor(Date.now() / 1000),
-    });
+    const updated = await this.updateSession(
+      sessionId,
+      {
+        status: CheckoutSessionStatus.CANCELLED,
+        updatedAt: Math.floor(Date.now() / 1000),
+      },
+      CheckoutSessionStatus.PENDING,
+      "cancelled",
+    );
 
     this.emitAuditEvent("cancelled", "success", `session:${sessionId}`, {
       customerId: session.customer.customerId,
@@ -240,12 +332,24 @@ export class CheckoutSessionService {
       );
     }
 
-    const paymentSuccessful = randomBytes(1)[0] / 255 > 0.1;
-    if (paymentSuccessful) {
-      return this.completeSession(sessionId, "mock_token_123");
-    } else {
-      return this.failSession(sessionId, "Payment provider declined transaction");
+    const provider = _paymentProvider
+      ?? (process.env.NODE_ENV !== "production"
+        ? (_mockPaymentProvider ??= new MockPaymentProvider())
+        : undefined);
+    if (!provider) {
+      throw new CheckoutError(
+        CheckoutErrorCode.PAYMENT_PROVIDER_UNAVAILABLE,
+        "Payment provider is unavailable",
+        503,
+      );
     }
+
+    const result = await provider.charge(session);
+    if (result.status === "succeeded") {
+      return this.completeSession(sessionId, result.providerRef);
+    }
+
+    return this.failSession(sessionId, result.reason);
   }
 
   // ── Per-tenant slippage configuration ──────────────────────────────────────────
@@ -273,6 +377,54 @@ export class CheckoutSessionService {
 
   static clearTenantSlippageConfig(): void {
     this.tenantSlippageConfig.clear();
+  }
+
+  static calculateDurationBasedRefund(params: {
+    amountCents: number;
+    startTimeMs: number;
+    endTimeMs: number;
+    nowMs: number;
+    curve?: "linear";
+  }): {
+    refundAmountCents: number;
+    consumedRatio: number;
+    remainingRatio: number;
+  } {
+    if (!Number.isFinite(params.amountCents) || params.amountCents < 0) {
+      throw new CheckoutError(
+        "INVALID_REFUND_AMOUNT",
+        "Refund amount must be a non-negative finite number.",
+        400,
+      );
+    }
+
+    if (!Number.isFinite(params.startTimeMs) || !Number.isFinite(params.endTimeMs)) {
+      throw new CheckoutError(
+        "INVALID_REFUND_WINDOW",
+        "Refund timing window must be finite numbers.",
+        400,
+      );
+    }
+
+    if (params.endTimeMs <= params.startTimeMs) {
+      return {
+        refundAmountCents: 0,
+        consumedRatio: 1,
+        remainingRatio: 0,
+      };
+    }
+
+    const totalMs = params.endTimeMs - params.startTimeMs;
+    const consumedMs = Math.min(Math.max(params.nowMs - params.startTimeMs, 0), totalMs);
+    const consumedRatio = totalMs === 0 ? 1 : consumedMs / totalMs;
+    const remainingRatio = Math.max(0, Math.min(1, 1 - consumedRatio));
+    const refundAmountCents = Math.round(params.amountCents * remainingRatio);
+
+    return {
+      refundAmountCents,
+      consumedRatio,
+      remainingRatio,
+    };
   }
 
   static async processPartialRefundPathPayment(
@@ -336,18 +488,23 @@ export class CheckoutSessionService {
       });
 
       // Audit log the executed path payment quote for audit persistence
-      this.emitAuditEvent("partial_refund_path_payment.executed", "success", `session:${request.sessionId}`, {
-        sessionId: request.sessionId,
-        tenantId,
-        quoteId: quote.quoteId,
-        sourceAmount: quote.sourceAmount,
-        destinationAmount: quote.destinationAmount,
-        minDestinationAmount: quote.minDestinationAmount,
-        effectiveSlippagePercent: quote.effectiveSlippagePercent,
-        maxSlippageTolerancePercent: quote.maxSlippageTolerancePercent,
-        path: quote.path,
-        quotedAt: quote.quotedAt,
-      });
+      this.emitAuditEvent(
+        "partial_refund_path_payment.executed",
+        "success",
+        `session:${request.sessionId}`,
+        {
+          sessionId: request.sessionId,
+          tenantId,
+          quoteId: quote.quoteId,
+          sourceAmount: quote.sourceAmount,
+          destinationAmount: quote.destinationAmount,
+          minDestinationAmount: quote.minDestinationAmount,
+          effectiveSlippagePercent: quote.effectiveSlippagePercent,
+          maxSlippageTolerancePercent: quote.maxSlippageTolerancePercent,
+          path: quote.path,
+          quotedAt: quote.quotedAt,
+        },
+      );
 
       // Update session metadata with audit quote
       const updatedMetadata: Record<string, string | number | boolean> = {
@@ -356,11 +513,16 @@ export class CheckoutSessionService {
         lastPartialRefundDestinationAmount: quote.destinationAmount,
       };
 
-      const updatedSession = await _repo.updateSession(request.sessionId, {
-        status: session.status,
-        updatedAt: Math.floor(Date.now() / 1000),
-        metadata: updatedMetadata,
-      });
+      const updatedSession = await this.updateSession(
+        request.sessionId,
+        {
+          status: session.status,
+          updatedAt: Math.floor(Date.now() / 1000),
+          metadata: updatedMetadata,
+        },
+        CheckoutSessionStatus.COMPLETED,
+        "partial_refund_path_payment",
+      );
 
       return { session: updatedSession, quote };
     } catch (err: any) {

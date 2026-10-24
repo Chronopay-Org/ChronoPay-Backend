@@ -21,6 +21,7 @@ import {
   type AppErrorEnvelope,
 } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
+import { logger } from "../utils/logger.js";
 
 export interface ErrorHandlerOptions {
   logError?: (error: Error, req: Request) => void;
@@ -29,15 +30,11 @@ export interface ErrorHandlerOptions {
 }
 
 function defaultLogError(error: Error, req: Request): void {
-  const timestamp = new Date().toISOString();
-  const method = req.method;
-  const url = req.url;
   const statusCode = isAppError(error) ? error.statusCode : 500;
   const requestId = req.requestId ?? req.id ?? "unknown";
-
-  console.error(
-    `[${timestamp}] ${method} ${url} - ${statusCode} [requestId=${requestId}]: ${error.message}`,
-    isAppError(error) && error.statusCode >= 500 ? error.stack : "",
+  logger.error(
+    { err: error, requestId, method: req.method, url: req.url, statusCode },
+    "request error",
   );
 }
 

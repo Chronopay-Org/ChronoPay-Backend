@@ -43,22 +43,20 @@ describe("BookingIntentService lifecycle", () => {
   describe("confirmIntent", () => {
     it("confirms a pending intent (intent owner)", async () => {
       const intent = await createPendingIntent();
-      const result = service.confirmIntent(intent.id, customer);
+      const result = await service.confirmIntent(intent.id, customer);
       expect(result.status).toBe("confirmed");
     });
 
     it("confirms a pending intent (admin)", async () => {
       const intent = await createPendingIntent();
-      const result = service.confirmIntent(intent.id, admin);
+      const result = await service.confirmIntent(intent.id, admin);
       expect(result.status).toBe("confirmed");
     });
 
-    it("throws 404 for non-existent intent", () => {
-      expect(() => service.confirmIntent("no-such-id", customer)).toThrow(
-        BookingIntentError,
-      );
+    it("throws 404 for non-existent intent", async () => {
+      await expect(service.confirmIntent("no-such-id", customer)).rejects.toThrow(BookingIntentError);
       try {
-        service.confirmIntent("no-such-id", customer);
+        await service.confirmIntent("no-such-id", customer);
       } catch (e) {
         expect((e as BookingIntentError).status).toBe(404);
       }
@@ -66,11 +64,9 @@ describe("BookingIntentService lifecycle", () => {
 
     it("throws 403 for non-owner non-admin", async () => {
       const intent = await createPendingIntent();
-      expect(() => service.confirmIntent(intent.id, otherCustomer)).toThrow(
-        BookingIntentError,
-      );
+      await expect(service.confirmIntent(intent.id, otherCustomer)).rejects.toThrow(BookingIntentError);
       try {
-        service.confirmIntent(intent.id, otherCustomer);
+        await service.confirmIntent(intent.id, otherCustomer);
       } catch (e) {
         expect((e as BookingIntentError).status).toBe(403);
       }
@@ -78,12 +74,10 @@ describe("BookingIntentService lifecycle", () => {
 
     it("throws 409 for already-confirmed intent (double-confirm)", async () => {
       const intent = await createPendingIntent();
-      service.confirmIntent(intent.id, customer);
-      expect(() => service.confirmIntent(intent.id, customer)).toThrow(
-        BookingIntentError,
-      );
+      await service.confirmIntent(intent.id, customer);
+      await expect(service.confirmIntent(intent.id, customer)).rejects.toThrow(BookingIntentError);
       try {
-        service.confirmIntent(intent.id, customer);
+        await service.confirmIntent(intent.id, customer);
       } catch (e) {
         expect((e as BookingIntentError).status).toBe(409);
       }
@@ -91,12 +85,10 @@ describe("BookingIntentService lifecycle", () => {
 
     it("throws 409 for cancelled intent", async () => {
       const intent = await createPendingIntent();
-      service.cancelIntent(intent.id, customer);
-      expect(() => service.confirmIntent(intent.id, customer)).toThrow(
-        BookingIntentError,
-      );
+      await service.cancelIntent(intent.id, customer);
+      await expect(service.confirmIntent(intent.id, customer)).rejects.toThrow(BookingIntentError);
       try {
-        service.confirmIntent(intent.id, customer);
+        await service.confirmIntent(intent.id, customer);
       } catch (e) {
         expect((e as BookingIntentError).status).toBe(409);
       }
@@ -104,12 +96,10 @@ describe("BookingIntentService lifecycle", () => {
 
     it("throws 409 for expired intent", async () => {
       const intent = await createPendingIntent();
-      service.expireIntent(intent.id);
-      expect(() => service.confirmIntent(intent.id, customer)).toThrow(
-        BookingIntentError,
-      );
+      await service.expireIntent(intent.id);
+      await expect(service.confirmIntent(intent.id, customer)).rejects.toThrow(BookingIntentError);
       try {
-        service.confirmIntent(intent.id, customer);
+        await service.confirmIntent(intent.id, customer);
       } catch (e) {
         expect((e as BookingIntentError).status).toBe(409);
       }
@@ -119,89 +109,71 @@ describe("BookingIntentService lifecycle", () => {
   describe("cancelIntent", () => {
     it("cancels a pending intent (intent owner)", async () => {
       const intent = await createPendingIntent();
-      const result = service.cancelIntent(intent.id, customer);
+      const result = await service.cancelIntent(intent.id, customer);
       expect(result.status).toBe("cancelled");
     });
 
     it("cancels a pending intent (admin)", async () => {
       const intent = await createPendingIntent();
-      const result = service.cancelIntent(intent.id, admin);
+      const result = await service.cancelIntent(intent.id, admin);
       expect(result.status).toBe("cancelled");
     });
 
-    it("throws 404 for non-existent intent", () => {
-      expect(() => service.cancelIntent("no-such-id", customer)).toThrow(
-        BookingIntentError,
-      );
+    it("throws 404 for non-existent intent", async () => {
+      await expect(service.cancelIntent("no-such-id", customer)).rejects.toThrow(BookingIntentError);
     });
 
     it("throws 403 for unauthorized user", async () => {
       const intent = await createPendingIntent();
-      expect(() => service.cancelIntent(intent.id, otherCustomer)).toThrow(
-        BookingIntentError,
-      );
+      await expect(service.cancelIntent(intent.id, otherCustomer)).rejects.toThrow(BookingIntentError);
     });
 
     it("throws 409 for confirmed intent (cancel-after-confirm)", async () => {
       const intent = await createPendingIntent();
-      service.confirmIntent(intent.id, customer);
-      expect(() => service.cancelIntent(intent.id, customer)).toThrow(
-        BookingIntentError,
-      );
+      await service.confirmIntent(intent.id, customer);
+      await expect(service.cancelIntent(intent.id, customer)).rejects.toThrow(BookingIntentError);
     });
 
     it("throws 409 for already-cancelled intent (double-cancel)", async () => {
       const intent = await createPendingIntent();
-      service.cancelIntent(intent.id, customer);
-      expect(() => service.cancelIntent(intent.id, customer)).toThrow(
-        BookingIntentError,
-      );
+      await service.cancelIntent(intent.id, customer);
+      await expect(service.cancelIntent(intent.id, customer)).rejects.toThrow(BookingIntentError);
     });
 
     it("throws 409 for expired intent", async () => {
       const intent = await createPendingIntent();
-      service.expireIntent(intent.id);
-      expect(() => service.cancelIntent(intent.id, customer)).toThrow(
-        BookingIntentError,
-      );
+      await service.expireIntent(intent.id);
+      await expect(service.cancelIntent(intent.id, customer)).rejects.toThrow(BookingIntentError);
     });
   });
 
   describe("expireIntent", () => {
     it("expires a pending intent", async () => {
       const intent = await createPendingIntent();
-      const result = service.expireIntent(intent.id);
+      const result = await service.expireIntent(intent.id);
       expect(result.status).toBe("expired");
     });
 
-    it("throws 404 for non-existent intent", () => {
-      expect(() => service.expireIntent("no-such-id")).toThrow(
-        BookingIntentError,
-      );
+    it("throws 404 for non-existent intent", async () => {
+      await expect(service.expireIntent("no-such-id")).rejects.toThrow(BookingIntentError);
     });
 
     it("throws 409 for confirmed intent", async () => {
       const intent = await createPendingIntent();
-      service.confirmIntent(intent.id, customer);
-      expect(() => service.expireIntent(intent.id)).toThrow(
-        BookingIntentError,
-      );
+      await service.confirmIntent(intent.id, customer);
+      await expect(service.expireIntent(intent.id)).rejects.toThrow(BookingIntentError);
     });
 
     it("throws 409 for cancelled intent", async () => {
       const intent = await createPendingIntent();
-      service.cancelIntent(intent.id, customer);
-      expect(() => service.expireIntent(intent.id)).toThrow(
-        BookingIntentError,
-      );
+      await service.cancelIntent(intent.id, customer);
+      await expect(service.expireIntent(intent.id)).rejects.toThrow(BookingIntentError);
     });
 
     it("throws 409 for already-expired intent", async () => {
       const intent = await createPendingIntent();
-      service.expireIntent(intent.id);
-      expect(() => service.expireIntent(intent.id)).toThrow(
-        BookingIntentError,
-      );
+      await service.expireIntent(intent.id);
+      await expect(service.expireIntent(intent.id)).rejects.toThrow(BookingIntentError);
     });
   });
 

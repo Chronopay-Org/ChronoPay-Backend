@@ -1,10 +1,34 @@
 // @ts-nocheck
+import { jest, beforeAll } from "@jest/globals";
 import { createHmac } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { registerWebhookRoutes, _resetProcessedTransactions } from "../webhooks.js";
+import { _settlements } from "../../services/settlementReconciler.js";
+import { WebhookIdempotencyStore } from "../../services/webhookIdempotencyStore.js";
 
 const SECRET = "test-webhook-secret";
+
+// The `pg` module is replaced by a stateless mock in tests (test/mocks/pg.ts:
+// every query returns zero rows), so the real WebhookIdempotencyStore can
+// never observe a key it saved itself. Back it with an in-memory map here so
+// replay/idempotency behaviour is actually exercisable.
+const idempotencyMem = new Map<string, any>();
+
+beforeAll(() => {
+  jest
+    .spyOn(WebhookIdempotencyStore, "getExistingResponse")
+    .mockImplementation(async (_tenantId: string, key: string) =>
+      idempotencyMem.has(key) ? idempotencyMem.get(key) : null,
+    );
+  jest
+    .spyOn(WebhookIdempotencyStore, "saveKey")
+    .mockImplementation(async (_tenantId: string, key: string, body: any) => {
+      if (idempotencyMem.has(key)) return false;
+      idempotencyMem.set(key, body);
+      return true;
+    });
+});
 
 function buildApp() {
   const app = express();
@@ -49,6 +73,7 @@ describe("POST /api/v1/webhooks/settlements", () => {
   let app: ReturnType<typeof buildApp>;
 
   beforeEach(() => {
+    idempotencyMem.clear();
     app = buildApp();
     _resetProcessedTransactions();
   });
@@ -238,6 +263,50 @@ describe("POST /api/v1/webhooks/settlements", () => {
     it("accepts payloads with extra fields without error", async () => {
       const res = await post(app, validPayload({ extra: "ignored" }));
       expect(res.status).toBe(200);
+    });
+  });
+
+  // ── Settlement lifecycle queueing (#804) ──────────────────────────────────
+
+  describe("settlement lifecycle queueing", () => {
+    beforeEach(() => {
+      _settlements.clear();
+    });
+
+    it("queues a pending_finality settlement on settlement_completed", async () => {
+      const res = await post(app, validPayload());
+
+      expect(res.status).toBe(200);
+      const entry = _settlements.get("txn-001");
+      expect(entry).toBeDefined();
+      expect(entry.status).toBe("pending_finality");
+      expect(entry.amount).toBe(100);
+    });
+
+    it("queues a failed settlement on settlement_failed", async () => {
+      const res = await post(app, validPayload({ eventType: "settlement_failed" }));
+
+      expect(res.status).toBe(200);
+      const entry = _settlements.get("txn-001");
+      expect(entry).toBeDefined();
+      expect(entry.status).toBe("failed");
+      expect(entry.eventType).toBe("settlement_failed");
+    });
+
+    it("does not re-queue a duplicate transactionId", async () => {
+      await post(app, validPayload());
+      await post(app, validPayload({ amount: 999 }));
+
+      const entry = _settlements.get("txn-001");
+      expect(entry).toBeDefined();
+      expect(entry.amount).toBe(100);
+    });
+
+    it("accepts settlement_initiated without queueing a finality entry", async () => {
+      const res = await post(app, validPayload({ eventType: "settlement_initiated" }));
+
+      expect(res.status).toBe(200);
+      expect(_settlements.has("txn-001")).toBe(false);
     });
   });
 });

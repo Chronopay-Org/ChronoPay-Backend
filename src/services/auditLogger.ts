@@ -1,5 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
+import { logger } from "../utils/logger.js";
+
 import {
   createAuditEvent,
   encodeAuditEvent,
@@ -133,7 +135,7 @@ export class AuditLogger {
       await fs.appendFile(this.logFilePath, logLine, "utf8");
     } catch (error) {
       // Failure mode handling: We log to console rather than breaking the application flow
-      console.error("Failed to write to audit log:", error);
+      logger.error({ error }, "Failed to write to audit log");
     }
   }
 
@@ -174,5 +176,32 @@ export class AuditLogger {
   }
 }
 
-// Export a default singleton instance for use across the application
-export const defaultAuditLogger = new AuditLogger();
+const GLOBAL_AUDIT_LOGGER_KEY = "__CHRONOPAY_DEFAULT_AUDIT_LOGGER__" as const;
+
+const globalAuditState = globalThis as typeof globalThis & {
+  [GLOBAL_AUDIT_LOGGER_KEY]?: AuditLogger;
+  defaultAuditLogger?: AuditLogger;
+};
+
+const sharedLogger =
+  globalAuditState[GLOBAL_AUDIT_LOGGER_KEY] ??
+  globalAuditState.defaultAuditLogger ??
+  new AuditLogger();
+
+Object.defineProperty(globalAuditState, GLOBAL_AUDIT_LOGGER_KEY, {
+  value: sharedLogger,
+  configurable: true,
+  writable: true,
+  enumerable: false,
+});
+Object.defineProperty(globalAuditState, "defaultAuditLogger", {
+  value: sharedLogger,
+  configurable: true,
+  writable: true,
+  enumerable: false,
+});
+
+// `defineProperty` above guarantees the global is set, but TypeScript only sees the
+// optional property type, so fall back to the shared singleton to keep this
+// non-nullable for every consumer that injects it as a required AuditLogger.
+export const defaultAuditLogger: AuditLogger = globalAuditState.defaultAuditLogger ?? sharedLogger;

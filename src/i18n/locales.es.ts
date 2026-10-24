@@ -1,6 +1,6 @@
 /**
  * Localized error messages for Spanish (es).
- * These map directly to i18n keys in errorTaxonomy.ts.
+ * These map directly to i18n keys in the error taxonomy (src/errors/errorCodes.ts).
  */
 export const ES_MESSAGES = {
   errors: {
@@ -45,6 +45,14 @@ export const ES_MESSAGES = {
       not_found: "Recurso no encontrado",
       conflict: "Conflicto",
       unprocessable_entity: "Entidad no procesable",
+    },
+    bundle: {
+      expired: "El paquete ha expirado",
+      not_transferable: "El paquete no es transferible",
+    },
+    budget: {
+      query_budget_exceeded:
+        "Presupuesto de consulta excedido — la solicitud consumió demasiado tiempo de base de datos",
     },
     internal: {
       db_error: "Error de base de datos",

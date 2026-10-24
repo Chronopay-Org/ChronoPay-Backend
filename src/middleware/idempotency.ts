@@ -6,6 +6,7 @@ import { validateIdempotencyKey } from "./headerValidation.js";
 import { IdempotencyError } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
+import { logger } from "../utils/logger.js";
 
 const IDEMPOTENCY_EXPIRATION_SECONDS = 86400;
 
@@ -142,7 +143,7 @@ export const idempotencyMiddleware = async (
           IDEMPOTENCY_EXPIRATION_SECONDS,
         )
         .catch((error: Error) => {
-          console.error("Failed to persist idempotency response:", error.message);
+          logger.error({ err: error }, "failed to persist idempotency response");
         });
 
       return originalJson(body);

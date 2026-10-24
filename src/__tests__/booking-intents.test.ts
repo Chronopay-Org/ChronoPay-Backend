@@ -1,10 +1,16 @@
+import { createTestAuthorization } from "../../test/auth.js";
 import request from "supertest";
 import express from "express";
 import { createBookingIntentsRouter } from "../routes/booking-intents.js";
+import { setFeatureFlagsFromEnv } from "../flags/service.js";
+import { featureFlagContextMiddleware } from "../middleware/featureFlags.js";
 import {
   InMemoryBookingIntentRepository,
   type BookingIntentRecord,
 } from "../modules/booking-intents/booking-intent-repository.js";
+import { BookingIntentService } from "../modules/booking-intents/booking-intent-service.js";
+import type { VerifiedJwtPayload } from "../utils/jwt.js";
+import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
 
 // Minimal valid intent fields (minus id, which the repo assigns)
 const BASE_INTENT: Omit<BookingIntentRecord, "id"> = {
@@ -17,17 +23,34 @@ const BASE_INTENT: Omit<BookingIntentRecord, "id"> = {
   createdAt: new Date().toISOString(),
 };
 
-describe("booking intents endpoints", () => {
-  let app: express.Express;
-  let repo: InMemoryBookingIntentRepository;
+// Slot seeded in InMemorySlotRepository's DEFAULT_SLOTS that is bookable
+// and owned by "alice" (not "user1" or "user2"), so no self-booking conflict.
+const ALICE_SLOT_ID = "slot-11111111-1111-4111-8111-111111111111";
 
-  beforeEach(() => {
-    repo = new InMemoryBookingIntentRepository();
-    app = express();
-    app.use(express.json());
-    // @ts-expect-error - Auto-fixed by script
-    app.use("/api/v1/booking-intents", createBookingIntentsRouter(repo));
-  });
+// Shared across every suite in this file: each endpoint-level suite below needs
+// the same app wired to a fresh in-memory repository per test.
+let app: express.Express;
+let repo: InMemoryBookingIntentRepository;
+
+beforeEach(() => {
+  process.env.FF_CREATE_BOOKING_INTENT = "true";
+  setFeatureFlagsFromEnv(process.env);
+  repo = new InMemoryBookingIntentRepository();
+  app = express();
+  app.use(express.json());
+  app.use(featureFlagContextMiddleware);
+  app.use(
+    "/api/v1/booking-intents",
+    createBookingIntentsRouter({ bookingIntentRepository: repo }),
+  );
+});
+
+afterAll(() => {
+  delete process.env.FF_CREATE_BOOKING_INTENT;
+  setFeatureFlagsFromEnv(process.env);
+});
+
+describe("booking intents endpoints", () => {
 
   // ─── GET /:id ───────────────────────────────────────────────────────────────
 
@@ -35,8 +58,7 @@ describe("booking intents endpoints", () => {
     it("returns 404 when intent does not exist", async () => {
       const res = await request(app)
         .get("/api/v1/booking-intents/intent-999")
-        .set("x-chronopay-user-id", "user1")
-        .set("x-chronopay-role", "customer");
+        .set("Authorization", createTestAuthorization("user1", "customer"));
       expect(res.status).toBe(404);
       expect(res.body.success).toBe(false);
     });
@@ -45,8 +67,7 @@ describe("booking intents endpoints", () => {
       repo.create({ ...BASE_INTENT, customerId: "other-user" });
       const res = await request(app)
         .get("/api/v1/booking-intents/intent-1")
-        .set("x-chronopay-user-id", "user1")
-        .set("x-chronopay-role", "customer");
+        .set("Authorization", createTestAuthorization("user1", "customer"));
       expect(res.status).toBe(404);
       expect(res.body.success).toBe(false);
     });
@@ -55,8 +76,7 @@ describe("booking intents endpoints", () => {
       repo.create({ ...BASE_INTENT, customerId: "user1" });
       const res = await request(app)
         .get("/api/v1/booking-intents/intent-1")
-        .set("x-chronopay-user-id", "user1")
-        .set("x-chronopay-role", "customer");
+        .set("Authorization", createTestAuthorization("user1", "customer"));
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.intent.id).toBe("intent-1");
@@ -67,8 +87,7 @@ describe("booking intents endpoints", () => {
       repo.create({ ...BASE_INTENT, customerId: "other-user" });
       const res = await request(app)
         .get("/api/v1/booking-intents/intent-1")
-        .set("x-chronopay-user-id", "admin1")
-        .set("x-chronopay-role", "admin");
+        .set("Authorization", createTestAuthorization("admin1", "admin"));
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.intent.id).toBe("intent-1");
@@ -91,12 +110,13 @@ describe("booking intents endpoints", () => {
 
       const res = await request(app)
         .get("/api/v1/booking-intents")
-        .set("x-chronopay-user-id", "user1")
-        .set("x-chronopay-role", "customer");
+        .set("Authorization", createTestAuthorization("user1", "customer"));
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.intents).toHaveLength(2);
-      expect(res.body.intents.every((i: BookingIntentRecord) => i.customerId === "user1")).toBe(true);
+      expect(res.body.intents.every((i: BookingIntentRecord) => i.customerId === "user1")).toBe(
+        true,
+      );
     });
 
     it("returns all intents for an admin", async () => {
@@ -105,8 +125,7 @@ describe("booking intents endpoints", () => {
 
       const res = await request(app)
         .get("/api/v1/booking-intents")
-        .set("x-chronopay-user-id", "admin1")
-        .set("x-chronopay-role", "admin");
+        .set("Authorization", createTestAuthorization("admin1", "admin"));
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.intents).toHaveLength(2);
@@ -115,8 +134,7 @@ describe("booking intents endpoints", () => {
     it("returns an empty array when the customer has no intents", async () => {
       const res = await request(app)
         .get("/api/v1/booking-intents")
-        .set("x-chronopay-user-id", "user1")
-        .set("x-chronopay-role", "customer");
+        .set("Authorization", createTestAuthorization("user1", "customer"));
       expect(res.status).toBe(200);
       expect(res.body.intents).toEqual([]);
     });
@@ -125,5 +143,329 @@ describe("booking intents endpoints", () => {
       const res = await request(app).get("/api/v1/booking-intents");
       expect(res.status).toBe(401);
     });
+  });
+
+  describe("POST /:id/no-show", () => {
+    it("allows a supplier to mark a confirmed booking as a no-show and forfeit escrow share", async () => {
+      const intent = await repo.create({
+        ...BASE_INTENT,
+        professional: "pro-1",
+        customerId: "user1",
+        status: "confirmed",
+        pricingSnapshot: {
+          strategyId: "fixed",
+          resolvedPrice: 1500,
+          basePrice: 1500,
+          slotStartMs: 1000,
+          nowMs: 1500,
+          activeBookings: 1,
+          capacity: 1,
+          config: { strategy: "fixed" },
+        },
+      });
+
+      const res = await request(app)
+        .post(`/api/v1/booking-intents/${intent.id}/no-show`)
+        .send({ reason: "Buyer did not arrive", forfeitRatio: 0.2 })
+        .set("Authorization", createTestAuthorization("pro-1", "professional"));
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.result.status).toBe("no_show");
+      expect(res.body.result.forfeitAmountCents).toBe(300);
+      expect(res.body.result.strikeId).toEqual(expect.any(String));
+      expect(res.body.result.autoSuspended).toBe(false);
+      expect(res.body.result).not.toHaveProperty("reputationDelta");
+      expect(res.body.result.buyerId).toBe("user1");
+    });
+
+    it("rejects marking a pending intent as a no-show", async () => {
+      const intent = await repo.create({
+        ...BASE_INTENT,
+        professional: "pro-1",
+        customerId: "user1",
+      });
+
+      const res = await request(app)
+        .post(`/api/v1/booking-intents/${intent.id}/no-show`)
+        .send({ reason: "No show" })
+        .set("x-chronopay-user-id", "pro-1")
+        .set("x-chronopay-role", "professional");
+
+      expect(res.status).toBe(409);
+      expect(res.body.success).toBe(false);
+      expect(repo.findById(intent.id)?.status).toBe("pending");
+    });
+
+    it("rejects a no-show before the slot start time plus grace", async () => {
+      const intent = await repo.create({
+        ...BASE_INTENT,
+        professional: "pro-1",
+        customerId: "user1",
+        status: "confirmed",
+        startTime: Date.now() + 60 * 60 * 1000,
+        endTime: Date.now() + 2 * 60 * 60 * 1000,
+      });
+
+      const res = await request(app)
+        .post(`/api/v1/booking-intents/${intent.id}/no-show`)
+        .send({ reason: "Too early" })
+        .set("x-chronopay-user-id", "pro-1")
+        .set("x-chronopay-role", "professional");
+
+      expect(res.status).toBe(409);
+      expect(res.body.success).toBe(false);
+      expect(repo.findById(intent.id)?.status).toBe("confirmed");
+    });
+
+    it("rejects a customer from marking no-show", async () => {
+      const intent = await repo.create({
+        ...BASE_INTENT,
+        professional: "pro-1",
+        customerId: "user1",
+      });
+
+      const res = await request(app)
+        .post(`/api/v1/booking-intents/${intent.id}/no-show`)
+        .send({ reason: "No show" })
+        .set("Authorization", createTestAuthorization("user1", "customer"));
+
+      expect(res.status).toBe(403);
+      expect(res.body.success).toBe(false);
+    });
+
+    it("rejects invalid forfeit ratios", async () => {
+      const intent = await repo.create({
+        ...BASE_INTENT,
+        professional: "pro-1",
+        customerId: "user1",
+        status: "confirmed",
+        startTime: 1000,
+        endTime: 2000,
+      });
+
+      const res = await request(app)
+        .post(`/api/v1/booking-intents/${intent.id}/no-show`)
+        .send({ forfeitRatio: 2 })
+        .set("Authorization", createTestAuthorization("pro-1", "professional"));
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+  });
+});
+
+// ─── Concurrent-create: at-most-one active intent per slot ───────────────────
+//
+// The partial unique index (migration 019) is the DB-level guarantee.
+// This suite verifies the same invariant at the service layer, which the
+// index mirrors: exactly one of N concurrent creates for the same slot wins;
+// the rest receive 409 CONFLICT.
+//
+// The "after terminal state" case verifies that the partial index (and the
+// in-memory analogue) allows a new intent once the prior one is no longer
+// active — i.e. the constraint is partial, not global.
+
+describe("POST /:id/refund", () => {
+  it("returns a proportional refund for a partially consumed booking", async () => {
+    const intent = await repo.create({
+      ...BASE_INTENT,
+      customerId: "user1",
+      professional: "pro-1",
+      status: "confirmed",
+      startTime: 0,
+      endTime: 1000,
+      pricingSnapshot: {
+        strategyId: "fixed",
+        resolvedPrice: 1000,
+        basePrice: 1000,
+        slotStartMs: 0,
+        nowMs: 0,
+        activeBookings: 1,
+        capacity: 1,
+        config: { strategy: "fixed" },
+      },
+    });
+
+    const res = await request(app)
+      .post(`/api/v1/booking-intents/${intent.id}/refund`)
+      .send({ cancelledAtMs: 400, reason: "customer_cancel" })
+      .set("Authorization", createTestAuthorization("user1", "customer"));
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.refund.refundAmountCents).toBe(600);
+    expect(res.body.refund.refundRatio).toBeCloseTo(0.6, 5);
+    expect(res.body.refund.reason).toBe("customer_cancel");
+  });
+
+  it("rejects invalid cancellation timestamps on refund requests", async () => {
+    const intent = await repo.create({
+      ...BASE_INTENT,
+      customerId: "user1",
+      professional: "pro-1",
+      status: "confirmed",
+      startTime: 0,
+      endTime: 1000,
+      pricingSnapshot: {
+        strategyId: "fixed",
+        resolvedPrice: 1000,
+        basePrice: 1000,
+        slotStartMs: 0,
+        nowMs: 0,
+        activeBookings: 1,
+        capacity: 1,
+        config: { strategy: "fixed" },
+      },
+    });
+
+    const res = await request(app)
+      .post(`/api/v1/booking-intents/${intent.id}/refund`)
+      .send({ cancelledAtMs: "bad" })
+      .set("Authorization", createTestAuthorization("user1", "customer"));
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+
+  it("returns the policy breakdown and matches GET /:id/cancel-preview for a pre-start cancellation", async () => {
+    const startTime = Date.now() + 36 * 60 * 60 * 1000;
+    const endTime = startTime + 60 * 60 * 1000;
+    const intent = await repo.create({
+      ...BASE_INTENT,
+      customerId: "user1",
+      professional: "pro-1",
+      status: "confirmed",
+      startTime,
+      endTime,
+      pricingSnapshot: {
+        strategyId: "fixed",
+        resolvedPrice: 1000,
+        basePrice: 1000,
+        slotStartMs: startTime,
+        nowMs: Date.now(),
+        activeBookings: 1,
+        capacity: 1,
+        config: { strategy: "fixed" },
+      },
+      cancellationPolicySnapshot: {
+        policyVersionId: "v2-prorated",
+        capturedAtMs: Date.now(),
+        policyTerms: {
+          tiers: [
+            { minHoursUntilStart: 24, maxHoursUntilStart: 72, refundRatio: 0.6, flatFee: 50, taxReversalRatio: 0.1 },
+            { minHoursUntilStart: 0, maxHoursUntilStart: 24, refundRatio: 0, flatFee: 0 },
+          ],
+        },
+      },
+      holdFeePolicySnapshot: {
+        supplierId: "pro-1",
+        holdFeeCents: 100,
+        capturedAtMs: Date.now(),
+      },
+    });
+
+    const previewRes = await request(app)
+      .get(`/api/v1/booking-intents/${intent.id}/cancel-preview`)
+      .set("x-chronopay-user-id", "user1")
+      .set("x-chronopay-role", "customer");
+
+    const refundRes = await request(app)
+      .post(`/api/v1/booking-intents/${intent.id}/refund`)
+      .send({ reason: "customer_cancel" })
+      .set("x-chronopay-user-id", "user1")
+      .set("x-chronopay-role", "customer");
+
+    expect(previewRes.status).toBe(200);
+    expect(refundRes.status).toBe(200);
+    expect(refundRes.body.refund.refundAmountCents).toBe(510);
+    expect(refundRes.body.refund.refundAmountCents).toBe(previewRes.body.preview.netRefund);
+    expect(refundRes.body.refund.policyVersionId).toBe("v2-prorated");
+    expect(refundRes.body.refund.fee).toBe(50);
+    expect(refundRes.body.refund.holdFee).toBe(100);
+    expect(refundRes.body.refund.taxReversal).toBe(60);
+    expect(refundRes.body.refund.breakdown).toMatchObject({
+      policyVersion: "v2-prorated",
+      fee: 50,
+      holdFee: 100,
+      taxReversal: 60,
+      netRefund: 510,
+    });
+  });
+});
+
+describe("concurrent booking-intent creates — one active per slot", () => {
+  // Build a lightweight app wired to explicit repos so we can control state.
+  function makeServiceApp(userId = "user1") {
+    const slotRepo = new InMemorySlotRepository();
+    const intentRepo = new InMemoryBookingIntentRepository();
+    const service = new BookingIntentService(intentRepo, slotRepo);
+
+    const app = express();
+    app.use(express.json());
+
+    // Thin router that bypasses auth/feature-flag middleware for these tests.
+    // Mirrors exactly what the real POST / handler does after auth passes.
+    app.post("/intents", async (req: any, res: any) => {
+      try {
+        const intent = await service.createIntent(req.body, {
+          userId: (req.headers["x-user-id"] as string) ?? userId,
+          role: "customer",
+          claims: {} as VerifiedJwtPayload,
+        });
+        res.status(201).json({ success: true, intent });
+      } catch (err: any) {
+        res.status(err.statusCode ?? err.status ?? 500).json({
+          success: false,
+          error: err.message,
+          code: err.code,
+        });
+      }
+    });
+
+    return { app, intentRepo, slotRepo, service };
+  }
+
+  it("exactly one of 5 concurrent creates for the same slot succeeds", async () => {
+    const { app } = makeServiceApp();
+
+    const body = {
+      slotId: ALICE_SLOT_ID,
+    };
+
+    const requests = Array.from({ length: 5 }, (_, i) =>
+      request(app).post("/intents").set("x-user-id", `customer-${i}`).send(body),
+    );
+
+    const responses = await Promise.all(requests);
+    const statuses = responses.map((r) => r.status);
+
+    const created = statuses.filter((s) => s === 201);
+    const conflicted = statuses.filter((s) => s === 409);
+
+    expect(created).toHaveLength(1);
+    expect(conflicted).toHaveLength(4);
+
+    const conflictBodies = responses.filter((r) => r.status === 409).map((r) => r.body);
+    conflictBodies.forEach((body) => {
+      expect(body.success).toBe(false);
+      expect(body.code).toBe("CONFLICT");
+    });
+  });
+
+  it("allows a new intent for a slot once the prior intent is no longer active", async () => {
+    const { service } = makeServiceApp();
+
+    const actor = { userId: "user1", role: "customer" as const, claims: {} as VerifiedJwtPayload };
+
+    // Create the first intent and cancel it (terminal state releases the slot).
+    const first = await service.createIntent({ slotId: ALICE_SLOT_ID }, actor);
+    await service.cancelIntent(first.id, actor);
+
+    // A second create for the same slot should now succeed because the prior
+    // intent is no longer active (the in-memory analogue of the partial index).
+    const second = await service.createIntent({ slotId: ALICE_SLOT_ID }, actor);
+    expect(second.slotId).toBe(ALICE_SLOT_ID);
+    expect(second.status).toBe("pending");
   });
 });

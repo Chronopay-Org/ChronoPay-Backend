@@ -1,25 +1,24 @@
-/**
+/*
  * Custom error classes for ChronoPay API.
  *
- * Every subclass binds to a canonical entry in `ERROR_TAXONOMY`. The error
- * envelope emitted on the wire is the flat shape produced by `toJSON()`:
+ * Every subclass binds to a canonical entry in `ERROR_TAXONOMY`. The error envelope emitted on the wire is the flat shape produced by `toJSON()`:
  *
  *   { success: false, code, error, requestId?, timestamp, details? }
  *
- * Error messages are resolved via i18n at response time; clients should not
- * depend on error message text — only on error codes.
+ * Error messages are resolved via i18n at response time; clients should not depend on error message text — only on error codes.
  *
  * See `docs/error-codes.md` for the full taxonomy.
  */
 
-import { ERROR_CODES, type ErrorCodeString } from "./errorCodes.js";
 import {
+  ERROR_CODES,
   ERROR_TAXONOMY,
   type ErrorCode,
+  type ErrorCodeString,
   type ErrorType,
   isPublicError,
   type I18nMessageKey,
-} from "./errorTaxonomy.js";
+} from "./errorCodes.js";
 
 export interface AppErrorEnvelope {
   success: false;
@@ -363,12 +362,36 @@ export class ContentNegotiationError extends AppError {
   }
 }
 
+/**
+ * Typed validation error for domain inputs that cannot be processed
+ * (e.g. an unparseable RRULE). Maps to HTTP 422 via UNPROCESSABLE_ENTITY.
+ */
+export class SubscriptionValidationError extends AppError {
+  constructor(message: string, field?: string, details?: unknown) {
+    const payload =
+      field === undefined
+        ? details
+        : {
+            field,
+            ...(details && typeof details === "object"
+              ? (details as Record<string, unknown>)
+              : {}),
+          };
+    super(
+      message,
+      ERROR_CODES.UNPROCESSABLE_ENTITY.status,
+      ERROR_CODES.UNPROCESSABLE_ENTITY.code,
+      true,
+      payload,
+      "errors.resource.unprocessable_entity" as I18nMessageKey,
+    );
+  }
+}
+
 export function isAppError(error: unknown): error is AppError {
   return (
     error instanceof Error &&
-    "statusCode" in error &&
-    "code" in error &&
-    "isOperational" in error
+    "statusCode" in error && "code" in error && "isOperational" in error
   );
 }
 

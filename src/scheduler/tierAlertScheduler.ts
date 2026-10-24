@@ -1,3 +1,4 @@
+import { logger } from "../utils/logger.js";
 import {
   SupplierTierAlertService,
   AlertEvaluationResult,
@@ -66,10 +67,7 @@ export class TierAlertScheduler {
         this.runCount++;
         await this.runOnce();
       } catch (err) {
-        console.error(
-          "[tier-alert-scheduler] Batch evaluation failed:",
-          err instanceof Error ? err.message : err
-        );
+        logger.error({ err }, "[tier-alert-scheduler] Batch evaluation failed");
       }
 
       if (this.isRunning) {

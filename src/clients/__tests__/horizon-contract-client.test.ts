@@ -4,6 +4,7 @@ import {
   HorizonHttpError,
   HorizonInsufficientBalanceError,
   computeMinBalance,
+  _clearTokenBuckets,
 } from "../../clients/horizon-contract-client.js";
 import { ContractService } from "../../services/contract.service.js";
 import { RetryPolicy } from "../../utils/retry-policy.js";
@@ -51,6 +52,7 @@ function mockOk(body: unknown) {
   // @ts-expect-error - Auto-fixed by script
   mockFetch.mockResolvedValueOnce({
     ok: true,
+    headers: { get: () => null },
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as Response);
@@ -61,6 +63,7 @@ function mockHttpError(status: number, body = "") {
   mockFetch.mockResolvedValueOnce({
     ok: false,
     status,
+    headers: { get: () => null },
     text: async () => body,
   } as unknown as Response);
 }
@@ -74,6 +77,7 @@ function mockMalformedJson() {
   // @ts-expect-error - Auto-fixed by script
   mockFetch.mockResolvedValueOnce({
     ok: true,
+    headers: { get: () => null },
     json: async () => {
       throw new SyntaxError("Unexpected token");
     },
@@ -83,6 +87,7 @@ function mockMalformedJson() {
 
 beforeEach(() => {
   mockFetch.mockReset();
+  _clearTokenBuckets();
 });
 
 // ─── HorizonHttpError ─────────────────────────────────────────────────────────
@@ -1256,5 +1261,264 @@ describe("HorizonContractClient.findPathPaymentQuote()", () => {
         maxSlippageTolerancePercent: 1.0, // 1% tolerance, but actual slippage is 50%
       }),
     ).rejects.toThrow("Slippage tolerance exceeded");
+  });
+
+  it("accepts string source amount '50.0' and numeric stroops equivalently", async () => {
+    const client = makeClient();
+    mockOk({
+      _embedded: {
+        records: [
+          {
+            source_asset_type: "native",
+            source_amount: "50.0000000",
+            destination_asset_type: "credit_alphanum4",
+            destination_asset_code: "USDC",
+            destination_asset_issuer: usdcAsset.asset_issuer,
+            destination_amount: "10.0000000",
+            path: [],
+          },
+        ],
+      },
+    });
+
+    const quoteFromString = await client.findPathPaymentQuote({
+      sourceAsset: nativeAsset,
+      sourceAmount: "50.0",
+      destinationAsset: usdcAsset,
+      maxSlippageTolerancePercent: 0.5,
+    });
+
+    mockOk({
+      _embedded: {
+        records: [
+          {
+            source_asset_type: "native",
+            source_amount: "50.0000000",
+            destination_asset_type: "credit_alphanum4",
+            destination_asset_code: "USDC",
+            destination_asset_issuer: usdcAsset.asset_issuer,
+            destination_amount: "10.0000000",
+            path: [],
+          },
+        ],
+      },
+    });
+
+    const quoteFromNumber = await client.findPathPaymentQuote({
+      sourceAsset: nativeAsset,
+      sourceAmount: 500000000,
+      destinationAsset: usdcAsset,
+      maxSlippageTolerancePercent: 0.5,
+    });
+
+    expect(quoteFromString.sourceAmount).toBe(quoteFromNumber.sourceAmount);
+    expect(quoteFromString.minDestinationAmount).toBe(quoteFromNumber.minDestinationAmount);
+  });
+
+  it("rejects string source amount representing 50 stroops as dust", async () => {
+    const client = makeClient();
+    await expect(
+      client.findPathPaymentQuote({
+        sourceAsset: nativeAsset,
+        sourceAmount: "0.0000050",
+        destinationAsset: usdcAsset,
+      }),
+    ).rejects.toThrow("below minimum threshold");
+  });
+
+  it("computes minDestinationAmount with exact integer math for large values", async () => {
+    const client = makeClient();
+    const largeDestAmount = "922337203.6854775";
+    mockOk({
+      _embedded: {
+        records: [
+          {
+            source_asset_type: "native",
+            source_amount: "1000000.0000000",
+            destination_asset_type: "credit_alphanum4",
+            destination_asset_code: "USDC",
+            destination_asset_issuer: usdcAsset.asset_issuer,
+            destination_amount: largeDestAmount,
+            path: [],
+          },
+        ],
+      },
+    });
+
+    const quote = await client.findPathPaymentQuote({
+      sourceAsset: nativeAsset,
+      sourceAmount: 10000000000000,
+      destinationAsset: usdcAsset,
+      maxSlippageTolerancePercent: 0.5,
+    });
+
+    expect(quote.minDestinationAmount).toBe("917725517.6670501");
+  });
+});
+
+// ─── SettlementFinalityProbe contract (#804) ─────────────────────────────────
+
+describe("SettlementFinalityProbe contract", () => {
+  const TX_HASH_2 = "deadbeef";
+  const LEDGER_SEQ = 1049;
+
+  function ledgerEnvelope(sequence = LEDGER_SEQ) {
+    return { _embedded: { records: [{ sequence }] } };
+  }
+
+  function txEnvelope(overrides: Record<string, unknown> = {}) {
+    return {
+      id: TX_HASH_2,
+      paging_token: "8724800289671168-0",
+      hash: TX_HASH_2,
+      ledger: 1040,
+      successful: true,
+      ...overrides,
+    };
+  }
+
+  describe("getLatestLedgerSequence", () => {
+    it("returns the sequence of the latest ledger", async () => {
+      const client = makeClient();
+      mockOk(ledgerEnvelope(1049));
+
+      await expect(client.getLatestLedgerSequence()).resolves.toBe(1049);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws ContractInvalidRequestError when Horizon returns no records", async () => {
+      const client = makeClient();
+      mockOk({ _embedded: { records: [] } });
+
+      await expect(client.getLatestLedgerSequence()).rejects.toBeInstanceOf(
+        ContractInvalidRequestError,
+      );
+    });
+
+    it("propagates provider-unavailable when Horizon returns a 5xx", async () => {
+      const client = makeClient();
+      mockHttpError(503, "upstream down");
+
+      await expect(client.getLatestLedgerSequence()).rejects.toBeInstanceOf(
+        ContractProviderUnavailableError,
+      );
+    });
+  });
+
+  describe("getTransactionFinality", () => {
+    it("reports confirmations derived from the supplied latest ledger", async () => {
+      const client = makeClient();
+      mockOk(txEnvelope({ ledger: 1040 }));
+
+      const status = await client.getTransactionFinality(TX_HASH_2, {
+        latestLedger: 1049,
+      });
+
+      expect(status).toEqual({
+        found: true,
+        txHash: TX_HASH_2,
+        successful: true,
+        ledger: 1040,
+        latestLedger: 1049,
+        confirmations: 10, // 1049 - 1040 + 1
+      });
+      // latestLedger supplied → single fetch, no ledger round-trip
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("clamps confirmations to 0 when the tx ledger is ahead of latest (negative)", async () => {
+      const client = makeClient();
+      mockOk(txEnvelope({ ledger: 1055 }));
+
+      const status = await client.getTransactionFinality(TX_HASH_2, {
+        latestLedger: 1049,
+      });
+
+      expect(status.confirmations).toBe(0);
+    });
+
+    it("reports confirmations 0 when the transaction has no ledger field yet", async () => {
+      const client = makeClient();
+      mockOk(txEnvelope({ ledger: undefined, successful: undefined }));
+
+      const status = await client.getTransactionFinality(TX_HASH_2, {
+        latestLedger: 1049,
+      });
+
+      expect(status.found).toBe(true);
+      expect(status.confirmations).toBe(0);
+      // Absent successful field is surfaced as undefined — callers treat
+      // anything other than `true` as failed/uncertain.
+      expect(status.successful).toBeUndefined();
+    });
+
+    it("reports successful: true for an accepted transaction", async () => {
+      const client = makeClient();
+      mockOk(txEnvelope({ ledger: 1040, successful: true }));
+
+      const status = await client.getTransactionFinality(TX_HASH_2, {
+        latestLedger: 1049,
+      });
+
+      expect(status.successful).toBe(true);
+    });
+
+    it("surfaces a failed on-chain transaction via successful: false", async () => {
+      const client = makeClient();
+      mockOk(txEnvelope({ ledger: 1040, successful: false }));
+
+      const status = await client.getTransactionFinality(TX_HASH_2, {
+        latestLedger: 1049,
+      });
+
+      expect(status.found).toBe(true);
+      expect(status.successful).toBe(false);
+    });
+
+    it("returns found:false without throwing when Horizon returns 404", async () => {
+      const client = makeClient();
+      mockHttpError(404);
+
+      const status = await client.getTransactionFinality(TX_HASH_2, {
+        latestLedger: 1049,
+      });
+
+      expect(status).toEqual({
+        found: false,
+        txHash: TX_HASH_2,
+        latestLedger: 1049,
+        confirmations: 0,
+      });
+    });
+
+    it("throws a typed error with statusCode for non-404 Horizon errors", async () => {
+      const client = makeClient();
+      mockHttpError(500, "boom");
+
+      await expect(
+        client.getTransactionFinality(TX_HASH_2, { latestLedger: 1049 }),
+      ).rejects.toMatchObject({ statusCode: 500 });
+    });
+
+    it("propagates raw network errors", async () => {
+      const client = makeClient();
+      mockNetworkError("ECONNRESET");
+
+      await expect(
+        client.getTransactionFinality(TX_HASH_2, { latestLedger: 1049 }),
+      ).rejects.toThrow("ECONNRESET");
+    });
+
+    it("fetches the latest ledger when not supplied and then the transaction", async () => {
+      const client = makeClient();
+      mockOk(ledgerEnvelope(1049));
+      mockOk(txEnvelope({ ledger: 1040 }));
+
+      const status = await client.getTransactionFinality(TX_HASH_2);
+
+      expect(status.latestLedger).toBe(1049);
+      expect(status.confirmations).toBe(10);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
   });
 });

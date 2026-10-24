@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../../test/auth.js";
 import request from "supertest";
 import { createApp } from "../../app.js";
 import { setFeatureFlagsFromEnv } from "../../flags/service.js";
@@ -25,50 +26,46 @@ describe("GET /api/v1/booking-intents/:id/cancel-preview", () => {
     // Create intent
     const createRes = await request(app)
       .post("/api/v1/booking-intents")
-      .set("x-chronopay-user-id", validUserId)
-      .set("x-chronopay-role", validRole)
-      .send({ slotId: "slot-100" }); 
+      .set("Authorization", createTestAuthorization(validUserId, validRole))
+      .send({ slotId: "slot-11111111-1111-4111-8111-111111111111" });
 
     const intentId = createRes.body.intent.id;
 
     const start = performance.now();
     const res = await request(app)
       .get(`/api/v1/booking-intents/${intentId}/cancel-preview`)
-      .set("x-chronopay-user-id", validUserId)
-      .set("x-chronopay-role", validRole);
+      .set("Authorization", createTestAuthorization(validUserId, validRole));
     const end = performance.now();
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.preview).toBeDefined();
-    expect(res.body.preview.policyVersion).toBe("v1-timezone-tier");
+    expect(res.body.preview.policyVersion).toBe("v2-prorated");
     expect(res.body.preview.fee).toBeDefined();
     expect(res.body.preview.taxReversal).toBeDefined();
     expect(res.body.preview.netRefund).toBeDefined();
-    
+
     // Latency assertion for p95 budget (usually < 50ms for in-memory)
-    expect(end - start).toBeLessThan(100); 
+    expect(end - start).toBeLessThan(100);
   });
 
-  it("should return 409 if already cancelled", async () => {
+  it("should return 200 preview after the intent is cancelled", async () => {
     const createRes = await request(app)
       .post("/api/v1/booking-intents")
-      .set("x-chronopay-user-id", validUserId)
-      .set("x-chronopay-role", validRole)
-      .send({ slotId: "slot-101" });
+      .set("Authorization", createTestAuthorization(validUserId, validRole))
+      .send({ slotId: "slot-22222222-2222-4222-8222-222222222222" });
     const intentId = createRes.body.intent.id;
 
     await request(app)
       .post(`/api/v1/booking-intents/${intentId}/cancel`)
-      .set("x-chronopay-user-id", validUserId)
-      .set("x-chronopay-role", validRole);
+      .set("Authorization", createTestAuthorization(validUserId, validRole));
 
     const res = await request(app)
       .get(`/api/v1/booking-intents/${intentId}/cancel-preview`)
-      .set("x-chronopay-user-id", validUserId)
-      .set("x-chronopay-role", validRole);
+      .set("Authorization", createTestAuthorization(validUserId, validRole));
 
-    expect(res.status).toBe(409);
-    expect(res.body.error).toBe("Already cancelled");
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.preview).toBeDefined();
   });
 });

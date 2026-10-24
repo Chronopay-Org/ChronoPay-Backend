@@ -6,6 +6,7 @@ import { type Request, type Response } from "express";
 import { configService } from "../config/config.service.js";
 import { rateLimitRedisStore } from "./rateLimitStore.js";
 import { createHash } from "node:crypto";
+import { fairQueueBurnRateTotal, fairQueueWaitTimeSeconds } from "../metrics.js";
 
 /**
  * Generate an auth-aware rate limit key.
@@ -26,35 +27,65 @@ import { createHash } from "node:crypto";
  *   - Keys are namespaced and identifiable in Redis
  *   - IP fallback works when auth headers are absent
  */
-export function generateRateLimitKey(req: Request): string {
+export function generateRateLimitKey(req: Request | null | undefined): string {
+  const safeReq = req && typeof req === 'object' ? (req as Partial<Request> & { auth?: { userId?: unknown }; user?: { sub?: unknown; id?: unknown }; apiKeyId?: unknown }) : undefined;
+
   // Header-based identity (x-chronopay-user-id) — highest priority
-  if (req.auth?.userId) {
-    return `rl:user:${req.auth.userId}`;
+  const authUserId = safeReq?.auth?.userId;
+  if (isNonEmptyValue(authUserId)) {
+    return `rl:user:${String(authUserId)}`;
   }
 
   // JWT identity (Authorization: Bearer <token>)
-  if (req.user) {
-    const userId = req.user.sub || req.user.id;
-    if (userId) {
-      return `rl:user:${userId}`;
-    }
+  const jwtUserId = safeReq?.user && (isNonEmptyValue((safeReq.user as any)?.sub) ? (safeReq.user as any).sub : isNonEmptyValue((safeReq.user as any)?.id) ? (safeReq.user as any).id : undefined);
+  if (isNonEmptyValue(jwtUserId)) {
+    return `rl:user:${String(jwtUserId)}`;
   }
 
   // API key identity (x-api-key)
-  if (req.apiKeyId) {
-    return `rl:apiKey:${req.apiKeyId}`;
+  const apiKeyId = safeReq?.apiKeyId;
+  if (isNonEmptyValue(apiKeyId)) {
+    return `rl:apiKey:${String(apiKeyId)}`;
   }
 
-  // IP address fallback — hash to avoid IPv6 detection and ensure consistent length
-  const ip = getClientIp(req);
+  // IP address fallback — hash to avoid IPv6 detection and ensure consistent length.
+  // Blank and malformed values fall back to a stable anonymous identity instead of crashing.
+  const ip = getClientIp(safeReq as any);
   const ipHash = createHash('sha256').update(ip, 'utf8').digest('hex');
-  return `rl:ip:${ipHash}`;
+  return `ip:${ipHash}`;
+}
+
+export function getPrincipalType(req: Request | null | undefined): 'user' | 'apiKey' | 'ip' {
+  const key = generateRateLimitKey(req);
+  if (key.startsWith('user:')) return 'user';
+  if (key.startsWith('apiKey:')) return 'apiKey';
+  return 'ip';
+}
+
+function isNonEmptyValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  return true;
 }
 
 // Helper to extract IP without referencing `req.ip` directly in the main function.
-function getClientIp(req: Request): string {
+function getClientIp(req: Partial<Request> | undefined): string {
   const anyReq = req as any;
-  return anyReq.ip || anyReq.socket?.remoteAddress || 'anonymous';
+  const candidateIp = anyReq?.ip ?? anyReq?.socket?.remoteAddress ?? anyReq?.headers?.['x-forwarded-for'] ?? anyReq?.headers?.['x-real-ip'];
+
+  if (typeof candidateIp === 'string') {
+    const trimmed = candidateIp.trim();
+    return trimmed.length > 0 ? trimmed : 'anonymous';
+  }
+
+  if (Array.isArray(candidateIp) && candidateIp.length > 0) {
+    const first = candidateIp[0];
+    if (typeof first === 'string' && first.trim().length > 0) {
+      return first.trim();
+    }
+  }
+
+  return 'anonymous';
 }
 
 /**
@@ -87,8 +118,7 @@ export function createRateLimiter(
 /**
  * Auth-aware rate limiter.
  *
- * Place AFTER authentication middleware so that req.auth, req.user, or req.apiKeyId
- * are populated. Falls back to IP-based key when no identity present.
+ * Place AFTER authentication middleware so that req.auth, req.user, or req.apiKeyId are populated. Falls back to IP-based key when no identity present.
  *
  * Uses shared Redis store to ensure counters are consistent across routes and instances.
  *
@@ -114,8 +144,11 @@ export function createAuthAwareRateLimiter(
     keyGenerator: generateRateLimitKey,
     // @ts-expect-error - Auto-fixed by script
     store: rateLimitRedisStore,
-    // Skip rate limiting in test environment to avoid flaky tests
+    // Skip rate limiting in test environment to avoid flaky tests.
+    // Also skip when a valid internal fair-queue bypass has been granted
+    // (req.internalBypassActor is set by the fairQueueBypass middleware).
     skip: (req: Request) => {
+      if ((req as any).internalBypassActor) return true;
       if ((req as any)._skipRateLimit === false) return false;
       return process.env.NODE_ENV === 'test';
     },
@@ -127,7 +160,21 @@ export function createAuthAwareRateLimiter(
     },
   };
 
-  return rateLimit(options);
+  const limiter = rateLimit(options);
+
+  return ((req: Request, res: Response, next: import("express").NextFunction) => {
+    // Label by principal type (user/apiKey/ip), never by raw user id.
+    // This keeps the label budget bounded and avoids exporting user ids.
+    const principalType = getPrincipalType(req);
+    const start = process.hrtime();
+    fairQueueBurnRateTotal.labels(principalType).inc();
+    res.once('finish', () => {
+      const [sec, nsec] = process.hrtime(start);
+      const elapsedSeconds = sec + nsec / 1e9;
+      fairQueueWaitTimeSeconds.labels(principalType).observe(elapsedSeconds);
+    });
+    return limiter(req, res, next);
+  }) as RateLimitRequestHandler;
 }
 
 // Default export: traditional IP-only limiter (not currently used in app)

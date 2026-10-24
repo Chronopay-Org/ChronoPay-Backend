@@ -48,6 +48,8 @@ import {
 } from "../services/schedulingService.js";
 import type { EscrowEvent } from "./escrowEventTypes.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { logger } from "../utils/logger.js";
+
 
 export type ProjectionResultKind =
   | "applied"
@@ -107,7 +109,7 @@ const TARGET_BY_KIND: Record<EscrowEvent["kind"], BookingIntentStatus> = {
 
 /**
  * Legal (status, kind) → next-status transitions from a non-terminal state.
- * Terminal states are intentionally absent — they have no outgoing edges.
+ * Terminal states map to an empty edge list — they have no outgoing edges.
  */
 const STATUS_TRANSITIONS: Record<
   BookingIntentStatus,
@@ -140,6 +142,14 @@ const STATUS_TRANSITIONS: Record<
   hold_refunded: [],
   cancelled: [],
   expired: [],
+  // Escrow-mirrored and post-delivery states are recorded by the escrow event
+  // stream itself and accept no further projection edges here. They must be
+  // listed explicitly so lookups never fall through to `undefined`.
+  escrow_held: [],
+  escrow_released: [],
+  escrow_refunded: [],
+  escrow_disputed: [],
+  no_show: [],
 };
 
 export class EscrowStateProjector {
@@ -170,7 +180,7 @@ export class EscrowStateProjector {
       );
     }
 
-    const intent = this.findActiveIntent(event);
+    const intent = await this.findActiveIntent(event);
     if (!intent) {
       return noop(
         "noop_unknown_intent",
@@ -211,12 +221,12 @@ export class EscrowStateProjector {
       );
     }
 
-    return this.transition(intent, target, event);
+    return await this.transition(intent, target, event);
   }
 
   // ─── Lookup helpers ────────────────────────────────────────────────────────
 
-  private findActiveIntent(event: EscrowEvent): BookingIntentRecord | undefined {
+  private async findActiveIntent(event: EscrowEvent): Promise<BookingIntentRecord | undefined> {
     // If the contract annotates the event with a bookingIntentId, the id is
     // authoritative provenance — we MUST use the id-pointer or fail-closed.
     // Silently re-routing to a slot-keyed lookup would obscure intent
@@ -224,21 +234,21 @@ export class EscrowStateProjector {
     // "id points at a different slot" cases. The caller maps undefined
     // to noop_unknown_intent.
     if (event.bookingIntentId) {
-      const byId = this.bookingIntentRepository.findById(event.bookingIntentId);
+      const byId = await this.bookingIntentRepository.findById(event.bookingIntentId);
       if (!byId) return undefined;
       if (byId.slotId !== event.slotId) return undefined;
       return byId;
     }
-    return this.lookupBySlot(event.slotId);
+    return await this.lookupBySlot(event.slotId);
   }
 
-  private lookupBySlot(slotId: string): BookingIntentRecord | undefined {
+  private async lookupBySlot(slotId: string): Promise<BookingIntentRecord | undefined> {
     if (this.bookingIntentRepository.findLatestBySlotId) {
-      return this.bookingIntentRepository.findLatestBySlotId(slotId);
+      return await this.bookingIntentRepository.findLatestBySlotId(slotId);
     }
     // Fallback for repository implementations that do not provide the
     // indexed lookup. O(n) but only used in tests / legacy repos.
-    const all = this.bookingIntentRepository.listAll();
+    const all = await this.bookingIntentRepository.listAll();
     const candidates = all.filter((i) => i.slotId === slotId);
     if (candidates.length === 0) return undefined;
     return candidates.reduce((latest, current) =>
@@ -255,12 +265,12 @@ export class EscrowStateProjector {
    * 
    * Emits audit events for firm booking escalation (Captured event).
    */
-  private transition(
+  private async transition(
     intent: BookingIntentRecord,
     nextStatus: BookingIntentStatus,
     event: EscrowEvent,
-  ): ProjectionOutcome {
-    const updated = this.bookingIntentRepository.updateStatus(intent.id, nextStatus);
+  ): Promise<ProjectionOutcome> {
+    const updated = await this.bookingIntentRepository.updateStatus(intent.id, nextStatus);
 
     // Emit firm booking receipt when payment is captured
     if (event.kind === "Captured" && nextStatus === "firm") {
@@ -301,7 +311,7 @@ export class EscrowStateProjector {
         },
       }, { status: "success", resource: `booking:${intent.id}` })
       .catch((err) => {
-        console.error("Failed to emit firm booking receipt:", err);
+        logger.error("Failed to emit firm booking receipt:", err);
       });
   }
 

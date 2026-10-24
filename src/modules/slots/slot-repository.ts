@@ -102,6 +102,8 @@ export interface SlotRecord {
   category?: string;
   /** Whether bundle is transferable */
   transferable?: boolean;
+  currency?: import("../../utils/amount.js").SupportedCurrencies;
+  amount_minor?: number;
 }
 
 export interface SlotRepository {

@@ -22,7 +22,11 @@ describe("BookingIntentService recurring", () => {
       list: jest.fn().mockReturnValue([
         { id: "slot-1", professional: "alice", startTime: dt, endTime: dt + 3600000, bookable: true },
       ]),
-      findById: jest.fn(),
+      findById: jest.fn().mockImplementation((id) =>
+        id === "slot-1"
+          ? { id: "slot-1", professional: "alice", startTime: dt, endTime: dt + 3600000, bookable: true }
+          : undefined,
+      ),
       hasConflict: jest.fn(),
       updateBookable: jest.fn(),
     };

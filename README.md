@@ -1,384 +1,153 @@
-# chronopay-backend
+# ChronoPay Backend
 
-API backend for **ChronoPay** - time tokenization and scheduling marketplace on Stellar.
+REST API for **ChronoPay**, a time-tokenization and scheduling marketplace on Stellar. Suppliers publish time slots, buyers create booking intents and checkout sessions, and settlement/escrow state is tracked against Stellar (Horizon) and an escrow contract.
 
-## What's in this repo
+- Frontend: [Chronopay-Org/ChronoPay-Frontend](https://github.com/Chronopay-Org/ChronoPay-Frontend)
+- Contracts: [Chronopay-Org/ChronoPay-Contracts](https://github.com/Chronopay-Org/ChronoPay-Contracts)
 
-- **Express** API with TypeScript
-- Health, slot, and booking-intent routes
-- Ready for Stellar Horizon integration, token service, and scheduling logic
+## Architecture
 
-## Prerequisites
+Node.js (ESM) + TypeScript + Express 4. Entry point `src/index.ts` builds the app from `src/app.ts` (`createApp`) and listens on `PORT` (default `3001`).
 
-- Node.js 20+
-- npm
-- Docker 20.10+ (optional, for containerized development)
-- Docker Compose 2.0+ (optional, for containerized development)
+| Area | Location |
+| --- | --- |
+| Routers (HTTP surface) | `src/routes/`, `src/buyer-profile/` |
+| Business logic | `src/services/`, `src/modules/`, `src/scheduler/` |
+| Persistence | `src/db/` (pg pool, migration runner, drift detector), `src/repositories/` |
+| Redis (idempotency, caching, rate limits) | `src/cache/`, `src/lib/` |
+| Stellar / escrow clients | `src/clients/`, `src/stellar/` |
+| Cross-cutting middleware | `src/middleware/` (auth, RBAC, CORS, rate limit, validation, error envelope) |
+| Observability | `src/metrics/`, `src/tracing/`, pino logging, `ops/` (alert rules, dashboards) |
+| Config validation | `src/config/env.ts` (fails fast on invalid env) |
 
-## Setup
+Other dependencies in `package.json`: ethers, `@stellar/stellar-sdk`, zod, prom-client, ioredis, KMS clients (AWS/GCP), swagger-ui-express.
 
-```bash
-# Clone the repo (or use your fork)
-git clone <repo-url>
-cd chronopay-backend
+## API surface
 
-# Setup (choose one):
+### Subscription service composition (#1339)
 
-# Configure environment variables
-cp .env.example .env
-# Edit .env and set JWT_SECRET to a strong random value
+The subscription router and the slot-generator worker share the process-wide
+`subscriptionService` from `src/services/subscriptionContainer.ts`. The router
+continues to re-export that service for compatibility. The entry point must not
+construct a second set of in-memory repositories: subscriptions created through
+the API must be visible to the worker, and generated metadata/cursor updates
+must be visible through the same service and subscription GET endpoint.
 
-# Build
-npm run build
-npm test
-npm run dev    # Start dev server with hot reload
+Tests can use `createSubscriptionContainer()` for independent state or inject
+product/subscription/slot repositories into that factory. The default container
+is still in-memory and local to one application process; this does not add
+database persistence or cross-instance coordination. Existing generator batch,
+recurrence, conflict and cursor-idempotency behavior is unchanged.
 
-## Option 2: Docker Development (requires Docker)
-# Copy environment file
-cp .env.example .env
+Existing limitation: `SubscriptionService.mintSlot` returns slot metadata, and
+the generator updates `slotsMinted` and `nextSlotStartMs`; it does not insert a
+new bookable slot record into `SlotRepository`. This composition fix verifies
+those actual existing effects rather than claiming SQL/on-chain slot creation.
+Persistent/bookable slot insertion and route authentication remain separate work.
 
-# Using helper script
-./scripts/docker-health.sh start
+All business routes are under `/api/v1`. Interactive docs are served at `/api-docs` and the generated spec is in `openapi-spec.json` (`npm run generate-openapi`). The list below is derived from the router files; consult the OpenAPI spec and `docs/api/` for request/response shapes.
 
-# Or using docker-compose directly
-docker-compose up -d --build
+**Operational (unversioned):** `GET /health`, `/health/horizon`, `/health/ready`, `/ready`, `/live`, `/metrics`.
 
-# View logs
-docker-compose logs -f
+**Slots:** `GET /api/v1/slots`, `POST /api/v1/slots`, `DELETE /api/v1/slots/:id` (plus per-id read/patch in `src/routes/slots.ts`).
 
-# Run tests in container
-./scripts/docker-health.sh test
-```
+**Booking intents** (`/api/v1/booking-intents`): `POST /`, `GET /`, `GET /:id`, `POST /:id/confirm`, `/:id/cancel`, `/:id/refund`, `/:id/no-show`, `GET /:id/cancel-preview`, `GET /:id/hold-status`, `POST /:id/auto-refund-hold`.
 
-## Environment validation
+**Checkout** (`/api/v1/checkout`): `POST /sessions`, `GET /sessions/:sessionId`, `POST /sessions/:sessionId/{complete,pay,fail,cancel}`.
 
-ChronoPay validates environment variables centrally at startup through `src/config/env.ts`.
+**Buyer profiles** (`/api/v1/buyer-profiles`): create, read (several lookups), `PATCH`, `DELETE`.
 
-Currently validated variables used by `src`:
+**Auth:** `POST /api/v1/auth/verify`; OAuth2 `GET /api/v1/auth/oauth/:provider/start` and `/callback`. TOTP MFA is supported (see env vars).
 
-- `NODE_ENV`
-  - optional
-  - default: `development`
-  - allowed: `development`, `test`, `production`
-- `PORT`
-  - optional
-  - default: `3001`
-  - must be an integer in the range `1` to `65535`
-- `SETTLEMENTS_WEBHOOK_SECRET`
-  - optional for startup, but required for `POST /api/v1/webhooks/settlements`
-  - must be a non-empty secret used to verify webhook payload signatures
+**Subscriptions** (`/api/v1/subscriptions`): product CRUD under `/products`, subscription create/get/list, `POST /:id/{pause,resume,cancel}`.
 
-### Startup failure behavior
+**Webhooks:** `POST /api/v1/webhooks/settlements`, `POST /api/v1/webhooks/kyc` (signature-verified), admin idempotency inspection/sweep.
 
-If configuration is invalid, the app fails fast before serving requests. Errors are aggregated and sanitized so they identify variable names and reasons without echoing raw values.
+**Other:** `GET /api/v1/suppliers/:supplierId/reputation/signals`, `GET /api/v1/partner/quota`, `POST /api/v1/gdpr/export` + `GET .../download`, GraphQL (`POST` in `src/routes/graphql.ts`), `POST /api/v1/notifications/sms`.
 
-Example:
+**Admin** (`/api/v1/admin`, token/role protected): audit export, webhook secret rotation, refunds, payment trace, fraud human-in-the-loop queue, escrow pause, disputes (evidence, adjudicate, appeal, deadline scan), holiday calendars, buyer strikes, grace windows per slot category, cancellation overrides, access reviews, GDPR DSR management, legal holds, redaction policy, fraud model registry (`/fraud-models`), feature-flag rollouts (`/flag-rollouts`), supplier reputation snapshots.
 
-```text
-Invalid environment configuration:
-- NODE_ENV must be one of: development, test, production.
-- PORT must be a whole number between 1 and 65535.
-```
+## Configuration
 
-### Security notes
+Copy `.env.example` to `.env`. Variables listed there:
 
-- no partial startup on invalid configuration
-- whitespace-only values are rejected
-- numeric parsing is strict
-- no raw env values are leaked in validation errors
-- **Test routes are blocked in production**: The `enableTestRoutes` option in `createApp` can only be used when `NODE_ENV` is not `production`. Attempting to enable test routes in production will cause the application to fail to start with an explicit error message. This ensures that test-only surfaces (e.g., `/__test__/explode`) can never be exposed in production environments.
+| Variable | Purpose |
+| --- | --- |
+| `JWT_SECRET` | JWT signing secret (>= 32 random chars) |
+| `PORT` | Listen port (default 3001) |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated origins; must be set explicitly in production |
+| `IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED`, `_ACTIVE_KEY_ID`, `_ACTIVE_KEY`, `_PREVIOUS_KEYS` | Optional AES-256-GCM encryption of idempotency payloads in Redis, with key rotation |
+| `MFA_ENCRYPTION_KEY`, `MFA_CHALLENGE_SECRET` | Required for MFA endpoints |
+| `MFA_ISSUER`, `MFA_FRESHNESS_MS`, `MFA_WINDOW_PERIODS`, `MFA_CHALLENGE_TTL_SEC` | Optional MFA tuning |
 
-Additional reviewer-focused notes live in:
+`src/config/env.ts` additionally reads (not all in `.env.example`): `NODE_ENV`, `REDIS_URL` (required), `HORIZON_URL`/`HORIZON_URLS`, `STELLAR_NETWORK_PASSPHRASE`, `ESCROW_CONTRACT_HASH`, `JWT_ISSUER`, `JWT_AUDIENCE`, `WEBHOOK_SECRET`, `INTERNAL_OVERRIDE_SECRET(_PREV)`, `INTERNAL_BYPASS_TOLERANCE_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, `REQUEST_TIMEOUT_MS`, `TRUST_PROXY`. See [docs/environment-validation.md](docs/environment-validation.md) for validation rules. A database connection is configured in `src/db/` (see [docs/database/migrations.md](docs/database/migrations.md)).
 
-- `docs/environment-validation.md`
+### Checkout redirect destinations (#1325)
 
-## Scripts
+Optional `successUrl` and `cancelUrl` are checked by the checkout request
+validator before session creation. Each must be an absolute URL of at most 2048
+characters, use HTTPS in production (HTTP is also allowed outside production),
+and match an exact configured URL host, including a non-default port if present.
+Credentials, raw whitespace/backslashes, relative URLs and non-HTTP schemes are
+rejected. Query strings and fragments on approved destinations are preserved.
 
-| Script                 | Description                                         |
-| ---------------------- | --------------------------------------------------- |
-| `npm run build`        | Compile TypeScript to `dist/`                       |
-| `npm run start`        | Run production server                               |
-| `npm run dev`          | Run dev server with tsx watch                       |
-| `npm run lint`         | Run ESLint for unreachable code and unused imports  |
-| `npm run format`       | Format maintained source/config files with Prettier |
-| `npm test`             | Run Jest tests                                      |
-| `npm run migrate`      | Database migration CLI (see below)                  |
+Set `CHECKOUT_REDIRECT_ALLOWED_HOSTS=app.example,checkout.example:8443` (host
+authorities only, no schemes, paths or wildcard/subdomain patterns). When this
+variable is absent, the host of a valid absolute `APP_URL` is the fallback.
+An explicitly empty/invalid list denies supplied redirects rather than falling
+back. Without either valid configuration, supplied redirects are rejected;
+requests omitting both optional fields remain valid. Invalid destinations return
+400 with the existing checkout envelope, `code: INVALID_REDIRECT_URL` and
+`details.field: successUrl|cancelUrl`, without reflecting the URL. This policy
+does not change checkout authentication, payments or direct service callers.
 
-## Database Migrations
+## Running locally
 
-ChronoPay includes a migration framework with drift detection and safety checks.
-
-### Quick Commands
+Requires Node.js 20+ (CI uses 22), npm, and a Redis instance.
 
 ```bash
-# Check migration status
-npm run migrate status
-
-# Validate migrations (no DB needed)
-npm run migrate validate
-
-# Check for drift and naming issues
-npm run migrate drift-check
-
-# Apply pending migrations
-npm run migrate up
-
-# Roll back last migration
-npm run migrate down
+cp .env.example .env     # set JWT_SECRET, REDIS_URL, etc.
+npm ci
+npm run dev              # tsx watch src/index.ts
+# or
+npm run build && npm start
 ```
 
-### Drift Detection
+Docker: `docker-compose.yml`, `docker-compose.override.yml` (dev) and `docker-compose.prod.yml` are provided, along with `scripts/docker-health.sh`.
 
-Before deploying to any environment, run drift check to ensure schema consistency:
+Useful scripts: `npm run migrate <status|validate|drift-check|up|down>`, `npm run generate-openapi`, `npm run generate:error-docs`, `npm run pii-scan`, `npm run sbom`, `npm run canary`, `npm run lint`, `npm run typecheck`.
 
-```bash
-npm run migrate drift-check
-```
+### Graceful shutdown
 
-This detects:
+The executable handles `SIGTERM` and `SIGINT` with one shared shutdown sequence.
+It stops accepting HTTP connections and stops background workers, waits for
+existing HTTP requests, then closes both PostgreSQL pools and the slot-cache
+Redis client. Worker initializers that finish importing after shutdown starts
+do not start new work. Importing the entry point under `NODE_ENV=test` neither
+binds a port nor installs process signal handlers.
 
-- Orphaned migrations (applied but not in registry)
-- Name mismatches between code and database
-- Out-of-order application
-- Naming convention violations
+`SHUTDOWN_TIMEOUT_MS` is a positive integer (default `30000`, at most `2147483647`)
+covering worker stops, HTTP draining and resource closure. At the deadline,
+remaining HTTP connections are forcibly closed and resource cleanup is attempted;
+a signal-triggered shutdown exits unsuccessfully on timeout/close failure.
+The signal handler has a hard exit fallback if cleanup never resolves. Ordinary
+shutdown exits with code 0. Driver/worker failures are logged with structured
+resource names without request or credential contents. Already-running external
+calls remain subject to their worker's existing cancellation support and the
+shutdown deadline; this does not redesign those workers or merge the DB pools.
 
-See [docs/database/migrations.md](docs/database/migrations.md) for complete documentation.
+## Testing
 
-## SDK release automation
+`npm test` runs Jest (ESM, in-band); `npm run test:coverage` adds coverage. Most tests live in `src/**/__tests__/`, with mocks and Pact contract tests under `test/`. See `docs/testing/` for database, Redis and contract test notes.
 
-Tag-based SDK publishing is available for OpenAPI diff-triggered releases. When a tag such as `openapi-breaking-2026-07-28` or `openapi-nonbreaking-2026-07-28` is pushed, the GitHub Actions workflow resolves the next semantic version from the diff class and publishes the package to npm with provenance.
+## CI and deployment
 
-### How it works
+GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`: `npm ci` then `npm run build`. The `Dockerfile` is a multi-stage build producing a production image. `scripts/release-sdk.js` is a helper for OpenAPI-diff-driven SDK versioning (run with `--dry-run` to validate); the only workflow in the repo is the CI build above. Operational material: alert rules and dashboards in `ops/`, secret rotation in `docs/SECRET_ROTATION_RUNBOOK.md`, escrow migration in `docs/runbook/escrow-migration.md`.
 
-1. The tag name is inspected for `breaking`, `major`, `minor`, or `nonbreaking` markers.
-2. A semantic version is computed from the current package version and the detected class.
-3. The package manifest is temporarily updated to the next version and the workflow runs `npm publish --provenance`.
-4. If npm rejects the publish because of a 2FA challenge or a duplicate version, the workflow exits safely and leaves the manifest unchanged.
+## Documentation
 
-### Required secrets
-
-- `NPM_TOKEN` with permission to publish the package to npm.
-- `id-token: write` permission is enabled for provenance generation.
-
-### Manual override
-
-You can also run the release script locally for validation:
-
-```bash
-node scripts/release-sdk.js --tag openapi-breaking-2026-07-28 --dry-run
-```
-
-## API Documentation
-
-Detailed API contracts and endpoint documentation:
-
-- **[Booking Intent API](docs/booking-intent-api.md)** — POST /api/v1/booking-intents endpoint with request/response schemas, validation rules, and error codes
-- **[Slots API](docs/api/slots.md)** — Complete slots API documentation covering GET/POST/PATCH/DELETE endpoints, conflict detection, caching, and security considerations
-
-## API (slot listing)
-
-- `GET /health` — Health check; returns `{ status: "ok", service: "chronopay-backend" }`
-- `GET /api/v1/slots` — List time slots with pagination
-  - Query parameters:
-    - `page` (integer, default `1`, min `1`)
-    - `limit` (integer, default `10`, min `1`, max `100`)
-  - Response:
-    - `{ data: Slot[], page, limit, total }`
-  - Error responses:
-    - `400` for invalid page/limit
-    - `500` for backend errors
-  - Example:
-    - `/api/v1/slots?page=2&limit=5`
-- `POST /api/v1/webhooks/settlements` — Settlement webhook endpoint
-  - Requires `x-webhook-signature` header with HMAC SHA256 over the raw JSON payload
-  - Requires `SETTLEMENTS_WEBHOOK_SECRET` on the host for valid signature verification
-  - Payload fields:
-    - `eventType` — one of `settlement_completed`, `settlement_initiated`, `settlement_failed`
-    - `transactionId` — string
-    - `amount` — positive number
-    - `timestamp` — positive number (millisecond epoch)
-  - Error responses:
-    - `401` when the signature header is missing
-    - `403` when the signature mismatches or the timestamp is stale
-    - `400` for invalid event payload
-
-## Rate Limiting
-
-ChronoPay Backend implements **auth-aware rate limiting** to ensure fair usage while minimizing collateral damage from shared IP addresses (NAT, corporate proxies). The limiter keys requests by authenticated principal (user ID or API key) when available, and falls back to IP for unauthenticated traffic.
-
-### Key Strategy
-
-Priority order for rate-limit key generation:
-
-1. **Header-based user ID** (`x-chronopay-user-id`) → `rl:user:<userId>`
-2. **JWT user ID** (`req.user.sub` or `req.user.id`) → `rl:user:<userId>`
-3. **API key** (SHA-256 hash of `x-api-key`) → `rl:apiKey:<hash>`
-4. **IP address** (`req.ip`, respects `TRUST_PROXY`) → `rl:ip:<ip>`
-
-This ensures:
-
-- Different principal types never collide
-- Same principal shares quota across all protected routes (global counter)
-- Unauthenticated requests are still limited by IP
-
-### Default Limits
-
-| Setting       | Default    | Description                     |
-| ------------- | ---------- | ------------------------------- |
-| Window        | 15 minutes | Rolling window per principal    |
-| Max requests  | 100        | Per principal within the window |
-| Response code | `429`      | HTTP status when limit exceeded |
-
-### Configuration
-
-Override with environment variables:
-
-| Variable               | Default  | Description                                              |
-| ---------------------- | -------- | -------------------------------------------------------- |
-| `RATE_LIMIT_WINDOW_MS` | `900000` | Window duration in milliseconds                          |
-| `RATE_LIMIT_MAX`       | `100`    | Max requests per window per principal                    |
-| `TRUST_PROXY`          | `false`  | Use `X-Forwarded-For` for client IP behind load balancer |
-
-All authenticated endpoints should apply `createAuthAwareRateLimiter()` **after** their authentication middleware. Unauthenticated endpoints (e.g., health checks) are automatically IP-based if a limiter is used.
-
-### 429 Response
-
-```json
-{
-  "success": false,
-  "error": "Too many requests, please try again later."
-}
-```
-
-Every response also includes the `RateLimit` header (draft-7 format):
-
-```
-RateLimit: limit=100, remaining=85, reset=1711072800
-```
-
-### Middleware Usage
-
-**Header-based auth** (`x-chronopay-user-id`):
-
-```ts
-router.post(
-  "/",
-  requireAuthenticatedActor(["customer", "admin"]),
-  createAuthAwareRateLimiter(),
-  handler,
-);
-```
-
-**API-key auth** (`x-api-key`):
-
-```ts
-router.post("/", requireApiKey(process.env.API_KEY), createAuthAwareRateLimiter(), handler);
-```
-
-**JWT auth** (Bearer token):
-
-```ts
-router.get("/profile", authenticate, createAuthAwareRateLimiter(), handler);
-```
-
-### Trust Proxy
-
-When running behind a reverse proxy or load balancer, set `TRUST_PROXY=true`. Express will then derive `req.ip` from `X-Forwarded-For`. **Do not enable** if the API is directly exposed; clients could spoof their IP and bypass rate limits.
-
-### Security Notes
-
-- **Auth-before-rate-limit**: The rate limiter must be placed **after** authentication middleware; otherwise it falls back to IP-based keys.
-- **Header trust**: Header-based auth assumes a trusted upstream validates `x-chronopay-user-id`. Direct exposure without a gateway allows spoofing.
-- **API key hashing**: Raw API keys are never stored; Redis keys contain only SHA-256 hashes.
-- **Redis**: All instances share a single Redis store (`rl:` namespace). Ensure Redis is not publicly accessible.
-
-### Full documentation
-
-See [`docs/rate-limiting.md`](docs/rate-limiting.md) for deep dive, troubleshooting, and observability details.
-
-## Feature Flags
-
-ChronoPay backend uses environment-driven feature flags for safe rollout and rapid disable.
-For the enforced registry and guarded-route mapping, see [`docs/feature-flags.md`](docs/feature-flags.md).
-
-### Configuration
-
-- Flag env format: `FF_<FLAG_NAME>`
-- Initial flags:
-  - `FF_CREATE_SLOT` controls `POST /api/v1/slots`
-
-Supported values (case-insensitive):
-
-- Enabled: `true`, `1`, `on`, `yes`
-- Disabled: `false`, `0`, `off`, `no`
-
-If a flag env variable is missing, the service uses the registered default value.
-
-### Runtime behavior
-
-- `POST /api/v1/slots` when `FF_CREATE_SLOT=true`: route behaves normally.
-- `POST /api/v1/slots` when `FF_CREATE_SLOT=false`: returns `503` and:
-
-```json
-{
-  "success": false,
-  "code": "FEATURE_DISABLED",
-  "error": "Feature CREATE_SLOT is currently disabled"
-}
-```
-
-- `GET /health` and `GET /api/v1/slots` are unaffected by this flag.
-
-### Failure-mode handling
-
-- Missing flag env var: falls back to default.
-- Malformed flag value: service fails at startup with explicit configuration error.
-- Unknown flag lookup in code path: treated as server misconfiguration and rejected.
-
-### Quick local examples
-
-```bash
-# Enable slot creation
-FF_CREATE_SLOT=true npm run dev
-
-# Disable slot creation (POST returns 503)
-FF_CREATE_SLOT=false npm run dev
-```
-
-### Acceptance criteria
-
-- Feature flags are validated at startup with strict allowed values.
-- Guarded endpoint responds with deterministic `503` payload when disabled.
-- Unguarded endpoints keep current behavior.
-- Automated tests cover enabled, disabled, and malformed-config paths.
-
-## Contributing
-
-1. Fork the repo and create a branch from `main`.
-2. Install deps and run tests: `npm install && npm test`.
-3. Make changes; keep the build passing: `npm run build`.
-4. Open a pull request. CI must pass (install, build, test).
-
-## CI/CD
-
-On every push and pull request to `main`, GitHub Actions runs:
-
-- **Install**: `npm ci`
-- **Build**: `npm run build`
-- **Tests**: `npm test`
-
-## Environment Variables
-
-| Variable    | Required | Description                                           |
-| ----------- | -------- | ----------------------------------------------------- |
-| `REDIS_URL` | Yes      | Redis connection URL used for idempotency key storage |
-
-```env
-REDIS_URL=redis://localhost:6379
-```
-
-> Idempotency keys are stored in Redis with a 24-hour TTL. Without Redis the server will start, but idempotency-protected endpoints (`POST /api/v1/slots`) will fail.
+See [docs/index.md](docs/index.md) for a categorized index of the design and operations docs. Root-level feature notes: `CHECKOUT_API.md`, `CHECKOUT_SECURITY.md`, `IMPLEMENTATION_NOTES.md`.
 
 ## License
 
-MIT
+No LICENSE file is present in the repository (an earlier README stated MIT).

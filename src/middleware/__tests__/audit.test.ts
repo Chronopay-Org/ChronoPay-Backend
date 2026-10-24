@@ -171,15 +171,21 @@ describe('auditLogger and validator integration', () => {
 
   it('should handle filesystem errors gracefully', async () => {
     appendFileSpy.mockRejectedValue(new Error('Disk full'));
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    
+    // The logger reports failures through the structured pino logger, not
+    // console.error.
+    const loggerModule = await import('../../utils/logger.js');
+    const errorSpy = jest.spyOn(loggerModule.logger, 'error').mockImplementation(() => undefined);
+
     const { AuditLogger } = await import('../../services/auditLogger.js');
     const logger = new AuditLogger();
     
     await expect(logger.log('ERROR_ACTION', {})).resolves.not.toThrow();
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to write to audit log:'), expect.any(Error));
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.any(Error) }),
+      'Failed to write to audit log',
+    );
     
-    consoleSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 });
 

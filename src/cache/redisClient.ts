@@ -17,6 +17,7 @@
  */
 
 import { createRequire } from "module";
+import { logger } from "../utils/logger.js";
 
 export const SLOT_CACHE_TTL_SECONDS = parseInt(process.env.REDIS_SLOT_TTL_SECONDS ?? "60", 10);
 
@@ -77,11 +78,10 @@ export function getRedisClient(): RedisClient | null {
       lazyConnect: false,
     });
 
-    redis.on("connect", () => console.info("[redis] Connected to", REDIS_URL));
+    redis.on("connect", () => logger.info({ url: REDIS_URL }, "redis connected"));
     redis.on("error", (...args: unknown[]) => {
       const err = args[0];
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("[redis] Connection error:", message);
+      logger.error({ err }, "redis connection error");
     });
 
     _client = redis;
@@ -109,7 +109,6 @@ export async function closeRedisClient(): Promise<void> {
     _client = null;
     _ready = false;
     await closing.quit();
-    // @ts-expect-error - Auto-fixed by script
-    logInfo("[redis] Connection closed gracefully");
+    logger.info("redis connection closed gracefully");
   }
 }

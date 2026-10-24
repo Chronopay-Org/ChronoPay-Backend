@@ -6,6 +6,10 @@ export interface Slot {
   category?: string;
   price_cents?: number;
   supplier_rating?: number;
+  // Populated only for geo-radius search results (see marketplaceSearchService.ts)
+  latitude?: number;
+  longitude?: number;
+  distanceKm?: number;
   /**
    * Unix epoch ms of the earliest time the hold on this slot is expected to
    * expire. Present only when suppressHeld=false AND showHeldReleaseEta=true

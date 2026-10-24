@@ -1,6 +1,9 @@
 // @ts-nocheck
 // rrule is a CJS module; import the default export and destructure for
 // compatibility with Jest's --experimental-vm-modules ESM test environment.
+// Actual interop varies by consumer, so resolve through `.default` when
+// present (`import * as` only exposes `default`/`rrule` under Node's
+// CJS-ESM bridge for rrule 2.8.x).
 import * as rruleLib from "rrule";
 import type { RRule as RRuleType } from "rrule";
 import { AuditLogger, defaultAuditLogger } from "./auditLogger.js";
@@ -9,7 +12,8 @@ import {
   TimezoneResolverService,
   createInMemoryTimezoneResolverDeps,
 } from "./timezoneResolverService.js";
-const { RRule: _RRule, rrulestr } = rruleLib as any as {
+const rruleCjs = (rruleLib as any).default ?? rruleLib;
+const { RRule: _RRule, rrulestr } = rruleCjs as {
   RRule: typeof RRuleType;
   rrulestr: (rruleStr: string, options?: Record<string, unknown>) => RRuleType;
 };
@@ -289,10 +293,15 @@ export function createInMemoryHolidayRegistry(seed: RegionalHoliday[] = []): Hol
 }
 
 function sameDayIso(aIso: string, occurrenceMs: number, resolvedTimezone: string): boolean {
-  const aDate = new Date(aIso + "T00:00:00Z");
-  const aDay = formatDateInTimezone(aDate.getTime(), resolvedTimezone);
-  const oDay = formatDateInTimezone(occurrenceMs, resolvedTimezone);
-  return aDay === oDay;
+  // `holiday.date` is a calendar date ("YYYY-MM-DD"), not an instant. Comparing
+  // it to the occurrence's local calendar date avoids the off-by-one you get
+  // by pinning the holiday to midnight UTC and then shifting it into a
+  // negative-offset zone (2026-05-31T00:00Z is 2026-05-30 in New York).
+  if (formatDateInTimezone(occurrenceMs, resolvedTimezone) === aIso) {
+    return true;
+  }
+  // Fall back to UTC for runtimes without full ICU timezone data.
+  return new Date(occurrenceMs).toISOString().slice(0, 10) === aIso;
 }
 
 function formatDateInTimezone(epochMs: number, ianaTimezone: string): string {
