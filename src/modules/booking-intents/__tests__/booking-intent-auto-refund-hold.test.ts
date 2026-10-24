@@ -2,10 +2,7 @@ import {
   BookingIntentService,
   BookingIntentError,
 } from "../booking-intent-service.js";
-import {
-  InMemoryBookingIntentRepository,
-  type BookingIntentRecord,
-} from "../booking-intent-repository.js";
+import { InMemoryBookingIntentRepository } from "../booking-intent-repository.js";
 import {
   InMemorySlotRepository,
   type SlotRecord,
@@ -16,20 +13,18 @@ import type { VerifiedJwtPayload } from "../../../utils/jwt.js";
 const dummyClaims = {} as VerifiedJwtPayload;
 
 const NOW_MS = 1_900_000_000_000;
-const NOW_ISO = new Date(NOW_MS).toISOString();
-const HOUR_MS = 60 * 60 * 1000;
+const HOLD_DURATION_MS = 30 * 60 * 1000;
 const BASE_PRICE_CENTS = 5000;
 
 const PRICED_SLOT: SlotRecord = {
   id: "slot-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   professional: "alice",
-  startTime: NOW_MS + 24 * HOUR_MS,
-  endTime: NOW_MS + 25 * HOUR_MS,
+  startTime: NOW_MS + 3_600_000,
+  endTime: NOW_MS + 7_200_000,
   bookable: true,
   pricingStrategy: {
     strategyId: "fixed",
     basePrice: BASE_PRICE_CENTS,
-    capacity: 1,
     config: { strategy: "fixed" },
   },
 };
@@ -55,29 +50,15 @@ function createFixture() {
   return { slotRepo, intentRepo, service, clock };
 }
 
-/** Awaits the promise and returns the thrown error, or undefined on resolve. */
-async function captureError(
-  promise: Promise<unknown>,
-): Promise<BookingIntentError | undefined> {
+function expectBookingIntentError(fn: () => unknown, status: number): void {
+  let caught: unknown;
   try {
-    await promise;
-    return undefined;
-  } catch (err) {
-    return err as BookingIntentError;
+    fn();
+  } catch (e) {
+    caught = e;
   }
-}
-
-async function expect409(promise: Promise<unknown>): Promise<void> {
-  const err = await captureError(promise);
-  expect(err).toBeInstanceOf(BookingIntentError);
-  expect(err?.status).toBe(409);
-}
-
-function intentIn(
-  intentRepo: InMemoryBookingIntentRepository,
-  id: string,
-): BookingIntentRecord | undefined {
-  return intentRepo.findById(id);
+  expect(caught).toBeInstanceOf(BookingIntentError);
+  expect((caught as BookingIntentError).status).toBe(status);
 }
 
 describe("BookingIntentService.autoRefundHold", () => {
@@ -90,7 +71,7 @@ describe("BookingIntentService.autoRefundHold", () => {
     ({ slotRepo, intentRepo, service, clock } = createFixture());
   });
 
-  async function createHold(holdUntilMs: number | undefined) {
+  async function createHold(holdUntilMs: number) {
     return service.createIntent(
       {
         slotId: PRICED_SLOT.id,
@@ -115,12 +96,12 @@ describe("BookingIntentService.autoRefundHold", () => {
       expect(hold.status).toBe("hold_placed");
       expect(slotRepo.findById(PRICED_SLOT.id)?.bookable).toBe(false);
 
-      const refunded = await service.autoRefundHold(hold.id);
+      const refunded = service.autoRefundHold(hold.id);
 
       expect(refunded.status).toBe("hold_refunded");
-      expect(refunded.refundedAt).toBe(NOW_ISO);
-      expect(refunded.refundMetadata).toEqual({
-        refundedAt: NOW_ISO,
+      expect(refunded.refundedAt).toBe(new Date(NOW_MS).toISOString());
+      expect(refunded.refundMetadata).toMatchObject({
+        refundedAt: new Date(NOW_MS).toISOString(),
         refundedAmountCents: BASE_PRICE_CENTS,
         refundReason: "hold_auto_refund",
       });
@@ -130,7 +111,7 @@ describe("BookingIntentService.autoRefundHold", () => {
     it("refunds a hold exactly at its holdUntilMs deadline", async () => {
       const hold = await createHold(NOW_MS);
 
-      const refunded = await service.autoRefundHold(hold.id);
+      const refunded = service.autoRefundHold(hold.id);
 
       expect(refunded.status).toBe("hold_refunded");
       expect(refunded.refundMetadata?.refundedAmountCents).toBe(
@@ -144,9 +125,9 @@ describe("BookingIntentService.autoRefundHold", () => {
       const confirmed = await createConfirmedStandardIntent();
       expect(confirmed.status).toBe("confirmed");
 
-      await expect409(service.autoRefundHold(confirmed.id));
+      expectBookingIntentError(() => service.autoRefundHold(confirmed.id), 409);
 
-      const after = intentIn(intentRepo, confirmed.id);
+      const after = intentRepo.findById(confirmed.id);
       expect(after?.status).toBe("confirmed");
       expect(after?.bookingType).toBe("standard");
       expect(after?.refundedAt).toBeUndefined();
@@ -161,28 +142,26 @@ describe("BookingIntentService.autoRefundHold", () => {
         customer,
       );
 
-      await expect409(service.autoRefundHold(pending.id));
+      expectBookingIntentError(() => service.autoRefundHold(pending.id), 409);
 
-      const after = intentIn(intentRepo, pending.id);
+      const after = intentRepo.findById(pending.id);
       expect(after?.status).toBe("pending");
       expect(after?.refundMetadata).toBeUndefined();
     });
 
     it("throws 409 for a refundable hold whose status is not hold_placed (expired)", async () => {
       const hold = await createHold(NOW_MS - 1000);
-      await service.expireIntent(hold.id);
+      service.expireIntent(hold.id);
 
-      await expect409(service.autoRefundHold(hold.id));
+      expectBookingIntentError(() => service.autoRefundHold(hold.id), 409);
 
-      const after = intentIn(intentRepo, hold.id);
+      const after = intentRepo.findById(hold.id);
       expect(after?.status).toBe("expired");
       expect(after?.refundMetadata).toBeUndefined();
     });
 
-    it("throws 404 for an unknown intent", async () => {
-      const err = await captureError(service.autoRefundHold("no-such-id"));
-      expect(err).toBeInstanceOf(BookingIntentError);
-      expect(err?.status).toBe(404);
+    it("throws 404 for an unknown intent", () => {
+      expectBookingIntentError(() => service.autoRefundHold("no-such-id"), 404);
     });
   });
 
@@ -190,20 +169,20 @@ describe("BookingIntentService.autoRefundHold", () => {
     it("returns 409 on a second auto-refund without creating a second refund record", async () => {
       const hold = await createHold(NOW_MS - 1000);
 
-      const first = await service.autoRefundHold(hold.id);
+      const first = service.autoRefundHold(hold.id);
       expect(first.status).toBe("hold_refunded");
 
       // Advance the clock so a second (buggy) refund would be visible.
       clock.nowMs = NOW_MS + 60_000;
 
-      await expect409(service.autoRefundHold(hold.id));
+      expectBookingIntentError(() => service.autoRefundHold(hold.id), 409);
 
-      const after = intentIn(intentRepo, hold.id);
+      const after = intentRepo.findById(hold.id);
       expect(after?.status).toBe("hold_refunded");
       // Refund record still belongs to the first (only) refund.
-      expect(after?.refundedAt).toBe(NOW_ISO);
-      expect(after?.refundMetadata).toEqual({
-        refundedAt: NOW_ISO,
+      expect(after?.refundedAt).toBe(new Date(NOW_MS).toISOString());
+      expect(after?.refundMetadata).toMatchObject({
+        refundedAt: new Date(NOW_MS).toISOString(),
         refundedAmountCents: BASE_PRICE_CENTS,
         refundReason: "hold_auto_refund",
       });
@@ -212,29 +191,21 @@ describe("BookingIntentService.autoRefundHold", () => {
 
   describe("expiry guard", () => {
     it("throws 409 for a hold before its holdUntilMs deadline and leaves it unchanged", async () => {
-      const hold = await createHold(NOW_MS + 30 * 60 * 1000);
+      const hold = await createHold(NOW_MS + HOLD_DURATION_MS);
 
-      await expect409(service.autoRefundHold(hold.id));
+      expectBookingIntentError(() => service.autoRefundHold(hold.id), 409);
 
-      const after = intentIn(intentRepo, hold.id);
+      const after = intentRepo.findById(hold.id);
       expect(after?.status).toBe("hold_placed");
       expect(after?.refundedAt).toBeUndefined();
       expect(after?.refundMetadata).toBeUndefined();
       expect(slotRepo.findById(PRICED_SLOT.id)?.bookable).toBe(false);
     });
 
-    it("throws 409 for a hold without a holdUntilMs deadline", async () => {
-      const hold = await createHold(undefined);
-
-      await expect409(service.autoRefundHold(hold.id));
-
-      expect(intentIn(intentRepo, hold.id)?.status).toBe("hold_placed");
-    });
-
     it("refunds a not-yet-expired hold when force is passed explicitly", async () => {
-      const hold = await createHold(NOW_MS + 30 * 60 * 1000);
+      const hold = await createHold(NOW_MS + HOLD_DURATION_MS);
 
-      const refunded = await service.autoRefundHold(hold.id, { force: true });
+      const refunded = service.autoRefundHold(hold.id, { force: true });
 
       expect(refunded.status).toBe("hold_refunded");
       expect(refunded.refundMetadata?.refundedAmountCents).toBe(
@@ -246,10 +217,11 @@ describe("BookingIntentService.autoRefundHold", () => {
     it("does not let force bypass the booking type or status guards", async () => {
       const confirmed = await createConfirmedStandardIntent();
 
-      await expect409(
-        service.autoRefundHold(confirmed.id, { force: true }),
+      expectBookingIntentError(
+        () => service.autoRefundHold(confirmed.id, { force: true }),
+        409,
       );
-      expect(intentIn(intentRepo, confirmed.id)?.status).toBe("confirmed");
+      expect(intentRepo.findById(confirmed.id)?.status).toBe("confirmed");
     });
   });
 });

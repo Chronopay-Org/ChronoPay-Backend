@@ -17,6 +17,7 @@ import {
   validateSessionIdParam,
 } from "../middleware/checkout-validation.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
+import { optionalAuth } from "../middleware/auth.js";
 import {
   CreateCheckoutSessionResponse,
   GetCheckoutSessionResponse,
@@ -194,6 +195,11 @@ checkoutRouter.post(
   "/sessions",
   ...payloadLimit(ROUTE_PAYLOAD_LIMITS.checkout),
   validateCreateCheckoutSession(),
+  // Checkout authentication is optional, but idempotencyMiddleware must run
+  // after a presented JWT has been VERIFIED so that Idempotency-Key entries are
+  // namespaced per caller instead of shared globally. optionalAuth never
+  // rejects: absent/invalid tokens continue as anonymous requests.
+  optionalAuth(),
   idempotencyMiddleware,
   async (req: Request, res: Response, next: NextFunction) => {
     try {

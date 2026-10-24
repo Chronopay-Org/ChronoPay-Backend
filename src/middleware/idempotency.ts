@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { getRedisClient } from "../cache/redisClient.js";
 import { generateRequestHash } from "../utils/hash.js";
 import { getIdempotencyPayloadCodec } from "../utils/idempotencyPayloadCodec.js";
+import { buildIdempotencyStorageKey } from "./idempotencyStorageKey.js";
 import { validateIdempotencyKey } from "./headerValidation.js";
 import { IdempotencyError } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
@@ -24,6 +25,22 @@ interface IdempotencyCompletedState {
 
 type IdempotencyState = IdempotencyProcessingState | IdempotencyCompletedState;
 
+/**
+ * Replay-safe response cache for `Idempotency-Key` requests.
+ *
+ * **Ordering requirement:** mount this middleware AFTER authentication
+ * (`requireAuth`, `requireAuthenticatedActor`, `apiKeyAuth`, or a best-effort
+ * `optionalAuth` on routes with optional auth) so that
+ * `buildIdempotencyStorageKey` can namespace the Redis entry by the *verified*
+ * principal (`req.auth.userId`, JWT `sub`, or `req.apiKeyId`). Requests without
+ * a verified principal fall back to a hashed-IP namespace: anonymous callers
+ * keep the previous behaviour while staying isolated from authenticated
+ * callers and from each other.
+ *
+ * The storage key additionally binds the HTTP method and the matched route, so
+ * the same key value used on two different routes never collides, and it is
+ * hashed to bound its length (see `idempotencyStorageKey.ts`).
+ */
 export const idempotencyMiddleware = async (
   req: Request,
   res: Response,
@@ -64,7 +81,7 @@ export const idempotencyMiddleware = async (
   }
 
   try {
-    const storageKey = `idempotency:req:${idempotencyKey}`;
+    const storageKey = buildIdempotencyStorageKey(req, idempotencyKey);
     const incomingHash = generateRequestHash(req.method, req.originalUrl, req.body);
     const codec = getIdempotencyPayloadCodec();
     const existingData = await redis.get(storageKey);

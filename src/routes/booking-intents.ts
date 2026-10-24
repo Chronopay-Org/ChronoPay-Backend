@@ -99,6 +99,9 @@ export function createBookingIntentsRouter(
     // expanding the public request contract.
     captureRequestBody,
     validateBody(CreateBookingIntentBodySchema),
+    // Ordering requirement: must run after requireAuthenticatedActor so
+    // idempotencyMiddleware can namespace Idempotency-Key entries by the
+    // verified caller (req.auth.userId) instead of a global key.
     idempotencyMiddleware,
     createAuthAwareRateLimiter(),
     auditMiddleware("CREATE_BOOKING_INTENT"),
@@ -389,14 +392,15 @@ export function createBookingIntentsRouter(
     auditMiddleware("AUTO_REFUND_HOLD"),
     async (req: Request, res: Response): Promise<void> => {
       try {
-        // Admin-only endpoint: an explicit `force: true` body flag refunds a
-        // hold before its holdUntilMs deadline. The scheduler worker never
-        // passes force, so the automatic path keeps the strict expiry guard.
+        // Admin-only endpoint: allow an explicit `force: true` body flag to
+        // refund a hold before its holdUntilMs deadline. The worker path never
+        // passes force, so it keeps the strict expiry guard.
         const force =
           req.body !== null &&
           typeof req.body === "object" &&
           (req.body as { force?: unknown }).force === true;
-        const intent = await bookingIntentService.autoRefundHold(req.params.id, { force });
+        const intent = bookingIntentService.autoRefundHold(req.params.id, { force });
+        const intent = await bookingIntentService.autoRefundHold(req.params.id);
         res.status(200).json({
           success: true,
           intent,

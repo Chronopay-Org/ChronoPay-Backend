@@ -703,10 +703,9 @@ export class BookingIntentService {
     return 0;
   }
 
-  async autoRefundHold(
-    intentId: string,
-    options: { force?: boolean } = {},
-  ): Promise<BookingIntentRecord> {
+  autoRefundHold(intentId: string, options: { force?: boolean } = {}): BookingIntentRecord {
+    const intent = this.bookingIntentRepository.findById(intentId);
+  async autoRefundHold(intentId: string): Promise<BookingIntentRecord> {
     const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");
