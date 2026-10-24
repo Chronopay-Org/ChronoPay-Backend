@@ -28,7 +28,7 @@ import { Migration } from "../migrationRunner.js";
  *    used by mainstream authenticator apps.
  */
 export const migration: Migration = {
-  id: "026",
+  id: "021",
   name: "create_mfa_enrollments_table",
 
   async up(client: PoolClient): Promise<void> {

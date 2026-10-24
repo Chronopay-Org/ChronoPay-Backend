@@ -610,43 +610,12 @@ export const ERROR_TAXONOMY: Record<ErrorCode, ErrorType> = {
   },
 
   // --- State / lifecycle (404 / 409 / 422) ---
-  NOT_FOUND: {
-    scope: "public",
-    category: "state",
-    code: "NOT_FOUND",
-    status: 404,
-    messageKey: createMessageKey("errors.resource.not_found"),
-  },
-  CONFLICT: {
-    scope: "public",
-    category: "state",
-    code: "CONFLICT",
-    status: 409,
-    messageKey: createMessageKey("errors.resource.conflict"),
-  },
-  UNPROCESSABLE_ENTITY: {
-    scope: "public",
-    category: "state",
-    code: "UNPROCESSABLE_ENTITY",
-    status: 422,
-    messageKey: createMessageKey("errors.resource.unprocessable_entity"),
-  },
-
-  // --- Bundles (422) ---
-  BUNDLE_EXPIRED: {
-    scope: "public",
-    category: "bundle",
-    code: "BUNDLE_EXPIRED",
-    status: 422,
-    messageKey: createMessageKey("errors.bundle.expired"),
-  },
-  BUNDLE_NOT_TRANSFERABLE: {
-    scope: "public",
-    category: "bundle",
-    code: "BUNDLE_NOT_TRANSFERABLE",
-    status: 422,
-    messageKey: createMessageKey("errors.bundle.not_transferable"),
-  },
+  NOT_FOUND: { status: 404, code: "NOT_FOUND" },
+  CONFLICT: { status: 409, code: "CONFLICT" },
+  HOLD_EXPIRED: { status: 409, code: "HOLD_EXPIRED" },
+  UNPROCESSABLE_ENTITY: { status: 422, code: "UNPROCESSABLE_ENTITY" },
+  BUNDLE_EXPIRED: { status: 422, code: "BUNDLE_EXPIRED" },
+  BUNDLE_NOT_TRANSFERABLE: { status: 422, code: "BUNDLE_NOT_TRANSFERABLE" },
 
   // --- Query budget (503) ---
   QUERY_BUDGET_EXCEEDED: {

@@ -22,7 +22,7 @@ describe("Fair Queue Metrics", () => {
       const authHeader = req.headers.authorization;
       if (authHeader?.startsWith("Bearer user:")) {
         req.auth = { userId: authHeader.split(":")[1] };
-      } else if (authHeader?.startsWith("Bearer apikey:")) {
+      } else if (authHeader?.startsWith("Bearer apkey:")) {
         (req as any).apiKeyId = authHeader.split(":")[1];
       }
       // ensure we don't skip rate limit in test environment for this route
@@ -35,57 +35,74 @@ describe("Fair Queue Metrics", () => {
     });
   });
 
-  afterEach(() => {
-  });
+  afterEach(() => {});
 
   async function getMetricsText(): Promise<string> {
     return register.metrics();
   }
 
-  it("increments burn rate and records wait time per tenant", async () => {
+  it("increments burn rate and records wait time per principal type", async () => {
     await request(app).get("/test").set("Authorization", "Bearer user:tenant-1");
     await request(app).get("/test").set("Authorization", "Bearer user:tenant-1");
     await request(app).get("/test").set("Authorization", "Bearer user:tenant-2");
 
     const output = await getMetricsText();
-    
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-1"} 2');
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-2"} 1');
-    expect(output).toContain('fair_queue_wait_time_seconds_count{tenant_id="rl:user:tenant-1"} 2');
-    expect(output).toContain('fair_queue_wait_time_seconds_sum{tenant_id="rl:user:tenant-1"} 0');
+
+    // Labels are by principal type, never by raw user id.
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 3');
+    expect(output).not.toContain('tenant-1');
+    expect(output).not.toContain('tenant-2');
+    expect(output).not.toContain('rl:user:');
+  });
+
+  it("labels by principal type for api keys and anonymous requests", async () => {
+    await request(app).get("/test").set("Authorization", "Bearer apkey:key-abc");
+    await request(app).get("/test");
+
+    const output = await getMetricsText();
+
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="apiKey"} 1');
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="ip"} 1');
+    expect(output).not.toContain('key-abc');
+  });
+
+  it("does not export user ids as metric labels", async () => {
+    await request(app).get("/test").set("Authorization", "Bearer user:secret-user-id-123");
+
+    const output = await getMetricsText();
+    expect(output).not.toContain("secret-user-id-123");
   });
 
   it("handles offboarded tenant (no longer sending traffic)", async () => {
-    await request(app).get("/test").set("Authorization", "Bearer user:tenant-offboarded");
-    
+    await request(app).get("/test").set("Authorization", "Bearer user:tenant-offoarded");
+
     let output = await getMetricsText();
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-offboarded"} 1');
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 1');
 
     // In prometheus, offboarded tenants remain in metrics until restart, but their burn rate stays flat
     // This is expected behavior. Just ensure the metric exists and doesn't increase.
     await request(app).get("/test").set("Authorization", "Bearer user:tenant-active");
-    
+
     output = await getMetricsText();
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-offboarded"} 1');
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-active"} 1');
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 2');
   });
 
   it("handles metric restart correctly", async () => {
     await request(app).get("/test").set("Authorization", "Bearer user:tenant-restart");
-    
+
     let output = await getMetricsText();
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-restart"} 1');
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 1');
 
     // Simulate restart
     register.resetMetrics();
-    
+
     output = await getMetricsText();
     // After reset, metric should not contain the tenant until next request
-    expect(output).not.toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-restart"}');
-    
+    expect(output).not.toContain('fair_queue_burn_rate_total{principal_type="user"}');
+
     await request(app).get("/test").set("Authorization", "Bearer user:tenant-restart");
     output = await getMetricsText();
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-restart"} 1');
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 1');
   });
 
   it("caps labels to top-N (budget) and overflows correctly", async () => {
@@ -98,16 +115,10 @@ describe("Fair Queue Metrics", () => {
     await Promise.all(requests);
 
     const output = await getMetricsText();
-    
-    // First 125 should be tracked individually (budget is 128, minus 3 from other tests)
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-1"} 1');
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-100"} 1');
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="rl:user:tenant-125"} 1');
-    
-    // Remaining 25 should overflow (tenant-126 to tenant-150)
-    expect(output).toContain('fair_queue_burn_rate_total{tenant_id="__overflow__"} 25');
-    
-    // Verify overflow metric is incremented
-    expect(output).toContain('metric_cardinality_overflow_total{metric="fair_queue_burn_rate_total"} 25');
+
+    // Since labels are by principal type, all 150 requests collapse into a single label.
+    expect(output).toContain('fair_queue_burn_rate_total{principal_type="user"} 150');
+    expect(output).not.toContain('tenant-1');
+    expect(output).not.toContain('tenant-150');
   });
 });

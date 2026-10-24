@@ -1728,7 +1728,7 @@ describe("autoRefundHold — AutoRefundResult", () => {
       bookableSlot({ pricingStrategy: FIXED_PRICING }),
     ]);
     const hold = await service.createIntent(
-      { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: HOLD_DEADLINE_MS },
+      { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: NOW_MS - 1000 },
       customer,
     );
 
@@ -1748,7 +1748,7 @@ describe("autoRefundHold — AutoRefundResult", () => {
   it("produces a successful AutoRefundResult for a priced hold", async () => {
     const { service } = createFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
     const hold = await service.createIntent(
-      { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: HOLD_DEADLINE_MS },
+      { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: NOW_MS - 1000 },
       customer,
     );
 
@@ -1770,7 +1770,7 @@ describe("autoRefundHold — AutoRefundResult", () => {
   it("produces a successful AutoRefundResult with 0 cents when no price was snapshotted", async () => {
     const { service } = createFixture();
     const hold = await service.createIntent(
-      { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: HOLD_DEADLINE_MS },
+      { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: NOW_MS - 1000 },
       customer,
     );
 
@@ -1822,14 +1822,17 @@ describe("autoRefundHold — AutoRefundResult", () => {
     );
   });
 
-  it("auto-refunds a standard pending intent as well (no hold required)", async () => {
-    const { service } = createFixture();
+  it("throws 409 for a standard pending intent (auto-refund is hold-only)", async () => {
+    const { service, intentRepo } = createFixture();
     const created = await service.createIntent({ slotId: SLOT_ALICE }, customer);
 
-    const refunded = await service.autoRefundHold(created.id);
+    await expect(service.autoRefundHold(created.id)).rejects.toMatchObject({
+      status: 409,
+    });
 
-    expect(refunded.status).toBe("hold_refunded");
-    expect(refunded.refundMetadata?.refundReason).toBe("hold_auto_refund");
+    // Intent left unchanged — no refund record, no status transition.
+    expect(statusOf(intentRepo, created.id)).toBe("pending");
+    expect(intentRepo.findById(created.id)?.refundMetadata).toBeUndefined();
   });
 });
 
@@ -2134,7 +2137,7 @@ describe("AsyncWrappedBookingIntentRepository — service suite parity", () => {
   it("autoRefundHold transitions hold_placed → hold_refunded via async repository", async () => {
     const { service } = createAsyncFixture([bookableSlot({ pricingStrategy: FIXED_PRICING })]);
     const hold = await service.createIntent(
-      { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: HOLD_DEADLINE_MS },
+      { slotId: SLOT_ALICE, bookingType: "refundable_hold", holdDeadlineMs: NOW_MS - 1000 },
       customer,
     );
     const refunded = await service.autoRefundHold(hold.id);

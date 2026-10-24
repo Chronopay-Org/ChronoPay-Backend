@@ -6,6 +6,7 @@ import { auditExportService } from "../services/auditExportService.js";
 import { RefundService } from "../services/refund.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { buildExportBaseUrl } from "../utils/buildBaseUrl.js";
 import {
   HolidayCalendarService,
   InMemoryHolidayCalendarRepository,
@@ -44,13 +45,7 @@ import {
 } from "../services/disputeDeadlineService.js";
 import { isDisputeDeadlineSchedulerRunning } from "../scheduler/disputeDeadlineScheduler.js";
 import { getPayoutQuarantineService } from "../services/quarantineStore.js";
-import { getPayoutDlqStore, type PayoutDlqStatus } from "../services/payoutDlqStore.js";
 import { strikeService } from "../services/strikeService.js";
-import type { Dispute as DisputeDomainType, SeniorPanelVote } from "../types/dispute.js";
-import { AUDIT_SCHEMA_VERSION } from "../types/auditEvent.js";
-import gdprDsrRouter, { setDsrSlaService } from "./adminGdprDsr.js";
-import accessReviewRouter from "./adminAccessReview.js";
-import cancellationOverridesRouter from "./adminCancellationOverrides.js";
 
 /**
  * Singleton cancellation-reversal service. The route handlers reuse
@@ -134,12 +129,6 @@ export type PendingReplay = {
 };
 export const pendingReplays = new Map<string, PendingReplay>();
 
-function buildBaseUrl(req: Request): string {
-  const scheme = req.protocol;
-  const host = req.get("host") ?? "localhost";
-  return `${scheme}://${host}`;
-}
-
 function getActorIp(req: Request): string {
   const rawIp = req.ip?.replace("::ffff:", "") ?? req.socket?.remoteAddress?.replace("::ffff:", "") ?? "127.0.0.1";
   return rawIp || "127.0.0.1";
@@ -152,7 +141,7 @@ function getActorIp(req: Request): string {
  */
 router.post("/audit/export", requireAdminToken, async (req: Request, res: Response) => {
   try {
-    const baseUrl = buildBaseUrl(req);
+    const baseUrl = buildExportBaseUrl();
     const result = await auditExportService.createExport(baseUrl);
     return res.status(201).json({
       success: true,

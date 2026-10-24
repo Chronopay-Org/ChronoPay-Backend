@@ -29,6 +29,24 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
       const result = parseCreateBookingIntentBody(validInput);
       expect(result).toHaveProperty("rrule");
     });
+
+    it("should accept CRLF RRULE with a Z offset", () => {
+      const validInput = {
+        rrule: "DTSTART:20260101T090000Z\r\nRRULE:FREQ=DAILY;COUNT=2"
+      };
+
+      const result = parseCreateBookingIntentBody(validInput);
+      expect(result).toHaveProperty("rrule");
+    });
+
+    it("should reject CRLF RRULEs with a floating DTSTART", () => {
+      const ambiguousInput = {
+        rrule: "DTSTART:20260101T090000\r\nRRULE:FREQ=DAILY;COUNT=2"
+      };
+
+      expect(() => parseCreateBookingIntentBody(ambiguousInput)).toThrow(BookingIntentError);
+      expect(() => parseCreateBookingIntentBody(ambiguousInput)).toThrow(/offset|timezone/i);
+    });
   });
 
   describe("DST Canonical Resolution Rules", () => {
@@ -38,7 +56,7 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
         // Gap is on 2026-03-08 at 02:00:00 -> 03:00:00
         // A daily recurring event starting before the transition
         const rrule = "DTSTART;TZID=America/New_York:20260307T023000\nFREQ=DAILY;COUNT=2";
-        const dates = expandRRUle(rrule);
+        const dates = expandRRule(rrule);
 
         expect(dates).toHaveLength(2);
         // Mar 7 02:30 EST = 07:30 UTC
@@ -55,14 +73,14 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
         // Fold is on 2026-11-01 at 02:00:00 -> 01:00:00
         // A daily recurring event starting before the transition
         const rrule = "DTSTART;TZID=America/New_York:20261031T013000\nFREQ=DAILY;COUNT=2";
-        const dates = expandRRUle(rrule);
+        const dates = expandRRule(rrule);
 
         expect(dates).toHaveLength(2);
         // Oct 31 01:30 EDT = 05:30 UTC
         expect(dates[0].toISOString()).toBe("2026-10-31T05:30:00.000Z");
         // Nov 1 01:30 should be the first occurrence in the fold (EDT) -> 05:30 UTC
         // or the second occurrence (EST) -> 06:30 UTC. rrule usually preserves wall clock time.
-        // Wall clock time 01:30 on Nov 1 could be 05:30Z tor 06:30Z depending on resolution rule.
+        // Wall clock time 01:30 on Nov 1 could be 05:30Z or 06:30Z depending on resolution rule.
         // Let's assert the behavior is deterministic.
         expect(dates[1].getTime()).toBeGreaterThan(dates[0].getTime());
       });
@@ -73,7 +91,7 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
       it("resolves DST fold (fall back / autumn) correctly", () => {
         // Fold is on 2026-04-05 at 03:00:00 -> 02:00:00
         const rrule = "DTSTART;TZID=Australia/Sydney:20260404T023000\nFREQ=DAILY;COUNT=2";
-        const dates = expandRRUle(rrule);
+        const dates = expandRRule(rrule);
 
         expect(dates).toHaveLength(2);
         // Apr 4 02:30 AEDT = 15:30 UTC (Apr 3)
