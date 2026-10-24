@@ -166,10 +166,11 @@ export function createAuthAwareRateLimiter(
     // Label by principal type (user/apiKey/ip), never by raw user id.
     // This keeps the label budget bounded and avoids exporting user ids.
     const principalType = getPrincipalType(req);
-    const start = process.hrtime.big();
+    const start = process.hrtime();
     fairQueueBurnRateTotal.labels(principalType).inc();
     res.once('finish', () => {
-      const elapsedSeconds = Number(process.hrtime.big(start)) / 1e9;
+      const [sec, nsec] = process.hrtime(start);
+      const elapsedSeconds = sec + nsec / 1e9;
       fairQueueWaitTimeSeconds.labels(principalType).observe(elapsedSeconds);
     });
     return limiter(req, res, next);
