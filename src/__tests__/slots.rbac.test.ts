@@ -1,5 +1,7 @@
 import { createTestAuthorization } from "../../test/auth.js";
 import request from "supertest";
+import { jest } from "@jest/globals";
+import { resetSlotStore } from "../routes/slots.js";
 import express from "express";
 import { jest } from "@jest/globals";
 import slotsRouter, { resetSlotStore } from "../routes/slots.js";

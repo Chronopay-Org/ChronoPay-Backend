@@ -35,6 +35,11 @@ const HMAC_SECRET = "checkout-webhook-hmac-secret-abc123";
 // In-memory repository
 // ---------------------------------------------------------------------------
 
+let _sessionStore: Map<string, CheckoutSession>;
+
+function makeInMemoryRepo(): PgCheckoutSessionRepository {
+  const store = new Map<string, CheckoutSession>();
+  _sessionStore = store;
 let sessionStore: Map<string, CheckoutSession>;
 
 function makeInMemoryRepo(): PgCheckoutSessionRepository {

@@ -1470,6 +1470,7 @@ export class HorizonContractClient implements IContractClient {
     let quotedDestStroops: bigint;
     try {
       quotedDestStroops = BigInt(AmountUtils.parseFromMajorString(bestRecord.destination_amount, "XLM"));
+    } catch {
     } catch (err) {
       quotedDestStroops = BigInt(Math.trunc(quotedDestAmountNum * 1e7 + 1e-12));
     }

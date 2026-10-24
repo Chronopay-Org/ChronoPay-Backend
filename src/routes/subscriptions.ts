@@ -21,7 +21,11 @@ import {
   SubscriptionCapacityExceededError,
   InvalidSubscriptionStateError,
 } from "../services/subscriptionService.js";
+
+
 import {
+  type SubscriptionRecord,
+} from "../modules/subscriptions/subscription-repository.js";
   InMemorySubscriptionProductRepository,
 } from "../modules/subscriptions/subscription-product-repository.js";
 import {

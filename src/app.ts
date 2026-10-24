@@ -4,6 +4,7 @@ import path from "node:path";
 import express, { type Request, type Response } from "express";
 import { getCORSConfig, validateCORSConfig } from "./config/cors.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
+import { parseCookies } from "./middleware/cookieParser.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { parseCookies } from "./middleware/cookieParser.js";
 import { authenticateTokenIfPresent } from "./middleware/auth.middleware.js";
@@ -12,10 +13,9 @@ import {
   jsonParseErrorHandler,
   notFoundHandler,
 } from "./middleware/errorHandling.js";
-import { validateRequiredFields, validateBody } from "./middleware/validation.js";
 
 import { tracingMiddleware } from "./tracing/middleware.js";
-import { featureFlagContextMiddleware, requireFeatureFlag } from "./middleware/featureFlags.js";
+import { featureFlagContextMiddleware } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
