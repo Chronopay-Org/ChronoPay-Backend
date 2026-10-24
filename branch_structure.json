@@ -1,6 +1,7 @@
 {
   "default_branch": "main",
   "branches": [
+    "fix/issue-1320-fix-validation-booking-intent-body-accepts",
     "feat/issue-1332-refactor-db-two-independent-pg-pools-read",
     "fix/issue-1335-fix-settlements-settlementreconciler-runs",
     "main",
@@ -8,6 +9,7 @@
     "security/issue-1309-fix-refunds-admin-refund-sum-captured-invariant"
   ],
   "parent": {
+    "fix/issue-1320-fix-validation-booking-intent-body-accepts": "main",
     "feat/issue-1332-refactor-db-two-independent-pg-pools-read": "main",
     "fix/issue-1335-fix-settlements-settlementreconciler-runs": "main",
     "main": null,
@@ -16,6 +18,7 @@
   },
   "order": [
     "main",
+    "fix/issue-1320-fix-validation-booking-intent-body-accepts",
     "feat/issue-1332-refactor-db-two-independent-pg-pools-read",
     "fix/issue-1335-fix-settlements-settlementreconciler-runs",
     "origin",
