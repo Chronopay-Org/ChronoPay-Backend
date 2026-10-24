@@ -399,8 +399,7 @@ export function createBookingIntentsRouter(
           req.body !== null &&
           typeof req.body === "object" &&
           (req.body as { force?: unknown }).force === true;
-        const intent = bookingIntentService.autoRefundHold(req.params.id, { force });
-        const intent = await bookingIntentService.autoRefundHold(req.params.id);
+        const intent = await bookingIntentService.autoRefundHold(req.params.id, { force });
         res.status(200).json({
           success: true,
           intent,

@@ -196,7 +196,7 @@ describe("BookingIntentService lifecycle", () => {
         actor,
       );
       expect(intent.status).toBe("hold_placed");
-      const result = service.confirmIntent(intent.id, actor);
+      const result = await service.confirmIntent(intent.id, actor);
       expect(result.status).toBe("confirmed");
     });
 
@@ -214,14 +214,14 @@ describe("BookingIntentService lifecycle", () => {
       (service as any).nowMs = () => nowMs + 2000;
       (service as any).now = () => new Date(nowMs + 2000).toISOString();
       try {
-        service.confirmIntent(intent.id, actor);
+        await service.confirmIntent(intent.id, actor);
         throw new Error("expected to throw");
       } catch (e) {
         const err = e as BookingIntentError;
         expect(err.status).toBe(409);
         expect(err.code).toBe("HOLD_EXPIRED");
       }
-      const expired = intentRepo.findById(intent.id);
+      const expired = await intentRepo.findById(intent.id);
       expect(expired?.status).toBe("expired");
     });
 

@@ -426,7 +426,7 @@ export class BookingIntentService {
       intent.holdUntilMs !== undefined &&
       intent.holdUntilMs <= this.nowMs()
     ) {
-      this.expireIntent(intentId);
+      await this.expireIntent(intentId);
       throw new BookingIntentError(409, "Hold has expired.", ERROR_CODES.HOLD_EXPIRED.code);
     }
 
@@ -703,9 +703,10 @@ export class BookingIntentService {
     return 0;
   }
 
-  autoRefundHold(intentId: string, options: { force?: boolean } = {}): BookingIntentRecord {
-    const intent = this.bookingIntentRepository.findById(intentId);
-  async autoRefundHold(intentId: string): Promise<BookingIntentRecord> {
+  async autoRefundHold(
+    intentId: string,
+    options: { force?: boolean } = {},
+  ): Promise<BookingIntentRecord> {
     const intent = await this.bookingIntentRepository.findById(intentId);
     if (!intent) {
       throw new BookingIntentError(404, "Booking intent not found.");

@@ -661,8 +661,8 @@ export const escrowDriftOverridesApplied = createBudgetedCounter({
  */
 export const fairQueueBurnRateTotal = createBudgetedCounter({
   name: "fair_queue_burn_rate_total",
-  help: "Total number of rate limit tokens consumed per tenant",
-  labels: ["tenant_id"],
+  help: "Total number of rate limit tokens consumed per principal type",
+  labels: ["principal_type"],
   budget: 128,
   registers: [register],
 });
@@ -672,8 +672,8 @@ export const fairQueueBurnRateTotal = createBudgetedCounter({
  */
 export const fairQueueWaitTimeSeconds = createBudgetedHistogram({
   name: "fair_queue_wait_time_seconds",
-  help: "Average queue wait time in seconds per tenant",
-  labels: ["tenant_id"],
+  help: "Average queue wait time in seconds per principal type",
+  labels: ["principal_type"],
   budget: 128,
   buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
   registers: [register],

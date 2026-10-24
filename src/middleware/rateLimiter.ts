@@ -52,13 +52,13 @@ export function generateRateLimitKey(req: Request | null | undefined): string {
   // Blank and malformed values fall back to a stable anonymous identity instead of crashing.
   const ip = getClientIp(safeReq as any);
   const ipHash = createHash('sha256').update(ip, 'utf8').digest('hex');
-  return `ip:${ipHash}`;
+  return `rl:ip:${ipHash}`;
 }
 
 export function getPrincipalType(req: Request | null | undefined): 'user' | 'apiKey' | 'ip' {
   const key = generateRateLimitKey(req);
-  if (key.startsWith('user:')) return 'user';
-  if (key.startsWith('apiKey:')) return 'apiKey';
+  if (key.startsWith('rl:user:')) return 'user';
+  if (key.startsWith('rl:apiKey:')) return 'apiKey';
   return 'ip';
 }
 

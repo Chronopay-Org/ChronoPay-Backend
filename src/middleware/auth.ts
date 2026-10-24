@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 
 
 import { defaultAuditLogger } from "../services/auditLogger.js";
-import type { VerifiedJwtPayload } from "../utils/jwt.js";
+import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
 import { configService } from "../config/config.service.js";
 import {
   getUserId,

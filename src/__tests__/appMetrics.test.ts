@@ -28,14 +28,14 @@ describe("App factory Prometheus Metrics", () => {
   it("records the HTTP duration histogram exactly once per request", async () => {
     const app = createApp();
 
-    const before = register.getSingleMetricAsString("http_request_duration_seconds");
+    const before = await register.getSingleMetricAsString("http_request_duration_seconds");
     const beforeCount = extractCount(before);
 
     await request(app).get("/health");
     // Wait for the finish listener to run.
     await new Promise((resolve) => setImmediate(resolve));
 
-    const after = register.getSingleMetricAsString("http_request_duration_seconds");
+    const after = await register.getSingleMetricAsString("http_request_duration_seconds");
     const afterCount = extractCount(after);
 
     expect(afterCount - beforeCount).toBe(1);
