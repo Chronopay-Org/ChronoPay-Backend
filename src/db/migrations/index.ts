@@ -54,6 +54,7 @@ import { migration as migration035 } from "./021a_create_subscription_products.j
 import { migration as migration036 } from "./021b_create_subscriptions.js";
 import { migration as migration037 } from "./022_add_outbox_claim_lease.js";
 import { migration as migration038 } from "./027_add_mfa_failed_attempt_lockout.js";
+import { migration as migration039 } from "./028_add_booking_intent_hold_snapshot_columns.js";
 
 export const migrations: Migration[] = [
   migration001,
@@ -94,6 +95,7 @@ export const migrations: Migration[] = [
   migration036,
   migration037,
   migration038,
+  migration039,
 ];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────
