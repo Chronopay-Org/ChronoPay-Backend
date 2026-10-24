@@ -2,21 +2,24 @@
 /**
  * Test suite for authentication and authorization middleware.
  */
+import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 import { Request, Response, NextFunction } from 'express';
-import { authenticateToken, authorize, authorizeOwnerOrAdmin, UserRole } from '../../middleware/auth.middleware.js';
 
-// Mock dependencies
-jest.mock('../../utils/jwt.js', () => ({
-  verifyJwt: jest.fn(),
+const verifyJwtMock = jest.fn<(...args: any[]) => Promise<any>>();
+const getAllSecretVersionsMock = jest.fn<(...args: any[]) => string[]>();
+
+jest.unstable_mockModule('../../utils/jwt.js', () => ({
+  verifyJwt: verifyJwtMock,
 }));
-jest.mock('../../config/config.service.js', () => ({
+jest.unstable_mockModule('../../config/config.service.js', () => ({
   configService: {
-    getAllSecretVersions: jest.fn(),
+    getAllSecretVersions: getAllSecretVersionsMock,
   },
 }));
 
-import { verifyJwt } from '../../utils/jwt.js';
-import { configService } from '../../config/config.service.js';
+const { authenticateToken, authorize, authorizeOwnerOrAdmin, UserRole } = await import(
+  '../../middleware/auth.middleware.js'
+);
 
 describe('authenticateToken', () => {
   const makeReq = (authHeader?: string) => ({
@@ -25,17 +28,17 @@ describe('authenticateToken', () => {
 
   const makeRes = () => {
     const res: Partial<Response> = {};
-    res.status = jest.fn().mockReturnValue(res);
-    res.json = jest.fn().mockReturnValue(res);
+    res.status = jest.fn().mockReturnValue(res) as any;
+    res.json = jest.fn().mockReturnValue(res) as any;
     return res as Response;
   };
 
-  const nextFn = jest.fn();
+  const nextFn = jest.fn() as unknown as NextFunction & jest.Mock;
 
   beforeEach(() => {
     jest.resetAllMocks();
     delete process.env.JWT_SECRET;
-    (configService.getAllSecretVersions as jest.Mock).mockReturnValue([]);
+    getAllSecretVersionsMock.mockReturnValue([]);
     nextFn.mockReset();
   });
 
@@ -79,7 +82,7 @@ describe('authenticateToken', () => {
 
   test('returns 401 when token verification fails', async () => {
     process.env.JWT_SECRET = 'secret';
-    (verifyJwt as jest.Mock).mockRejectedValue(new Error('invalid'));
+    verifyJwtMock.mockRejectedValue(new Error('invalid'));
     const req = makeReq('Bearer badtoken');
     const res = makeRes();
     await authenticateToken(req, res, nextFn);
@@ -87,10 +90,36 @@ describe('authenticateToken', () => {
     expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Invalid or expired token' });
   });
 
+  test('returns 401 when token has no sub or id claim', async () => {
+    process.env.JWT_SECRET = 'secret';
+    const payload = { email: 'test@example.com', role: UserRole.USER } as any;
+    verifyJwtMock.mockResolvedValue(payload);
+    const req = makeReq('Bearer sublesstoken') as Request & { user?: any };
+    const res = makeRes();
+    await authenticateToken(req, res, nextFn);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Token subject missing' });
+    expect(req.user).toBeUndefined();
+    expect(nextFn).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 when token sub is whitespace-only', async () => {
+    process.env.JWT_SECRET = 'secret';
+    const payload = { sub: '   ', email: 'test@example.com', role: UserRole.USER } as any;
+    verifyJwtMock.mockResolvedValue(payload);
+    const req = makeReq('Bearer whitespacesubtoken') as Request & { user?: any };
+    const res = makeRes();
+    await authenticateToken(req, res, nextFn);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Token subject missing' });
+    expect(req.user).toBeUndefined();
+    expect(nextFn).not.toHaveBeenCalled();
+  });
+
   test('sets req.user and calls next on valid token', async () => {
     process.env.JWT_SECRET = 'secret';
     const payload = { sub: '123', email: 'test@example.com', role: UserRole.USER } as any;
-    (verifyJwt as jest.Mock).mockResolvedValue(payload);
+    verifyJwtMock.mockResolvedValue(payload);
     const req = makeReq('Bearer goodtoken') as Request & { user?: any };
     const res = makeRes();
     await authenticateToken(req, res, nextFn);
@@ -103,11 +132,11 @@ describe('authorize middleware', () => {
   const makeReq = (user?: any) => ({ user } as Request);
   const makeRes = () => {
     const res: Partial<Response> = {};
-    res.status = jest.fn().mockReturnValue(res);
-    res.json = jest.fn().mockReturnValue(res);
+    res.status = jest.fn().mockReturnValue(res) as any;
+    res.json = jest.fn().mockReturnValue(res) as any;
     return res as Response;
   };
-  const nextFn = jest.fn();
+  const nextFn = jest.fn() as unknown as NextFunction & jest.Mock;
 
   beforeEach(() => {
     jest.resetAllMocks();
@@ -152,13 +181,13 @@ describe('authorizeOwnerOrAdmin middleware', () => {
   } as Request);
   const makeRes = () => {
     const res: Partial<Response> = {};
-    res.status = jest.fn().mockReturnValue(res);
-    res.json = jest.fn().mockReturnValue(res);
+    res.status = jest.fn().mockReturnValue(res) as any;
+    res.json = jest.fn().mockReturnValue(res) as any;
     return res as Response;
   };
-  const nextFn = jest.fn();
+  const nextFn = jest.fn() as unknown as NextFunction & jest.Mock;
 
-  const getResourceUserId = jest.fn();
+  const getResourceUserId = jest.fn<(req: Request) => string | null>();
 
   beforeEach(() => {
     jest.resetAllMocks();
@@ -181,6 +210,28 @@ describe('authorizeOwnerOrAdmin middleware', () => {
     await middleware(req, res, nextFn);
     expect(nextFn).toHaveBeenCalled();
     expect(getResourceUserId).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 when non-admin user has no sub or id', async () => {
+    getResourceUserId.mockReturnValue('123');
+    const req = makeReq({ role: UserRole.USER });
+    const res = makeRes();
+    const middleware = authorizeOwnerOrAdmin(getResourceUserId);
+    await middleware(req, res, nextFn);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Token subject missing' });
+    expect(nextFn).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 when non-admin user has whitespace sub', async () => {
+    getResourceUserId.mockReturnValue('123');
+    const req = makeReq({ role: UserRole.USER, sub: '   ' });
+    const res = makeRes();
+    const middleware = authorizeOwnerOrAdmin(getResourceUserId);
+    await middleware(req, res, nextFn);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Token subject missing' });
+    expect(nextFn).not.toHaveBeenCalled();
   });
 
   test('returns 404 when resource ID missing', async () => {

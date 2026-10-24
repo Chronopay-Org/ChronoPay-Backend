@@ -80,7 +80,7 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
         expect(dates[0].toISOString()).toBe("2026-10-31T05:30:00.000Z");
         // Nov 1 01:30 should be the first occurrence in the fold (EDT) -> 05:30 UTC
         // or the second occurrence (EST) -> 06:30 UTC. rrule usually preserves wall clock time.
-        // Wall clock time 01:30 on Nov 1 could be 05:30Z or 06:30depending on resolution rule.
+        // Wall clock time 01:30 on Nov 1 could be 05:30Z or 06:30Z depending on resolution rule.
         // Let's assert the behavior is deterministic.
         expect(dates[1].getTime()).toBeGreaterThan(dates[0].getTime());
       });
@@ -113,7 +113,7 @@ describe("Booking Intents DST Fold and Gap Resolution", () => {
     describe("Asia/Tokyo", () => {
       it("resolves correctly without DST transitions", () => {
         const rrule = "DTSTART;TZID=Asia/Tokyo:20261101T013000\nFREQ=DAILY;COUNT=2";
-        const dates = expandRRUle(rrule);
+        const dates = expandRRule(rrule);
 
         expect(dates).toHaveLength(2);
         // Nov 1 01:30 JST = Oct 31 16:30 UTC

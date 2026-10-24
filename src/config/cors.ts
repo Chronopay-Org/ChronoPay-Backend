@@ -31,7 +31,16 @@ export interface CORSConfig {
 const DEFAULT_CORS_CONFIG: CORSConfig = {
   allowedOrigins: ["http://localhost:3000", "http://localhost:3001"],
   allowedMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "Idempotency-Key",
+    "x-chronopay-mfa",
+    "x-api-key",
+    "x-chronopay-admin-token",
+    "x-chronopay-user-id",
+    "x-chronopay-role",
+  ],
   allowCredentials: true,
   maxAge: 86400, // 24 hours
 };
@@ -43,7 +52,16 @@ const DEFAULT_CORS_CONFIG: CORSConfig = {
 const PRODUCTION_CORS_CONFIG: CORSConfig = {
   allowedOrigins: [],
   allowedMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "Idempotency-Key",
+    "x-chronopay-mfa",
+    "x-api-key",
+    "x-chronopay-admin-token",
+    "x-chronopay-user-id",
+    "x-chronopay-role",
+  ],
   allowCredentials: true,
   maxAge: 86400,
 };
