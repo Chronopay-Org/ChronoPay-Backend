@@ -129,6 +129,10 @@ export class ConfigService {
     return [...this.envConfig.corsAllowedOrigins];
   }
 
+  public get appUrl() {
+    return this.envConfig.appUrl;
+  }
+
   private async loadSecretsFromProvider(): Promise<void> {
     this.secrets.clear();
 

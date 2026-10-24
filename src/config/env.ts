@@ -44,6 +44,8 @@ export interface EnvConfig {
   networkPassphrase?: string;
   /** Pinned hash for the current active escrow contract */
   escrowContractHash?: string;
+  /** Public base URL for generating download links (GDPR/audit exports). */
+  appUrl?: string;
   /** Secret used to verify the internal fair-queue rate-limit bypass HMAC signature. */
   internalOverrideSecret?: string;
   /** Previous secret for zero-downtime rotation of the bypass signing key. */
@@ -115,6 +117,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
 
   const networkPassphrase = parseOptionalString(env.STELLAR_NETWORK_PASSPHRASE);
   const escrowContractHash = parseOptionalString(env.ESCROW_CONTRACT_HASH);
+  const appUrl = parseOptionalString(env.APP_URL);
 
   const internalOverrideSecret = parseOptionalString(env.INTERNAL_OVERRIDE_SECRET);
   const internalOverrideSecretPrev = parseOptionalString(env.INTERNAL_OVERRIDE_SECRET_PREV);
@@ -177,6 +180,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     horizonUrls,
     networkPassphrase,
     escrowContractHash,
+    appUrl,
     internalOverrideSecret,
     internalOverrideSecretPrev,
     internalBypassToleranceMs,
