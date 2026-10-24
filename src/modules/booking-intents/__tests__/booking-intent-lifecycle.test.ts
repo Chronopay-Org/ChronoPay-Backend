@@ -183,4 +183,79 @@ describe("BookingIntentService lifecycle", () => {
       expect(intent.status).toBe("pending");
     });
   });
+
+  describe("refundable_hold expiry", () => {
+    it("confirms a refundable hold before deadline succeeds", async () => {
+      const nowMs = Date.now();
+      const slotRepo = new InMemorySlotRepository();
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(intentRepo, slotRepo, () => new Date(nowMs).toISOString(), () => nowMs);
+      const actor = customer;
+      const intent = await service.createIntent(
+        { slotId: ALICE_SLOT, bookingType: "refundable_hold", holdDeadlineMs: nowMs + 60000 },
+        actor,
+      );
+      expect(intent.status).toBe("hold_placed");
+      const result = service.confirmIntent(intent.id, actor);
+      expect(result.status).toBe("confirmed");
+    });
+
+    it("confirming a hold after hold deadline returns 409 HOLD_EXPIRED and expires the intent", async () => {
+      const nowMs = Date.now();
+      const slotRepo = new InMemorySlotRepository();
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(intentRepo, slotRepo, () => new Date(nowMs).toISOString(), () => nowMs);
+      const actor = customer;
+      const intent = await service.createIntent(
+        { slotId: ALICE_SLOT, bookingType: "refundable_hold", holdDeadlineMs: nowMs + 1000 },
+        actor,
+      );
+      // advance time past deadline
+      (service as any).nowMs = () => nowMs + 2000;
+      (service as any).now = () => new Date(nowMs + 2000).toISOString();
+      try {
+        service.confirmIntent(intent.id, actor);
+        throw new Error("expected to throw");
+      } catch (e) {
+        const err = e as BookingIntentError;
+        expect(err.status).toBe(409);
+        expect(err.code).toBe("HOLD_EXPIRED");
+      }
+      const expired = intentRepo.findById(intent.id);
+      expect(expired?.status).toBe("expired");
+    });
+
+    it("creating a hold with missing holdDeadlineMs returns 400", async () => {
+      const nowMs = Date.now();
+      const slotRepo = new InMemorySlotRepository();
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(intentRepo, slotRepo, () => new Date(nowMs).toISOString(), () => nowMs);
+      const actor = customer;
+      await expect(
+        service.createIntent({ slotId: ALICE_SLOT, bookingType: "refundable_hold" } as any, actor),
+      ).rejects.toThrow(BookingIntentError);
+      try {
+        await service.createIntent({ slotId: ALICE_SLOT, bookingType: "refundable_hold" } as any, actor);
+      } catch (e) {
+        expect((e as BookingIntentError).status).toBe(400);
+      }
+    });
+
+    it("creating a hold with past holdDeadlineMs returns 400", async () => {
+      const nowMs = Date.now();
+      const slotRepo = new InMemorySlotRepository();
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const service = new BookingIntentService(intentRepo, slotRepo, () => new Date(nowMs).toISOString(), () => nowMs);
+      const actor = customer;
+      await expect(
+        service.createIntent({ slotId: ALICE_SLOT, bookingType: "refundable_hold", holdDeadlineMs: nowMs - 1000 }, actor),
+      ).rejects.toThrow(BookingIntentError);
+      try {
+        await service.createIntent({ slotId: ALICE_SLOT, bookingType: "refundable_hold", holdDeadlineMs: nowMs - 1000 }, actor);
+      } catch (e) {
+        expect((e as BookingIntentError).status).toBe(400);
+      }
+    });
+  });
 });
+
