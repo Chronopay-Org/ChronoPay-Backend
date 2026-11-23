@@ -20,6 +20,27 @@ const lifecycle = new ApplicationLifecycle(
 );
 lifecycle.registerStop("reminders", stopScheduler);
 
+// ─── Recurrence Occurrence Materializer ──────────────────────────────────────
+// Rolls active recurrence series forward to the configured horizon.
+(async () => {
+  if (process.env.OCCURRENCE_MATERIALIZER_DISABLED === "true") {
+    logger.info("occurrence-materializer disabled via OCCURRENCE_MATERIALIZER_DISABLED");
+    return;
+  }
+
+  const { createOccurrenceMaterializerScheduler } = await import(
+    "./scheduler/occurrenceMaterializerScheduler.js"
+  );
+  if (lifecycle.isShuttingDown) return;
+
+  const scheduler = createOccurrenceMaterializerScheduler({
+    intervalMs: Number(process.env.OCCURRENCE_MATERIALIZER_INTERVAL_MS) || undefined,
+    isShuttingDown: () => lifecycle.isShuttingDown,
+  });
+  lifecycle.registerStop("occurrence-materializer", () => scheduler.stop());
+  scheduler.start();
+})();
+
 // Validate pinned escrow contract hash on startup
 const pinnedHash = escrowMigrationState.getPinnedHash();
 if (pinnedHash) {
