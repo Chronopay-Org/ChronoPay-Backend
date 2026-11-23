@@ -349,8 +349,10 @@
   ],
 
   "src/cache/redisClient.ts": [
+    "src/cache/__tests__/redisClient.test.ts",
     "src/cache/__tests__/slotCache.test.ts",
-    "src/cache/__tests__/inMemoryCache.test.ts"
+    "src/cache/__tests__/inMemoryCache.test.ts",
+    "src/scheduler/__tests__/redisBackedStores.test.ts"
   ],
 
   "src/cache/inMemoryCache.ts": [
@@ -501,10 +503,6 @@
     "src/__tests__/crypto-uuid.test.ts"
   ],
 
-  "src/utils/redis.ts": [
-    "src/cache/__tests__/slotCache.test.ts"
-  ],
-
   "src/utils/retry-policy.ts": [
     "src/__tests__/chaos-dependency-faults.test.ts"
   ],
@@ -568,7 +566,18 @@
   ],
 
   "src/scheduler/reminderDedup.ts": [
-    "src/__tests__/reminderWorker.test.ts"
+    "src/__tests__/reminderWorker.test.ts",
+    "src/scheduler/__tests__/redisBackedStores.test.ts"
+  ],
+
+  "src/scheduler/escrowCursorStore.ts": [
+    "src/scheduler/__tests__/redisBackedStores.test.ts",
+    "src/__tests__/escrowEventListener.test.ts"
+  ],
+
+  "src/scheduler/escrowIdempotencyStore.ts": [
+    "src/scheduler/__tests__/redisBackedStores.test.ts",
+    "src/__tests__/escrowEventListener.test.ts"
   ],
 
   "src/scheduler/reminderMetrics.ts": [

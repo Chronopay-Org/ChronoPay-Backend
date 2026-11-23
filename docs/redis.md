@@ -2,76 +2,71 @@
 
 ## Overview
 
-ChronoPay uses Redis for two purposes:
+ChronoPay uses one shared Redis helper: `src/cache/redisClient.ts`. It backs the
+slot cache, reminder deduplication, escrow listener cursors and idempotency
+state, and the health/readiness probes. `src/middleware/rateLimitStore.ts` is a
+separate rate-limit store.
 
-- **Idempotency key storage** (`src/utils/redis.ts`) — used by the idempotency middleware on mutating endpoints.
-- **Slot cache** (`src/cache/redisClient.ts`) — used by `slotCache.ts` to cache slot list responses.
-
-Both modules share the same lifecycle design: a lazy singleton with structured lifecycle logging, exponential backoff reconnect, a readiness flag, and an idempotent shutdown function.
+All shared callers use the same lazy singleton. As a result,
+`closeRedisClient()` on shutdown closes the same connection used by the
+scheduler stores, and no second Redis socket is left open.
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `REDIS_URL` | `redis://localhost:6379` | Full Redis connection URL. Supports `redis://`, `rediss://` (TLS), and `redis://:password@host:port` formats. |
+| `REDIS_URL` | `redis://localhost:6379` | Full Redis connection URL. Supports `redis://` and `rediss://` (TLS). |
 | `REDIS_SLOT_TTL_SECONDS` | `60` | TTL for slot cache entries. |
 
-## Lifecycle events
+## Lifecycle
 
-| Event | Meaning | Action taken |
-|---|---|---|
-| `connect` | TCP connection established | Logged at `info` |
-| `ready` | Server responded to PING — commands accepted | `isRedisReady()` → `true`; logged at `info` |
-| `error` | Connection or command error | Logged at `error` (message only, no URL credentials) |
-| `close` | Connection dropped | `isRedisReady()` → `false`; logged at `warn` |
-| `reconnecting` | Backoff delay started | Logged at `warn` with attempt count and delay |
-| `end` | All retries exhausted — no further reconnects | `isRedisReady()` → `false`; logged at `warn` |
+- `getRedisClient()` creates the client on first use outside tests.
+- With `NODE_ENV=test`, no real connection is created: the helper returns the
+  client injected with `setRedisClient()`, or `null` when none was injected.
+- `isRedisReady()` reports whether an injected client is active. Health checks
+  use `checkRedis(client)` to ping the same client.
+- `closeRedisClient()` is idempotent, quits the singleton and clears it.
+
+Connection and error events are emitted through the structured logger.
 
 ## Reconnect policy
 
-Exponential backoff: `delay = min(attempt × 100 ms, cap)`.
-
-| Module | Cap | Max attempts |
-|---|---|---|
-| `src/cache/redisClient.ts` | 2 000 ms | 10 |
-| `src/utils/redis.ts` | 3 000 ms | 10 |
-
-After the maximum attempts the client stops retrying and logs an error. The application continues running — cache misses fall through to the origin and idempotency checks are skipped.
+The shared client retries with exponential backoff capped at 2 000 ms
+(`min(attempt × 100 ms, 2000)`).
 
 ## Readiness check
 
 ```ts
-import { isRedisReady } from "./utils/redis.js";
+import { isRedisReady } from "./cache/redisClient.js";
 
 if (!isRedisReady()) {
   // Redis is not available — degrade gracefully
 }
 ```
 
-Use this in health check endpoints or startup probes to distinguish "Redis unavailable" from "application unhealthy".
-
 ## Graceful shutdown
 
-`closeRedisClient()` is called automatically from the SIGTERM and SIGINT handlers in `src/index.ts`:
+`closeRedisClient()` is registered with `ApplicationLifecycle` in `src/index.ts`,
+so it runs on SIGTERM/SIGINT alongside the other shutdown steps.
 
-```
-SIGTERM / SIGINT
-  → server.close()        (stop accepting new requests)
-  → closeRedisClient()    (QUIT command, then null the singleton)
-  → process.exit(0)
-```
+## Scheduler usage
 
-`closeRedisClient()` is idempotent — calling it multiple times is safe.
+`claimDelivery`, `RedisCursorStore` and `RedisIdempotencyStore` use the shared
+client from `src/cache/redisClient.ts`. They throw
+`"Redis client is not available"` if no client has been configured; this makes
+a missing Redis dependency explicit instead of silently skipping deduplication.
 
 ## Security notes
 
-- **Credentials are never logged.** The connection URL is passed through `sanitizeRedisUrl()` before any log line is emitted. `redis://:password@host:6379` becomes `redis://host:6379/`.
-- **`REDIS_URL` must not be committed.** Add it to `.env` (gitignored) and document it in `.env.example` with a placeholder value.
-- **Use TLS in production.** Prefer `rediss://` URLs when Redis is not on localhost or a private network.
+- **`REDIS_URL` must not be committed.** Add it to `.env` (gitignored) and
+  document it in `.env.example` with a placeholder value.
+- **Use TLS in production.** Prefer `rediss://` URLs when Redis is not on
+  localhost or a private network.
 - **Rotate credentials** using the runbook in `docs/SECRET_ROTATION_RUNBOOK.md`.
 
 ## Testing
 
-The test environment (`NODE_ENV=test`) uses an in-memory double that satisfies the same interface without requiring a real Redis server. TTL expiry is simulated using wall-clock time.
-
-Tests that exercise lifecycle behaviour mock the ioredis constructor and event emitter directly — see `src/__tests__/redis-lifecycle.test.ts`.
+Tests inject fakes with `setRedisClient()` and clear them with
+`setRedisClient(null)`. No in-memory Redis double ships in production code.
+See `src/cache/__tests__/redisClient.test.ts` and
+`src/scheduler/__tests__/redisBackedStores.test.ts` for examples.
