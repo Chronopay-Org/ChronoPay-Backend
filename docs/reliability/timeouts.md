@@ -1,34 +1,43 @@
 # Request Timeouts
 
 ## Overview
-This document describes the request timeout middleware for the ChronoPay backend, including configuration, usage, and security considerations.
+This document describes the request timeout middleware for the ChronoPay backend, including configuration, usage, cancellation signaling, and security considerations.
 
 ## Purpose
 Request timeouts prevent hung or slow requests from exhausting server resources. This middleware enforces a maximum duration for each request, with safe defaults and per-route overrides.
 
 ## Configuration
-- **Default timeout:** Set via `REQUEST_TIMEOUT_MS` environment variable (default: 10 seconds).
+- **Default timeout:** Set via `TIMEOUT_HTTP_DEFAULT_MS` environment variable (default: 5,000 ms in `timeoutConfig.http.defaultMs`).
 - **Per-route override:** Pass `{ timeoutMs: <number> }` in route options.
 
 ## Usage
 - All routes are protected by a default timeout unless explicitly overridden.
 - For long-running routes, specify a higher timeout as needed.
+- When the timeout fires, the middleware sets `res.locals.timedOut = true`, aborts `req.abortSignal`, sends a `503` response if headers have not been sent, and turns subsequent `res.json` / `res.send` / `res.end` calls into no-ops.
+- **Handlers performing external calls** (such as HTTP requests, payment/booking/refund operations, or downstream RPCs) should pass `req.abortSignal` into abortable operations and check `res.locals.timedOut` or `req.abortSignal?.aborted` before performing or committing side effects.
 
 ## Logging
-- On timeout, logs include `requestId`, route, and duration.
+- On timeout, logs a warning including `requestId`, `route`, and `durationMs`.
+- Late response write attempts after a timeout are ignored and logged once at `debug` level per request.
 
 ## Security
 - No partial data or internal stack traces are leaked on timeout.
 - Returns HTTP 503 with a generic error message.
+- Short-circuiting late writes prevents duplicate responses and `ERR_HTTP_HEADERS_SENT` errors.
 
 ## Example
 ```ts
-app.get('/api/v1/slow', timeoutMiddleware({ timeoutMs: 20000 }), handler);
+app.get('/api/v1/slow', timeoutMiddleware({ timeoutMs: 20000 }), async (req, res) => {
+  const response = await fetch('[https://example.com/data](https://example.com/data)', { signal: req.abortSignal });
+  if (res.locals.timedOut || req.abortSignal?.aborted) return;
+  const data = await response.json();
+  res.json({ success: true, data });
+});
 ```
 
 ## Testing
 - All timeout scenarios are covered by automated tests.
-- Edge cases (downstream timeouts, override logic) are tested.
+- Edge cases (late handler resolution after timeout, abort signal propagation, late write no-ops, override logic) are tested.
 # Outbound Call Reliability: Timeouts and Retries
 
 This document outlines the reliability policies for all outbound calls (Blockchain RPC, SMS Providers, Webhooks) in the ChronoPay backend.
