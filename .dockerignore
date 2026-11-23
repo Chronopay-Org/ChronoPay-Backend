@@ -1,5 +1,15 @@
 node_modules
 dist
+.env
+.env.*
+!.env.example
+coverage/
+stryker-tmp/
+.stryker-tmp/
+reports/
+test/
+tests/
+ops/
 .git
 .github
 npm-debug.log

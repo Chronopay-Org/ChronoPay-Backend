@@ -1,6 +1,17 @@
 import { jest } from "@jest/globals";
 import request from "supertest";
-import { checkReadiness, checkDb, checkRedis } from "../health/readiness.js";
+import {
+  checkReadiness,
+  checkDb,
+  checkRedis,
+  getReadinessTimeoutMs,
+  withTimeout,
+} from "../health/readiness.js";
+
+afterEach(() => {
+  delete process.env.READINESS_TIMEOUT_MS;
+  jest.useRealTimers();
+});
 
 jest.mock("../middleware/rateLimiter.js", () => ({
   createAuthAwareRateLimiter: () => (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -167,6 +178,38 @@ describe("GET /health/ready", () => {
     expect(res.body).toEqual({ db: "down", redis: "ok" });
   });
 
+  it("returns 503 within the timeout when DB hangs", async () => {
+    process.env.READINESS_TIMEOUT_MS = "50";
+    const { createApp } = await import("../app.js");
+    const app = createApp({
+      enableDocs: false,
+      // @ts-expect-error - never-resolving query simulates a stalled pool
+      dbPool: { query: () => new Promise(() => {}) },
+      // @ts-expect-error - Auto-fixed by script
+      redisClient: mockRedis(true),
+    });
+    const res = await request(app).get("/health/ready");
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ db: "down", redis: "ok" });
+  });
+
+  it("returns 503 when the DB pinger throws synchronously", async () => {
+    const { createApp } = await import("../app.js");
+    const app = createApp({
+      enableDocs: false,
+      dbPool: {
+        query: () => {
+          throw new Error("pool unavailable");
+        },
+      } as unknown as Parameters<typeof createApp>[0]["dbPool"],
+      // @ts-expect-error - Auto-fixed by script
+      redisClient: mockRedis(true),
+    });
+    const res = await request(app).get("/health/ready");
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ db: "down", redis: "ok" });
+  });
+
   it("falls back to down when redisClient is null", async () => {
     const { createApp } = await import("../app.js");
     const app = createApp({
@@ -178,6 +221,90 @@ describe("GET /health/ready", () => {
     const res = await request(app).get("/health/ready");
     expect(res.status).toBe(503);
     expect(res.body).toEqual({ db: "ok", redis: "down" });
+  });
+});
+
+describe("withTimeout", () => {
+  it("resolves with the value when the promise settles in time", async () => {
+    await expect(withTimeout(Promise.resolve("ok"), 100)).resolves.toBe("ok");
+  });
+
+  it("rejects when the promise never settles", async () => {
+    jest.useFakeTimers();
+    const pending = withTimeout(new Promise(() => {}), 100);
+    const assertion = expect(pending).rejects.toThrow("Readiness check timed out after 100ms");
+
+    await jest.advanceTimersByTimeAsync(100);
+
+    await assertion;
+  });
+});
+
+describe("getReadinessTimeoutMs", () => {
+  it("defaults to 2000ms", () => {
+    expect(getReadinessTimeoutMs()).toBe(2000);
+  });
+
+  it("uses READINESS_TIMEOUT_MS when it is a positive integer", () => {
+    process.env.READINESS_TIMEOUT_MS = "250";
+    expect(getReadinessTimeoutMs()).toBe(250);
+  });
+
+  it("falls back to the default for invalid values", () => {
+    process.env.READINESS_TIMEOUT_MS = "not-a-number";
+    expect(getReadinessTimeoutMs()).toBe(2000);
+  });
+});
+
+describe("checkReadiness — timeout and exception safety", () => {
+  it("returns down for a dependency that never settles", async () => {
+    jest.useFakeTimers();
+    process.env.READINESS_TIMEOUT_MS = "50";
+
+    const result = checkReadiness({
+      pingDb: () => new Promise<boolean>(() => {}),
+      pingRedis: async () => true,
+    });
+
+    await jest.advanceTimersByTimeAsync(50);
+
+    await expect(result).resolves.toEqual({ db: "down", redis: "ok" });
+  });
+
+  it("returns both down when both dependencies hang", async () => {
+    jest.useFakeTimers();
+    process.env.READINESS_TIMEOUT_MS = "50";
+
+    const result = checkReadiness({
+      pingDb: () => new Promise<boolean>(() => {}),
+      pingRedis: () => new Promise<boolean>(() => {}),
+    });
+
+    await jest.advanceTimersByTimeAsync(50);
+
+    await expect(result).resolves.toEqual({ db: "down", redis: "down" });
+  });
+
+  it("returns down when a pinger throws synchronously", async () => {
+    const result = await checkReadiness({
+      pingDb: () => {
+        throw new Error("pool unavailable");
+      },
+      pingRedis: async () => true,
+    });
+
+    expect(result).toEqual({ db: "down", redis: "ok" });
+  });
+
+  it("returns down when a pinger rejects", async () => {
+    const result = await checkReadiness({
+      pingDb: async () => true,
+      pingRedis: async () => {
+        throw new Error("redis unavailable");
+      },
+    });
+
+    expect(result).toEqual({ db: "ok", redis: "down" });
   });
 });
 

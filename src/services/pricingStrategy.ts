@@ -263,11 +263,11 @@ export interface BundlePricingResult {
  * @param bundleContext - Bundle-specific context for discount resolution
  * @returns BundlePricingResult with discount applied
  */
-export function resolveBundlePrice(
+export async function resolveBundlePrice(
   strategyId: StrategyId,
   input: PricingInput,
   bundleContext: Omit<BundlePricingContext, "basePricePerUnit">,
-): BundlePricingResult {
+): Promise<BundlePricingResult> {
   // First, resolve the base price using the strategy
   const strategyResult = resolvePrice(strategyId, input);
 
@@ -277,7 +277,7 @@ export function resolveBundlePrice(
     basePricePerUnit: input.basePrice,
   };
 
-  const discount = resolveBundleDiscount(discountContext);
+  const discount = await resolveBundleDiscount(discountContext);
 
   // Calculate final price
   const finalPrice = discount.finalPrice;
