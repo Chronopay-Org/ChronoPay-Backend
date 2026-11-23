@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * residencyGuard.ts
  *
@@ -22,7 +21,6 @@
 import { Request, Response, NextFunction } from "express";
 import { sendErrorResponse } from "../errors/sendError.js";
 import { ForbiddenError } from "../errors/AppError.js";
-import { ERROR_CODES } from "../errors/errorCodes.js";
 import { residencyEgressBreachAttempts } from "../metrics.js";
 import { logger } from "../utils/logger.js";
 
@@ -39,6 +37,33 @@ declare module "express" {
   }
 }
 
+/**
+ * A timestamp as returned by the PostgreSQL driver. `pg` returns TIMESTAMPTZ
+ * columns as `Date`, but some drivers/proxies (and serialized test fixtures)
+ * return ISO-8601 strings. Both representations are normalized at the store
+ * boundary.
+ */
+export type WaiverTimestamp = Date | string;
+
+/**
+ * Raw row shape returned by the `residency_waivers` table. This mirrors the
+ * migration: every column except timestamp representation is a non-null
+ * string.
+ */
+export interface WaiverDbRow {
+  id: string;
+  target_region: string;
+  scope: string;
+  expires_at: WaiverTimestamp;
+  created_at: WaiverTimestamp;
+  created_by: string;
+}
+
+/**
+ * Normalized waiver row exposed by every `WaiverStore` implementation.
+ * Timestamps are always `Date` instances so callers can compare them
+ * deterministically regardless of the backing store.
+ */
 export interface WaiverRow {
   id: string;
   target_region: string;
@@ -46,6 +71,19 @@ export interface WaiverRow {
   expires_at: Date;
   created_at: Date;
   created_by: string;
+}
+
+/**
+ * Minimal query adapter used by the SQL-backed store. This matches the
+ * structural subset of `pg.Pool` the guard needs, while keeping the store
+ * injectable for tests.
+ */
+export interface WaiverQueryResult {
+  rows: WaiverDbRow[];
+}
+
+export interface WaiverQueryable {
+  query(text: string, values?: unknown[]): Promise<WaiverQueryResult>;
 }
 
 /**
@@ -58,6 +96,37 @@ export interface WaiverStore {
    * and target region.
    */
   findActiveWaivers(scope: string, targetRegion: string): Promise<WaiverRow[]>;
+}
+
+// ─── Timestamp normalization ──────────────────────────────────────────────────
+
+function toDate(value: WaiverTimestamp, field: string): Date {
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new TypeError(`Invalid ${field} timestamp: ${String(value)}`);
+  }
+  return date;
+}
+
+/**
+ * Convert a raw database row into the normalized `WaiverRow` contract.
+ * Expiry comparisons use `expires_at.getTime()`, so a valid `Date` is
+ * guaranteed for both SQL and in-memory rows.
+ */
+function normalizeWaiverRow(row: WaiverDbRow): WaiverRow {
+  return {
+    id: row.id,
+    target_region: row.target_region,
+    scope: row.scope,
+    expires_at: toDate(row.expires_at, "expires_at"),
+    created_at: toDate(row.created_at, "created_at"),
+    created_by: row.created_by,
+  };
+}
+
+function isActive(row: WaiverRow, now: Date): boolean {
+  // `<=` is expired: an exact expiry boundary must never grant access.
+  return row.expires_at.getTime() > now.getTime();
 }
 
 // ─── Configuration ─────────────────────────────────────────────────────────────
@@ -131,7 +200,7 @@ export function detectDataRegion(req: Request): string {
  * Production SQL-backed waiver store.
  */
 export class SqlWaiverStore implements WaiverStore {
-  constructor(private readonly pool: { query: Function }) {}
+  constructor(private readonly pool: WaiverQueryable) {}
 
   async findActiveWaivers(scope: string, targetRegion: string): Promise<WaiverRow[]> {
     const result = await this.pool.query(
@@ -143,7 +212,14 @@ export class SqlWaiverStore implements WaiverStore {
        ORDER BY expires_at ASC`,
       [scope, targetRegion],
     );
-    return result.rows;
+    const now = new Date();
+    // Normalize/re-check in application code as well: the database filter is
+    // the primary guard, but exact boundary rows returned by a driver or a
+    // mocked adapter must still be treated as expired (`expires_at <= now`).
+    return result.rows
+      .map(normalizeWaiverRow)
+      .filter((row) => isActive(row, now))
+      .sort((a, b) => a.expires_at.getTime() - b.expires_at.getTime());
   }
 }
 
@@ -154,13 +230,14 @@ export class InMemoryWaiverStore implements WaiverStore {
   private readonly waivers = new Map<string, WaiverRow>();
 
   add(waiver: WaiverRow): void {
-    this.waivers.set(waiver.id, { ...waiver });
+    this.waivers.set(waiver.id, normalizeWaiverRow(waiver));
   }
 
   async findActiveWaivers(scope: string, targetRegion: string): Promise<WaiverRow[]> {
     const now = new Date();
     return [...this.waivers.values()]
-      .filter((w) => w.scope === scope && w.target_region === targetRegion && w.expires_at > now)
+      .filter((w) => w.scope === scope && w.target_region === targetRegion && isActive(w, now))
+      .map(normalizeWaiverRow)
       .sort((a, b) => a.expires_at.getTime() - b.expires_at.getTime());
   }
 
@@ -169,7 +246,7 @@ export class InMemoryWaiverStore implements WaiverStore {
   }
 
   list(): WaiverRow[] {
-    return [...this.waivers.values()];
+    return [...this.waivers.values()].map(normalizeWaiverRow);
   }
 }
 
@@ -280,7 +357,7 @@ export function createResidencyGuard(
         res,
         new ForbiddenError(
           "Cross-region data access denied. A valid residency waiver is required.",
-          (ERROR_CODES as any).RESIDENCY_EGRESS_DENIED?.code ?? "RESIDENCY_EGRESS_DENIED",
+          "RESIDENCY_EGRESS_DENIED",
         ),
         req,
       );
@@ -296,7 +373,7 @@ export function createResidencyGuard(
         res,
         new ForbiddenError(
           "Cross-region data access denied. Waiver lookup failed.",
-          (ERROR_CODES as any).RESIDENCY_EGRESS_DENIED?.code ?? "RESIDENCY_EGRESS_DENIED",
+          "RESIDENCY_EGRESS_DENIED",
         ),
         req,
       );
