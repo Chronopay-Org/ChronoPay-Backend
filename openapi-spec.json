@@ -6,10 +6,95 @@
     "description": "API for ChronoPay payment and scheduling platform"
   },
   "paths": {
+    "/api/v1/partner/quota": {
+      "get": {
+        "tags": [
+          "Partner"
+        ],
+        "summary": "Get current quota status for the authenticated token",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Quota status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "tokenId": {
+                          "type": "string"
+                        },
+                        "dailyUsed": {
+                          "type": "integer"
+                        },
+                        "dailyLimit": {
+                          "type": "integer"
+                        },
+                        "monthlyUsed": {
+                          "type": "integer"
+                        },
+                        "monthlyLimit": {
+                          "type": "integer"
+                        },
+                        "dailyPercentUsed": {
+                          "type": "number"
+                        },
+                        "monthlyPercentUsed": {
+                          "type": "number"
+                        },
+                        "dailyResetAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "monthlyResetAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "timezone": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "tokenId": "tok_123",
+                    "dailyUsed": 10,
+                    "dailyLimit": 1000,
+                    "monthlyUsed": 120,
+                    "monthlyLimit": 20000,
+                    "dailyPercentUsed": 1,
+                    "monthlyPercentUsed": 0.6,
+                    "dailyResetAt": "2024-03-16T00:00:00.000Z",
+                    "monthlyResetAt": "2024-04-01T00:00:00.000Z",
+                    "timezone": "UTC"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          }
+        }
+      }
+    },
     "/api/v1/checkout/sessions": {
       "post": {
         "summary": "Create a new checkout session",
-        "description": "Creates a new checkout session for payment processing. Supports multiple payment methods and currencies. Optional JWT authentication for enhanced tracking and user association.\n",
+        "description": "Creates a new checkout session for payment processing. Supports multiple payment methods and currencies. Optional JWT authentication; when a token is present the token subject (sub) must match customer.customerId.\n",
         "tags": [
           "Checkout"
         ],
@@ -87,12 +172,14 @@
                   "successUrl": {
                     "type": "string",
                     "format": "uri",
-                    "description": "Optional redirect URL on successful payment"
+                    "maxLength": 2048,
+                    "description": "Optional absolute HTTPS redirect URL on an exact configured host; HTTP allowed only outside production. Invalid values return 400 INVALID_REDIRECT_URL with details.field."
                   },
                   "cancelUrl": {
                     "type": "string",
                     "format": "uri",
-                    "description": "Optional redirect URL on cancelled payment"
+                    "maxLength": 2048,
+                    "description": "Optional cancel redirect, subject to the same configured host and scheme policy as successUrl."
                   }
                 }
               }
@@ -104,24 +191,6 @@
             "description": "Checkout session created successfully",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "example": true
-                    },
-                    "session": {
-                      "type": "object",
-                      "description": "Checkout session details"
-                    },
-                    "checkoutUrl": {
-                      "type": "string",
-                      "format": "uri",
-                      "description": "Direct payment URL"
-                    }
-                  }
-                },
                 "example": {
                   "success": true,
                   "session": {
@@ -134,7 +203,7 @@
             }
           },
           "400": {
-            "description": "Invalid input data",
+            "description": "Invalid input data; redirect failures use the checkout envelope with code INVALID_REDIRECT_URL and details.field identifying successUrl or cancelUrl.",
             "content": {
               "application/json": {
                 "schema": {
@@ -150,24 +219,10 @@
             "$ref": "#/components/responses/ForbiddenError"
           },
           "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Internal server error"
           },
           "503": {
-            "description": "Session limit reached",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session limit reached"
           }
         }
       }
@@ -175,15 +230,14 @@
     "/api/v1/checkout/sessions/{sessionId}": {
       "get": {
         "summary": "Retrieve a checkout session",
-        "description": "Retrieves a checkout session by ID. Returns current status and all session details. No authentication required for basic session lookup.\n",
+        "description": "Retrieves a checkout session by ID. Requires a valid JWT; only the session owner or an admin may read the session.\n",
         "tags": [
           "Checkout"
         ],
         "security": [
           {
             "bearerAuth": []
-          },
-          []
+          }
         ],
         "parameters": [
           {
@@ -193,8 +247,7 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            },
-            "description": "Session ID (UUID format)"
+            }
           }
         ],
         "responses": {
@@ -202,19 +255,6 @@
             "description": "Session retrieved successfully",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "example": true
-                    },
-                    "session": {
-                      "type": "object",
-                      "description": "Checkout session details"
-                    }
-                  }
-                },
                 "example": {
                   "success": true,
                   "session": {
@@ -226,14 +266,7 @@
             }
           },
           "400": {
-            "description": "Invalid session ID format",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Invalid session ID format"
           },
           "401": {
             "$ref": "#/components/responses/UnauthorizedError"
@@ -242,34 +275,13 @@
             "$ref": "#/components/responses/ForbiddenError"
           },
           "404": {
-            "description": "Session not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session not found"
           },
           "410": {
-            "description": "Session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session expired"
           },
           "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Internal server error"
           }
         }
       }
@@ -277,7 +289,7 @@
     "/api/v1/checkout/sessions/{sessionId}/complete": {
       "post": {
         "summary": "Mark checkout session as completed",
-        "description": "Marks a checkout session as completed (payment successful). Requires authentication to prevent unauthorized completion attempts.\n",
+        "description": "Marks a checkout session as completed (payment successful). Restricted to trusted payment-provider callbacks (HMAC-signed) or admin users.\n",
         "tags": [
           "Checkout"
         ],
@@ -297,8 +309,7 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            },
-            "description": "Session ID (UUID format)"
+            }
           }
         ],
         "requestBody": {
@@ -321,19 +332,6 @@
             "description": "Session marked as completed",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "example": true
-                    },
-                    "session": {
-                      "type": "object",
-                      "description": "Updated checkout session with COMPLETED status"
-                    }
-                  }
-                },
                 "example": {
                   "success": true,
                   "session": {
@@ -345,14 +343,7 @@
             }
           },
           "400": {
-            "description": "Invalid session ID format",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Invalid session ID format"
           },
           "401": {
             "$ref": "#/components/responses/UnauthorizedError"
@@ -361,44 +352,16 @@
             "$ref": "#/components/responses/ForbiddenError"
           },
           "404": {
-            "description": "Session not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session not found"
           },
           "409": {
-            "description": "Session in invalid state (already completed/failed/cancelled)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session in invalid state"
           },
           "410": {
-            "description": "Session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session expired"
           },
           "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Internal server error"
           }
         }
       }
@@ -406,7 +369,7 @@
     "/api/v1/checkout/sessions/{sessionId}/pay": {
       "post": {
         "summary": "Initiate payment for a checkout session",
-        "description": "Initiates payment processing for a checkout session. Validates that the session is in PENDING state and not expired. Transitions the session to COMPLETED or FAILED based on payment result.\n",
+        "description": "Initiates payment processing for a checkout session. Requires a valid JWT; only the session owner or an admin may trigger payment.\n",
         "tags": [
           "Checkout"
         ],
@@ -423,8 +386,7 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            },
-            "description": "Session ID (UUID format)"
+            }
           }
         ],
         "responses": {
@@ -432,19 +394,6 @@
             "description": "Payment processed successfully (COMPLETED or FAILED)",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "example": true
-                    },
-                    "session": {
-                      "type": "object",
-                      "description": "Updated checkout session"
-                    }
-                  }
-                },
                 "example": {
                   "success": true,
                   "session": {
@@ -456,14 +405,7 @@
             }
           },
           "400": {
-            "description": "Invalid session ID format",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Invalid session ID format"
           },
           "401": {
             "$ref": "#/components/responses/UnauthorizedError"
@@ -472,44 +414,16 @@
             "$ref": "#/components/responses/ForbiddenError"
           },
           "404": {
-            "description": "Session not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session not found"
           },
           "409": {
-            "description": "Session in invalid state (already completed/failed/cancelled)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session in invalid state"
           },
           "410": {
-            "description": "Session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session expired"
           },
           "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Internal server error"
           }
         }
       }
@@ -517,7 +431,7 @@
     "/api/v1/checkout/sessions/{sessionId}/fail": {
       "post": {
         "summary": "Mark checkout session as failed",
-        "description": "Marks a checkout session as failed (payment failed). Requires authentication to prevent unauthorized status changes.\n",
+        "description": "Marks a checkout session as failed (payment failed). Restricted to trusted payment-provider callbacks (HMAC-signed) or admin users.\n",
         "tags": [
           "Checkout"
         ],
@@ -537,8 +451,7 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            },
-            "description": "Session ID (UUID format)"
+            }
           }
         ],
         "requestBody": {
@@ -561,19 +474,6 @@
             "description": "Session marked as failed",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "example": true
-                    },
-                    "session": {
-                      "type": "object",
-                      "description": "Updated checkout session with FAILED status"
-                    }
-                  }
-                },
                 "example": {
                   "success": false,
                   "error": "Payment failed",
@@ -583,14 +483,7 @@
             }
           },
           "400": {
-            "description": "Invalid session ID format",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Invalid session ID format"
           },
           "401": {
             "$ref": "#/components/responses/UnauthorizedError"
@@ -599,44 +492,16 @@
             "$ref": "#/components/responses/ForbiddenError"
           },
           "404": {
-            "description": "Session not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session not found"
           },
           "409": {
-            "description": "Session in invalid state",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session in invalid state"
           },
           "410": {
-            "description": "Session expired",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session expired"
           },
           "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Internal server error"
           }
         }
       }
@@ -644,7 +509,7 @@
     "/api/v1/checkout/sessions/{sessionId}/cancel": {
       "post": {
         "summary": "Cancel a checkout session",
-        "description": "Cancels a checkout session. Can be called by the session owner or authenticated admin users.\n",
+        "description": "Cancels a checkout session. Requires a valid JWT; only the session owner or an admin may cancel.\n",
         "tags": [
           "Checkout"
         ],
@@ -664,8 +529,7 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            },
-            "description": "Session ID (UUID format)"
+            }
           }
         ],
         "responses": {
@@ -673,19 +537,6 @@
             "description": "Session cancelled successfully",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "example": true
-                    },
-                    "session": {
-                      "type": "object",
-                      "description": "Updated checkout session with CANCELLED status"
-                    }
-                  }
-                },
                 "example": {
                   "success": true,
                   "session": {
@@ -697,14 +548,7 @@
             }
           },
           "400": {
-            "description": "Invalid session ID format",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Invalid session ID format"
           },
           "401": {
             "$ref": "#/components/responses/UnauthorizedError"
@@ -713,49 +557,797 @@
             "$ref": "#/components/responses/ForbiddenError"
           },
           "404": {
-            "description": "Session not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session not found"
           },
           "409": {
-            "description": "Session in invalid state (already completed/failed/cancelled)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
+            "description": "Session in invalid state"
           },
           "410": {
-            "description": "Session expired",
+            "description": "Session expired"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/v1/booking-intents/{id}/refund": {
+      "post": {
+        "summary": "Refund a booking intent",
+        "description": "Refunds a booking intent, prorated by consumption. When MFA_REQUIRED_FOR_REFUNDS is enabled (default in production) the caller must present a fresh MFA step-up challenge bound to the authenticated subject.\n",
+        "tags": [
+          "BookingIntents"
+        ],
+        "security": [
+          {
+            "chronoPayAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-chronopay-mfa",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Fresh MFA challenge token from POST /api/v1/auth/mfa/verify. Required when MFA_REQUIRED_FOR_REFUNDS is enabled (default in production): 401 when missing or older than the freshness window, 403 when issued for a different subject.\n"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Refund calculated and recorded",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "refund": {
+                    "intentId": "intent-123",
+                    "refundedAmountCents": 500,
+                    "currency": "USD",
+                    "status": "refunded"
+                  }
                 }
               }
             }
           },
-          "500": {
-            "description": "Internal server error",
+          "401": {
+            "description": "Missing identity, or missing/expired MFA challenge"
+          },
+          "403": {
+            "description": "MFA challenge issued for a different subject"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/verify": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Verify a JWT access token",
+        "description": "Verifies a JWT against all active secret versions (current and retired) and returns the verified subject and expiry. Validation failures are intentionally generic so token internals are not leaked.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "token"
+                ],
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "description": "Signed JWT access token to verify."
+                  }
+                }
+              },
+              "example": {
+                "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImlhdCI6MTcxMDAwMDAwMCwiZXhwIjoxNzEwMDAzNjAwfQ.signature"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token verified successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "subject": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Token subject (`sub`, falling back to `id`), or null when absent."
+                    },
+                    "expiresAt": {
+                      "type": "integer",
+                      "description": "Token expiry (`exp`) as a Unix timestamp in seconds."
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "subject": "user-123",
+                  "expiresAt": 1710003600
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Token is missing or not a string.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "token is required"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token is invalid, expired, or signed by an unknown secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "Invalid token"
                 }
               }
             }
           }
         }
       }
+    },
+    "/api/v1/auth/mfa/enroll": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Enrol the authenticated user for TOTP MFA",
+        "description": "Enrols the authenticated user for TOTP MFA and returns the base32 secret plus an `otpauth://` URI so the client can render a QR code or let the user enter the key manually. The enrolment only becomes active once a code is confirmed via POST /api/v1/auth/mfa/verify. Pending enrolments may be re-enrolled; an already-active enrolment is a conflict.\n",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending MFA enrolment created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "secret",
+                    "otpauthUrl",
+                    "digits",
+                    "period",
+                    "algorithm"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "secret": {
+                      "type": "string",
+                      "description": "Base32-encoded TOTP secret.",
+                      "example": "JBSWY3DPEHPK3PXP"
+                    },
+                    "otpauthUrl": {
+                      "type": "string",
+                      "description": "Provisioning URI for authenticator apps.",
+                      "example": "otpauth://totp/ChronoPay:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=ChronoPay&digits=6&period=30&algorithm=SHA1"
+                    },
+                    "digits": {
+                      "type": "integer",
+                      "example": 6
+                    },
+                    "period": {
+                      "type": "integer",
+                      "description": "TOTP time step in seconds.",
+                      "example": 30
+                    },
+                    "algorithm": {
+                      "type": "string",
+                      "example": "SHA1"
+                    },
+                    "alreadyVerified": {
+                      "type": "boolean",
+                      "example": false
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "secret": "JBSWY3DPEHPK3PXP",
+                  "otpauthUrl": "otpauth://totp/ChronoPay:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=ChronoPay&digits=6&period=30&algorithm=SHA1",
+                  "digits": 6,
+                  "period": 30,
+                  "algorithm": "SHA1",
+                  "alreadyVerified": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, or subject-less Bearer access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "Missing Authorization header"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "MFA is already active for the account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "MFA is already enabled for this account"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many MFA requests for this account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "Too many requests, please try again later."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "MFA encryption is not configured (for example MFA_ENCRYPTION_KEY is missing).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "MFA is not configured: MFA_ENCRYPTION_KEY is not provisioned"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/mfa/verify": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Verify a TOTP code and issue a fresh MFA challenge",
+        "description": "Validates a TOTP code for the authenticated user and, on success, returns a short-lived MFA challenge token. Send that token on step-up routes as `x-chronopay-mfa: <mfaToken>`; `requireFreshMfa` validates its signature, subject binding, and freshness (default 15 minutes), returning 401 when the challenge is missing or expired and 403 when it belongs to a different subject. Replay protection rejects reusing the same time-window code with 409. The reusable header contract is documented as `#/components/parameters/XChronopayMfa`.\n",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^\\d{6,10}$",
+                    "description": "Current TOTP code (6-10 digits; surrounding whitespace is trimmed)."
+                  }
+                }
+              },
+              "example": {
+                "code": "123456"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "TOTP code accepted; a fresh MFA challenge was issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "mfaToken",
+                    "expiresInSec",
+                    "freshUntilSec"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "mfaToken": {
+                      "type": "string",
+                      "description": "Short-lived challenge token for the x-chronopay-mfa header.",
+                      "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImlhdCI6MTcxMDAwMDAwMCwibWZhX2F0IjoxNzEwMDAwMDAwLCJleHAiOjE3MTAwMDMwMDB9.signature"
+                    },
+                    "expiresInSec": {
+                      "type": "integer",
+                      "description": "Challenge token lifetime in seconds.",
+                      "example": 300
+                    },
+                    "freshUntilSec": {
+                      "type": "integer",
+                      "description": "Unix timestamp (seconds) after which the challenge is stale.",
+                      "example": 1710000900
+                    },
+                    "alreadyVerified": {
+                      "type": "boolean",
+                      "description": "Whether the enrolment was already active before this verification.",
+                      "example": true
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "mfaToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImlhdCI6MTcxMDAwMDAwMCwibWZhX2F0IjoxNzEwMDAwMDAwLCJleHAiOjE3MTAwMDMwMDB9.signature",
+                  "expiresInSec": 300,
+                  "freshUntilSec": 1710000900,
+                  "alreadyVerified": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Code is missing or is not 6-10 digits.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "code must be 6-10 digits"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid Bearer token, or the TOTP code is invalid or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "Invalid or expired MFA code"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The account has no MFA enrolment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "MFA is not enabled for this account"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The code was already used (replay detected).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "This MFA code was already used"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Verification is temporarily locked after repeated invalid codes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "MFA verification is temporarily locked; try again later"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "MFA is not configured (for example MFA_ENCRYPTION_KEY or MFA_CHALLENGE_SECRET is missing).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "example": {
+                  "success": false,
+                  "error": "MFA is not configured: MFA_ENCRYPTION_KEY is not provisioned"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/webhooks/rotate": {
+      "post": {
+        "summary": "Rotate the settlement webhook secret",
+        "description": "Promotes the NEXT webhook secret to CURRENT and moves the previous CURRENT to PREVIOUS. Requires admin token authentication plus a fresh MFA step-up challenge (subject bound to the caller, default freshness 15 minutes).\n",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "adminTokenAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-chronopay-mfa",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Fresh MFA challenge token from POST /api/v1/auth/mfa/verify. 401 when missing or older than the freshness window, 403 when issued for a different subject.\n"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Secret rotated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    }
+                  }
+                },
+                "example": {
+                  "success": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing admin token, or missing/expired MFA challenge"
+          },
+          "403": {
+            "description": "Invalid admin token, or MFA challenge for another subject"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/refunds": {
+      "post": {
+        "summary": "Create a partial refund",
+        "description": "Creates a partial refund against a completed payment session. Requires admin token authentication plus a fresh MFA step-up challenge (subject bound to the caller, default freshness 15 minutes).\n",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "adminTokenAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-chronopay-mfa",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Fresh MFA challenge token from POST /api/v1/auth/mfa/verify. 401 when missing or older than the freshness window, 403 when issued for a different subject.\n"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Refund created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "refund": {
+                      "type": "object",
+                      "description": "The created refund"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "refund": {
+                    "id": "refund-123",
+                    "paymentId": "payment-123",
+                    "amountCents": 500,
+                    "currency": "USD",
+                    "status": "created"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing admin token, or missing/expired MFA challenge"
+          },
+          "403": {
+            "description": "Invalid admin token, or MFA challenge for another subject"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/payouts/{transactionId}/replay/approve": {
+      "post": {
+        "summary": "Approve a pending payout replay",
+        "description": "Approves a pending replay request for a failed supplier payout. The approver must be a different admin from the initiator. Requires a fresh MFA step-up challenge bound to the approving admin.\n",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "chronoPayAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-chronopay-mfa",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Fresh MFA challenge token from POST /api/v1/auth/mfa/verify. 401 when missing or older than the freshness window, 403 when issued for a different subject.\n"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Replay approved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    }
+                  }
+                },
+                "example": {
+                  "success": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing identity, or missing/expired MFA challenge"
+          },
+          "403": {
+            "description": "MFA challenge for another subject, or same-admin approval"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/escrow/pause": {
+      "post": {
+        "summary": "Pause or unpause escrow holds",
+        "description": "Toggles the escrow paused state during migration. Requires a fresh MFA step-up challenge bound to the authenticated admin.\n",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "chronoPayAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-chronopay-mfa",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Fresh MFA challenge token from POST /api/v1/auth/mfa/verify. 401 when missing or older than the freshness window, 403 when issued for a different subject.\n"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "paused"
+                ],
+                "properties": {
+                  "paused": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Escrow pause state updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "paused": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "paused": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing identity, or missing/expired MFA challenge"
+          },
+          "403": {
+            "description": "MFA challenge issued for a different subject"
+          }
+        }
+      }
     }
   },
-  "components": {},
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT access token accepted by authenticated ChronoPay routes."
+      }
+    },
+    "parameters": {
+      "XChronopayMfa": {
+        "in": "header",
+        "name": "x-chronopay-mfa",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Fresh MFA challenge token issued by POST /api/v1/auth/mfa/verify. Send it as `x-chronopay-mfa: <mfaToken>` on routes protected by `requireFreshMfa`; it is intentionally separate from the Bearer access token. A missing or expired challenge returns 401, a challenge bound to a different subject returns 403, and an unconfigured MFA deployment returns 500.\n"
+      }
+    },
+    "schemas": {
+      "ErrorEnvelope": {
+        "type": "object",
+        "description": "Flat error envelope produced by AppError.toJSON() in src/errors/AppError.ts. Auth route handlers emit the `success` and `error` subset; `code`, `message`, `timestamp`, `requestId` and `details` are included when an error flows through the shared error middleware.\n",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": false
+          },
+          "code": {
+            "type": "string",
+            "description": "Machine-readable error code from the shared taxonomy.",
+            "example": "UNAUTHORIZED"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable error message.",
+            "example": "Invalid token"
+          },
+          "error": {
+            "type": "string",
+            "description": "Alias of `message` retained for backwards compatibility.",
+            "example": "Invalid token"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2024-03-15T12:00:00.000Z"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Correlation id when available.",
+            "example": "req_123"
+          },
+          "details": {
+            "description": "Optional structured error details."
+          }
+        }
+      }
+    }
+  },
   "tags": []
 }
