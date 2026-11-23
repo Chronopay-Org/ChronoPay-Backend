@@ -39,6 +39,7 @@ interface BudgetedHistogramOptions extends CardinalityBudgetOptions {
 
 interface BudgetedGaugeOptions extends CardinalityBudgetOptions {
   help: string;
+  buckets?: number[];
   registers?: Registry[];
 }
 
