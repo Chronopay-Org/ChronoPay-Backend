@@ -1,4 +1,6 @@
 import "express";
+import type { ChronoPayRole } from "../middleware/auth.js";
+import type { FeatureFlagAccessor } from "../flags/types.js";
 import { AuthenticatedUser } from "../middleware/auth.middleware.js";
 
 declare module "express-serve-static-core" {
@@ -20,6 +22,10 @@ declare module "express-serve-static-core" {
     /**
      * Raw request body buffer captured for signature verification.
      */
+    auth?: {
+      userId: string;
+      role: ChronoPayRole;
+    };
     rawBody?: Buffer;
     user?: AuthenticatedUser & Record<string, any>;
     /**
