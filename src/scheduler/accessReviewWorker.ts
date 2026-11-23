@@ -26,6 +26,7 @@ import {
 } from "../constants/accessReview.js";
 import { accessReviewService } from "../services/accessReviewService.js";
 import { logger } from "../utils/logger.js";
+import { accessReviewService, computeQuarterLabel } from "../services/accessReviewService.js";
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -85,13 +86,6 @@ export async function runAccessReviewCheck(): Promise<{
     snapshotId,
     gapCount: gaps.missingQuarters.length,
   };
-}
-
-function computeQuarterLabel(date: Date = new Date()): string {
-  const year = date.getFullYear();
-  const month = date.getMonth();
-  const quarter = Math.floor(month / 3) + 1;
-  return `${year}-Q${quarter}`;
 }
 
 // ─── Scheduler Lifecycle ──────────────────────────────────────────────────────
