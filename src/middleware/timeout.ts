@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
-import { v4 as uuidv4 } from "uuid";
 import { timeoutConfig } from "../config/timeouts.js";
 import { logger } from "../utils/logger.js";
+import { REQUEST_ID_HEADER, resolveRequestId } from "./requestId.js";
 
 export interface TimeoutOptions {
   timeoutMs?: number;
@@ -64,6 +64,9 @@ export function timeoutMiddleware(options: TimeoutOptions = {}) {
       }
     };
 
+    // requestIdMiddleware already validated (or generated) the id; fall back to
+    // resolving the raw header so a req id is never echoed or logged unvalidated.
+    const requestId = req.requestId || resolveRequestId(req.header(REQUEST_ID_HEADER));
     const timer = setTimeout(() => {
       res.locals.timedOut = true;
       if (!controller.signal.aborted) {

@@ -11,6 +11,8 @@
  *  - it must echo the incoming `x-request-id` and log the timeout
  *  - it must mark `res.locals.timedOut`, abort `req.abortSignal`, and ignore
  *    late writes without throwing
+ *  - it must echo the validated request id and log the timeout
+ *  - it must never echo or log an unvalidated `x-request-id` value
  *
  * The pino-backed logger is replaced so the suite asserts the log call without
  * pulling in the real logging stack.
@@ -50,11 +52,16 @@ type Emitter = {
   emit: (event: string) => void;
 };
 
-function makeReq(headers: Record<string, string> = {}, originalUrl = "/api/v1/checkout"): Request & Emitter {
+function makeReq(
+  headers: Record<string, string | string[] | undefined> = {},
+  originalUrl = "/api/v1/checkout",
+): Request & Emitter {
   const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
   return {
     headers,
     originalUrl,
+    requestId: undefined,
+    header: (name: string) => headers[name.toLowerCase()],
     on: (event: string, cb: (...args: unknown[]) => void) => {
       (listeners[event] ??= []).push(cb);
       return undefined;
@@ -267,8 +274,63 @@ describe("timeoutMiddleware — timeout", () => {
 
     jest.advanceTimersByTime(50);
 
-    expect(typeof res.header["X-Request-Id"]).toBe("string");
-    expect(String(res.header["X-Request-Id"])).toHaveLength(36);
+    expect(String(res.header["X-Request-Id"])).toMatch(/^req_[0-9a-fA-F-]{36}$/);
+  });
+
+  it("prefers the id resolved by requestIdMiddleware", () => {
+    const req = makeReq({ "x-request-id": "not a valid id" });
+    req.requestId = "req_from_middleware_001";
+    const res = makeRes();
+    timeoutMiddleware({ timeoutMs: 50 })(req, res, jest.fn() as unknown as NextFunction);
+
+    jest.advanceTimersByTime(50);
+
+    expect(res.header["X-Request-Id"]).toBe("req_from_middleware_001");
+    expect(loggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "req_from_middleware_001" }),
+      "request timed out",
+    );
+  });
+
+  it("replaces a CRLF-injected header with a generated id in the response and log", () => {
+    const req = makeReq({ "x-request-id": "req-abc-123\r\nX-Injected: yes" });
+    const res = makeRes();
+    timeoutMiddleware({ timeoutMs: 50 })(req, res, jest.fn() as unknown as NextFunction);
+
+    jest.advanceTimersByTime(50);
+
+    const echoed = String(res.header["X-Request-Id"]);
+    expect(echoed).toMatch(/^req_[0-9a-fA-F-]{36}$/);
+    expect(echoed).not.toContain("\r");
+    expect(echoed).not.toContain("\n");
+    expect(loggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: echoed }),
+      "request timed out",
+    );
+  });
+
+  it("replaces an oversize header with a generated id", () => {
+    const req = makeReq({ "x-request-id": "a".repeat(256) });
+    const res = makeRes();
+    timeoutMiddleware({ timeoutMs: 50 })(req, res, jest.fn() as unknown as NextFunction);
+
+    jest.advanceTimersByTime(50);
+
+    expect(String(res.header["X-Request-Id"])).toMatch(/^req_[0-9a-fA-F-]{36}$/);
+    expect(loggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: String(res.header["X-Request-Id"]) }),
+      "request timed out",
+    );
+  });
+
+  it("replaces an array-valued header with a generated id", () => {
+    const req = makeReq({ "x-request-id": ["req-abc-123", "req-def-456"] });
+    const res = makeRes();
+    timeoutMiddleware({ timeoutMs: 50 })(req, res, jest.fn() as unknown as NextFunction);
+
+    jest.advanceTimersByTime(50);
+
+    expect(String(res.header["X-Request-Id"])).toMatch(/^req_[0-9a-fA-F-]{36}$/);
   });
 
   it("logs a structured warning with requestId, route and duration", () => {

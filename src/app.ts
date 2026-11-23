@@ -5,6 +5,7 @@ import express, { type Request, type Response } from "express";
 import { getCORSConfig, validateCORSConfig } from "./config/cors.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
+import { requestIdMiddleware } from "./middleware/requestId.js";
 import { parseCookies } from "./middleware/cookieParser.js";
 import { authenticateTokenIfPresent } from "./middleware/auth.middleware.js";
 import {
@@ -256,6 +257,8 @@ export function createApp(options: AppFactoryOptions = {}) {
   }
 
   // 0. Global Middleware
+  // Request ids must be resolved before anything that logs or echoes them.
+  app.use(requestIdMiddleware);
   app.use(tracingMiddleware);
   app.use(metricsMiddleware);
   app.use(featureFlagContextMiddleware);
