@@ -164,6 +164,44 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   logger.info("outbox-relay worker started");
 })();
 
+// ─── Hold Auto-Refund Worker (#1414) ─────────────────────────────────────────
+// Polls for refundable holds whose holdUntilMs has elapsed and issues automatic
+// refunds. Set HOLD_AUTO_REFUND_DISABLED=true to skip (e.g. for read-only
+// replicas or single-shot scripts). Shares the process-wide booking-intent
+// repository with the HTTP routes so worker-issued refunds are visible through
+// the API immediately.
+(async () => {
+  if (process.env.HOLD_AUTO_REFUND_DISABLED === "true") {
+    logger.info("hold-auto-refund worker disabled via HOLD_AUTO_REFUND_DISABLED");
+    return;
+  }
+
+  const { createHoldAutoRefundWorker } = await import(
+    "./scheduler/holdAutoRefundWorker.js"
+  );
+  const { bookingIntentContainer } = await import(
+    "./modules/booking-intents/bookingIntentContainer.js"
+  );
+
+  if (lifecycle.isShuttingDown) return;
+
+  const worker = createHoldAutoRefundWorker(
+    {
+      bookingIntentService: bookingIntentContainer.bookingIntentService,
+      bookingIntentRepository: bookingIntentContainer.bookingIntentRepository,
+    },
+    {
+      intervalMs: Number(process.env.HOLD_AUTO_REFUND_INTERVAL_MS) || undefined,
+      batchSize: Number(process.env.HOLD_AUTO_REFUND_BATCH_SIZE) || undefined,
+      safetyThreshold: Number(process.env.HOLD_AUTO_REFUND_SAFETY_THRESHOLD) || undefined,
+    },
+  );
+
+  lifecycle.registerStop("hold-auto-refund", () => worker.stop());
+  worker.start();
+  logger.info("hold-auto-refund worker started");
+})();
+
 // ─── Settlement Finality Reconciler (#804) ─────────────────────────────────
 // Polls Horizon to verify on-chain finality for provider settlements before
 // any payout is marked ready, and flags forks/reorgs. Enabled when Horizon
