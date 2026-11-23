@@ -1,13 +1,16 @@
 import express, { type Request } from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "@jest/globals";
+import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import { setRedisClient, type RedisClient } from "../../cache/redisClient.js";
 import { idempotencyMiddleware } from "../idempotency.js";
 import { buildIdempotencyStorageKey } from "../idempotencyStorageKey.js";
 import {
   IdempotencyPayloadDecryptError,
   createIdempotencyPayloadCodec,
+  getIdempotencyPayloadCodec,
+  setIdempotencyEncryptionConfigForTests,
 } from "../../utils/idempotencyPayloadCodec.js";
+import { configService } from "../../config/config.service.js";
 import { generateRequestHash } from "../../utils/hash.js";
 
 type StoredValue = { value: string; expiresAt?: number };
@@ -426,5 +429,110 @@ describe("IdempotencyPayloadCodec security", () => {
     expect(() => codec.deserialize(JSON.stringify(parsed))).toThrow(
       IdempotencyPayloadDecryptError,
     );
+  });
+});
+
+describe("IdempotencyPayloadCodec environment configuration", () => {
+  const ENV_KEYS = [
+    "IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED",
+    "IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID",
+    "IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY",
+    "IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS",
+  ] as const;
+  const KEY_OLD = Buffer.alloc(32, 11).toString("base64");
+  const KEY_NEW = Buffer.alloc(32, 22).toString("base64");
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of ENV_KEYS) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+    setIdempotencyEncryptionConfigForTests(null);
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (saved[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = saved[key];
+      }
+    }
+    configService.refresh();
+  });
+
+  it("stores plaintext JSON when encryption is not configured", () => {
+    configService.refresh();
+
+    const serialized = getIdempotencyPayloadCodec().serialize({ status: "completed", note: "plain" });
+
+    expect(JSON.parse(serialized)).toEqual({ status: "completed", note: "plain" });
+  });
+
+  it("writes the enc envelope when enabled through environment variables", () => {
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED = "true";
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID = "env-key";
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY = KEY_NEW;
+    configService.refresh();
+
+    const codec = getIdempotencyPayloadCodec();
+    const serialized = codec.serialize({ status: "completed", secret: "sensitive-pii" });
+
+    expect(serialized.startsWith('{"enc":')).toBe(true);
+    expect(serialized).not.toContain("sensitive-pii");
+    expect((JSON.parse(serialized) as { enc: { keyId: string } }).enc.keyId).toBe("env-key");
+    expect(codec.deserialize<{ secret: string }>(serialized).secret).toBe("sensitive-pii");
+  });
+
+  it("still decrypts records written with a previous key after rotation", () => {
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED = "true";
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID = "key-old";
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY = KEY_OLD;
+    configService.refresh();
+    const legacy = getIdempotencyPayloadCodec().serialize({ status: "completed", amount: 42 });
+
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID = "key-new";
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY = KEY_NEW;
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS = `key-old:${KEY_OLD}`;
+    configService.refresh();
+    const rotated = getIdempotencyPayloadCodec();
+
+    expect(rotated.deserialize<{ amount: number }>(legacy).amount).toBe(42);
+    const fresh = rotated.serialize({ status: "completed", amount: 43 });
+    expect((JSON.parse(fresh) as { enc: { keyId: string } }).enc.keyId).toBe("key-new");
+  });
+
+  it("cannot decrypt records whose key was removed from the previous keys", () => {
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED = "true";
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID = "key-old";
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY = KEY_OLD;
+    configService.refresh();
+    const legacy = getIdempotencyPayloadCodec().serialize({ status: "completed" });
+
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID = "key-new";
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY = KEY_NEW;
+    configService.refresh();
+
+    expect(() => getIdempotencyPayloadCodec().deserialize(legacy)).toThrow(
+      IdempotencyPayloadDecryptError,
+    );
+  });
+
+  it("prefers the test override over environment configuration", () => {
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED = "true";
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID = "env-key";
+    process.env.IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY = KEY_NEW;
+    configService.refresh();
+    setIdempotencyEncryptionConfigForTests({
+      enabled: false,
+      algorithm: "aes-256-gcm",
+      activeKey: null,
+      decryptionKeys: [],
+    });
+
+    const serialized = getIdempotencyPayloadCodec().serialize({ status: "completed" });
+
+    expect(JSON.parse(serialized)).toEqual({ status: "completed" });
   });
 });

@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { configService } from "../config/config.service.js";
 import {
   type EnvConfig,
   type IdempotencyRedisEncryptionConfig,
@@ -101,17 +102,7 @@ export class IdempotencyPayloadCodec {
   }
 }
 
-// @ts-expect-error - Auto-fixed by script
 let configOverride: EnvConfig["idempotencyRedisEncryption"] | null = null;
-
-function getDefaultCodecConfig(): IdempotencyRedisEncryptionConfig {
-  return {
-    enabled: false,
-    algorithm: "aes-256-gcm",
-    activeKey: null,
-    decryptionKeys: [],
-  };
-}
 
 export function createIdempotencyPayloadCodec(
   config: IdempotencyRedisEncryptionConfig,
@@ -124,11 +115,10 @@ export function getIdempotencyPayloadCodec(): IdempotencyPayloadCodec {
     return new IdempotencyPayloadCodec(configOverride);
   }
 
-  return new IdempotencyPayloadCodec(getDefaultCodecConfig());
+  return new IdempotencyPayloadCodec(configService.idempotencyRedisEncryption);
 }
 
 export function setIdempotencyEncryptionConfigForTests(
-  // @ts-expect-error - Auto-fixed by script
   config: EnvConfig["idempotencyRedisEncryption"] | null,
 ): void {
   configOverride = config;

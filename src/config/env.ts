@@ -77,6 +77,12 @@ export interface EnvConfig {
    * Must be set to true when METRICS_AUTH_TOKEN is not configured in production.
    */
   metricsPublic: boolean;
+  /**
+   * Optional AES-256-GCM encryption of idempotency payloads stored in Redis.
+   * See docs/security/redis-encryption.md. Disabled unless
+   * IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED is truthy.
+   */
+  idempotencyRedisEncryption: IdempotencyRedisEncryptionConfig;
 }
 
 export class EnvValidationError extends Error {
@@ -181,6 +187,8 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
 
+  const idempotencyRedisEncryption = parseIdempotencyRedisEncryption(env, issues);
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -213,6 +221,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     mfaRequiredForRefunds,
     metricsAuthToken,
     metricsPublic,
+    idempotencyRedisEncryption,
   };
 }
 
@@ -373,6 +382,106 @@ function parseOptionalString(rawValue: string | undefined): string | undefined {
   const val = rawValue.trim();
   if (val === "") return undefined;
   return val;
+}
+
+const IDEMPOTENCY_ENCRYPTION_KEY_BYTES = 32;
+
+/**
+ * Decode a base64 encryption key and require it to be exactly 32 bytes.
+ *
+ * Only canonical (padded) base64 is accepted, because Buffer.from(..., "base64")
+ * silently skips invalid characters. The key material is never included in the
+ * reported issue, only its name and decoded length.
+ */
+function parseEncryptionKeyBytes(rawValue: string, label: string, issues: string[]): Buffer | undefined {
+  const decoded = Buffer.from(rawValue, "base64");
+
+  if (rawValue === "" || decoded.toString("base64") !== rawValue) {
+    issues.push(`${label} must be valid base64.`);
+    return undefined;
+  }
+
+  if (decoded.length !== IDEMPOTENCY_ENCRYPTION_KEY_BYTES) {
+    issues.push(
+      `${label} must decode to exactly ${IDEMPOTENCY_ENCRYPTION_KEY_BYTES} bytes (got ${decoded.length}).`,
+    );
+    return undefined;
+  }
+
+  return decoded;
+}
+
+function parseIdempotencyRedisEncryption(
+  env: NodeJS.ProcessEnv,
+  issues: string[],
+): IdempotencyRedisEncryptionConfig {
+  const enabledKey = "IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED";
+  const activeKeyIdName = "IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID";
+  const activeKeyName = "IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY";
+  const previousKeysName = "IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS";
+
+  const enabled = parseBoolean(env[enabledKey], enabledKey, false, issues);
+  const activeKeyId = parseOptionalString(env[activeKeyIdName]);
+  const activeKeyRaw = parseOptionalString(env[activeKeyName]);
+  const previousKeysRaw = parseOptionalString(env[previousKeysName]);
+
+  if (enabled) {
+    if (activeKeyId === undefined) {
+      issues.push(`${activeKeyIdName} is required when ${enabledKey} is true.`);
+    }
+    if (activeKeyRaw === undefined) {
+      issues.push(`${activeKeyName} is required when ${enabledKey} is true.`);
+    }
+  }
+
+  // Validate whatever was provided, even while disabled, so a malformed key is
+  // caught at startup rather than the day encryption is switched on.
+  let activeKey: EncryptionKey | null = null;
+  if (activeKeyRaw !== undefined) {
+    const value = parseEncryptionKeyBytes(activeKeyRaw, activeKeyName, issues);
+    if (value && activeKeyId !== undefined) {
+      activeKey = { id: activeKeyId, value };
+    }
+  }
+
+  const seenIds = new Set<string>();
+  if (activeKeyId !== undefined) {
+    seenIds.add(activeKeyId);
+  }
+
+  const previousKeys: EncryptionKey[] = [];
+  for (const entry of parseStringList(previousKeysRaw)) {
+    const separator = entry.indexOf(":");
+    const id = separator === -1 ? "" : entry.slice(0, separator).trim();
+    const rawKey = separator === -1 ? "" : entry.slice(separator + 1).trim();
+
+    if (id === "" || rawKey === "") {
+      issues.push(`${previousKeysName} entries must use the format key-id:base64-key.`);
+      continue;
+    }
+
+    if (seenIds.has(id)) {
+      issues.push(`${previousKeysName} contains duplicate key id '${id}'.`);
+      continue;
+    }
+    seenIds.add(id);
+
+    const value = parseEncryptionKeyBytes(rawKey, `${previousKeysName} key '${id}'`, issues);
+    if (value) {
+      previousKeys.push({ id, value });
+    }
+  }
+
+  // The active key must stay decryptable, and previous keys cover the rotation window.
+  const decryptionKeys: EncryptionKey[] = activeKey ? [activeKey, ...previousKeys] : previousKeys;
+
+  if (enabled && activeKey) {
+    return { enabled: true, algorithm: "aes-256-gcm", activeKey, decryptionKeys };
+  }
+
+  // Disabled, or enabled with invalid input (already recorded in `issues`, which
+  // makes loadEnvConfig throw before this value is used).
+  return { enabled: false, algorithm: "aes-256-gcm", activeKey: null, decryptionKeys };
 }
 
 function parseStringList(rawValue: string | undefined): string[] {
