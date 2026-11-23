@@ -67,6 +67,16 @@ export interface EnvConfig {
    * Default: enabled when NODE_ENV=production, disabled otherwise.
    */
   mfaRequiredForRefunds: boolean;
+  /**
+   * Static bearer token required to scrape /metrics. When unset, /metrics is
+   * unauthenticated outside production.
+   */
+  metricsAuthToken?: string;
+  /**
+   * Explicit opt-out allowing an unauthenticated /metrics endpoint in production.
+   * Must be set to true when METRICS_AUTH_TOKEN is not configured in production.
+   */
+  metricsPublic: boolean;
 }
 
 export class EnvValidationError extends Error {
@@ -157,6 +167,14 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
 
+  const metricsAuthToken = parseOptionalString(env.METRICS_AUTH_TOKEN);
+  const metricsPublic = parseBoolean(env.METRICS_PUBLIC, "METRICS_PUBLIC", false, issues);
+  if (nodeEnv === "production" && metricsAuthToken === undefined && !metricsPublic) {
+    issues.push(
+      "METRICS_AUTH_TOKEN must be set in production. Set METRICS_PUBLIC=true to explicitly allow an unauthenticated /metrics endpoint.",
+    );
+  }
+
   const idempotencyProcessingLockTtlSeconds = parseOptionalPositiveInteger(
     env.IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS,
     "IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS",
@@ -193,6 +211,8 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     mfaWindowPeriods,
     mfaChallengeTtlSec,
     mfaRequiredForRefunds,
+    metricsAuthToken,
+    metricsPublic,
   };
 }
 
