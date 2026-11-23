@@ -20,6 +20,7 @@
  */
 
 import { accessReviewService } from "../services/accessReviewService.js";
+import { logger } from "../utils/logger.js";
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ function resolveLookback(): number {
 
 let intervalTimer: NodeJS.Timeout | null = null;
 let running = false;
+let inFlight = false;
 
 // ─── Core Logic ───────────────────────────────────────────────────────────────
 
@@ -86,6 +88,18 @@ function computeQuarterLabel(date: Date = new Date()): string {
 
 // ─── Scheduler Lifecycle ──────────────────────────────────────────────────────
 
+async function safeRun(): Promise<void> {
+  if (inFlight) return;
+  inFlight = true;
+  try {
+    await runAccessReviewCheck();
+  } catch (err) {
+    logger.error({ err }, "[access-review] check failed");
+  } finally {
+    inFlight = false;
+  }
+}
+
 /**
  * Start the access review worker.
  * It will periodically check if a new snapshot is needed.
@@ -97,11 +111,11 @@ export function startAccessReviewWorker(intervalMs?: number): void {
   const ms = intervalMs ?? resolveInterval();
 
   // Run one check immediately on startup
-  void runAccessReviewCheck();
+  void safeRun();
 
   // Then run at the configured interval
   intervalTimer = setInterval(() => {
-    void runAccessReviewCheck();
+    void safeRun();
   }, ms);
 
   // Allow the process to exit even if this timer is still active
