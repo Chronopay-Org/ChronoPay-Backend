@@ -331,4 +331,82 @@ describe("Admin Access Review API", () => {
       expect(res.headers["content-type"]).toContain("text/csv");
     });
   });
+
+  // ── Invalid pagination ───────────────────────────────────────────────────
+
+  describe("invalid pagination", () => {
+    const invalidLimits = ["0", "-1", "1.5", "abc", "201"];
+    for (const limit of invalidLimits) {
+      it(`returns 400 for limit=${limit} on snapshots`, async () => {
+        const res = await request(app)
+          .get(`/api/v1/admin/access-review/snapshots?limit=${limit}`)
+          .set("x-chronopay-admin-token", "test-admin-token");
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("limit must be an integer between 1 and 200");
+      });
+    }
+
+    for (const limit of invalidLimits) {
+      it(`returns 400 for limit=${limit} on attestations`, async () => {
+        const res = await request(app)
+          .get(`/api/v1/admin/access-review/attestations?limit=${limit}`)
+          .set("x-chronopay-admin-token", "test-admin-token");
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("limit must be an integer between 1 and 200");
+      });
+    }
+
+    const invalidOffsets = ["-1", "1.5", "abc"];
+    for (const offset of invalidOffsets) {
+      it(`returns 400 for offset=${offset} on snapshots`, async () => {
+        const res = await request(app)
+          .get(`/api/v1/admin/access-review/snapshots?offset=${offset}`)
+          .set("x-chronopay-admin-token", "test-admin-token");
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("offset must be a non-negative integer");
+      });
+    }
+
+    it("accepts offset=0 on snapshots", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/access-review/snapshots?offset=0")
+        .set("x-chronopay-admin-token", "test-admin-token");
+
+      expect(res.status).toBe(200);
+    });
+
+    it("accepts limit=200 on snapshots", async () => {
+      const res = await request(app)
+        .get("/api/v1/admin/access-review/snapshots?limit=200")
+        .set("x-chronopay-admin-token", "test-admin-token");
+
+      expect(res.status).toBe(200);
+    });
+
+    const invalidLookbacks = ["0", "-1", "1.5", "abc", "41"];
+    for (const lookback of invalidLookbacks) {
+      it(`returns 400 for lookback=${lookback} on gaps`, async () => {
+        const res = await request(app)
+          .get(`/api/v1/admin/access-review/gaps?lookback=${lookback}`)
+          .set("x-chronopay-admin-token", "test-admin-token");
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("lookback must be an integer between 1 and 40");
+      });
+    }
+
+    it("accepts the lookback bounds on gaps", async () => {
+      for (const lookback of ["1", "40"]) {
+        const res = await request(app)
+          .get(`/api/v1/admin/access-review/gaps?lookback=${lookback}`)
+          .set("x-chronopay-admin-token", "test-admin-token");
+
+        expect(res.status).toBe(200);
+      }
+    });
+  });
 });
+

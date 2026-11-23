@@ -19,12 +19,16 @@
  *   ACCESS_REVIEW_LOOKBACK   – How many quarters to check for gaps (default: 8)
  */
 
+import {
+  ACCESS_REVIEW_LOOKBACK_DEFAULT,
+  ACCESS_REVIEW_LOOKBACK_MAX,
+  ACCESS_REVIEW_LOOKBACK_MIN,
+} from "../constants/accessReview.js";
 import { accessReviewService } from "../services/accessReviewService.js";
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const DEFAULT_LOOKBACK = 8;
 
 function resolveInterval(): number {
   const raw = process.env.ACCESS_REVIEW_INTERVAL_MS;
@@ -35,9 +39,13 @@ function resolveInterval(): number {
 
 function resolveLookback(): number {
   const raw = process.env.ACCESS_REVIEW_LOOKBACK;
-  if (!raw) return DEFAULT_LOOKBACK;
+  if (!raw) return ACCESS_REVIEW_LOOKBACK_DEFAULT;
   const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 40 ? parsed : DEFAULT_LOOKBACK;
+  return Number.isInteger(parsed) &&
+    parsed >= ACCESS_REVIEW_LOOKBACK_MIN &&
+    parsed <= ACCESS_REVIEW_LOOKBACK_MAX
+    ? parsed
+    : ACCESS_REVIEW_LOOKBACK_DEFAULT;
 }
 
 // ─── Worker State ─────────────────────────────────────────────────────────────
@@ -127,3 +135,4 @@ export function stopAccessReviewWorker(): void {
 export function isAccessReviewWorkerRunning(): boolean {
   return running;
 }
+
