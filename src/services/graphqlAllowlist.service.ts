@@ -1,5 +1,4 @@
 import fs from "fs";
-import path from "path";
 import crypto from "crypto";
 import { Counter } from "prom-client";
 import { logger } from "../utils/logger.js";

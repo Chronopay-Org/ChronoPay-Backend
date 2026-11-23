@@ -1,7 +1,6 @@
 import fs from "fs";
 import path from "path";
 import { GraphqlAllowlistService } from "../graphqlAllowlist.service.js";
-import { rejectedAdhocQueries } from "../index.js";
 
 describe("GraphqlAllowlistService", () => {
   const testDir = fs.mkdtempSync(path.join("/tmp", "graphql-allowlist-test-"));
@@ -19,16 +18,16 @@ describe("GraphqlAllowlistService", () => {
       const validFile = path.join(testDir, "valid.json");
       fs.writeFileSync(validFile, JSON.stringify({ queries: { "hash1": "query Test" } }));
 
-      const svc = new GraphqlAllowlistService(validFile);
+      const svc = new GraphqlAllowlistService();
+      const result = svc.loadAllowlist(validFile);
+      expect(result).toBe(true);
       expect(svc.isAllowed("hash1")).toBe(true);
     });
 
     it("should return false when file is missing", () => {
       const missingFile = path.join(testDir, "missing.json");
-      const result = GraphqlAllowlistService.prototype.loadAllowlist.call(
-        new GraphqlAllowlistService(),
-        missingFile
-      );
+      const svc = new GraphqlAllowlistService();
+      const result = svc.loadAllowlist(missingFile);
       expect(result).toBe(false);
     });
 
@@ -36,16 +35,19 @@ describe("GraphqlAllowlistService", () => {
       const badFile = path.join(testDir, "bad.json");
       fs.writeFileSync(badFile, "not valid json");
 
-      const svc = new GraphqlAllowlistService(badFile);
-      // Allowlist should remain empty/previous state
+      const svc = new GraphqlAllowlistService();
+      const result = svc.loadAllowlist(badFile);
+      expect(result).toBe(false);
       expect(svc.isAllowed("anything")).toBe(false);
     });
 
-    it("should return false when file has JSON without queries key", () => {
+    it("should return true when file has JSON without queries key (allowlist becomes empty)", () => {
       const noQueriesFile = path.join(testDir, "no-queries.json");
       fs.writeFileSync(noQueriesFile, JSON.stringify({ other: "data" }));
 
-      const svc = new GraphqlAllowlistService(noQueriesFile);
+      const svc = new GraphqlAllowlistService();
+      const result = svc.loadAllowlist(noQueriesFile);
+      expect(result).toBe(true);
       expect(svc.isAllowed("anything")).toBe(false);
     });
 
@@ -55,15 +57,15 @@ describe("GraphqlAllowlistService", () => {
 
       // Load first allowlist
       fs.writeFileSync(firstFile, JSON.stringify({ queries: { "hash1": "query Test" } }));
-      const svc1 = new GraphqlAllowlistService(firstFile);
-      expect(svc1.isAllowed("hash1")).toBe(true);
+      const svc = new GraphqlAllowlistService(firstFile);
+      expect(svc.isAllowed("hash1")).toBe(true);
 
       // Try to load second (fail) - allowlist should be retained
       fs.writeFileSync(secondFile, "invalid json");
-      const result = svc1.loadAllowlist(secondFile);
+      const result = svc.loadAllowlist(secondFile);
       expect(result).toBe(false);
       // Previous hash should still be allowed
-      expect(svc1.isAllowed("hash1")).toBe(true);
+      expect(svc.isAllowed("hash1")).toBe(true);
     });
 
     it("should override allowlist when new file succeeds", () => {
@@ -82,6 +84,11 @@ describe("GraphqlAllowlistService", () => {
       // Old hash should no longer be allowed, new hash should
       expect(svc.isAllowed("hash1")).toBe(false);
       expect(svc.isAllowed("hash2")).toBe(true);
+    });
+
+    it("should handle constructor with no path", () => {
+      const svc = new GraphqlAllowlistService();
+      expect(svc.isAllowed("foo")).toBe(false);
     });
   });
 });
