@@ -5,9 +5,16 @@ if (!process.env.REDIS_URL) {
 if (!process.env.POSTGRESQL_URL) {
   process.env.POSTGRESQL_URL = "postgres://test:test@localhost:5432/testdb";
 }
+// src/db/connection.ts reads DATABASE_URL (not POSTGRESQL_URL) and throws at
+// import time when it is missing, which breaks every suite that pulls in
+// src/index.ts. `pg` is mocked below, so no real connection is made.
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = "postgres://test:test@localhost:5432/testdb";
+}
 if (!process.env.NODE_ENV) {
   process.env.NODE_ENV = "test";
 }
+process.env.JWT_SECRET = "chronopay-test-jwt-secret-at-least-32-characters";
 
 /** @type {import('jest').Config} */
 module.exports = {
@@ -15,10 +22,33 @@ module.exports = {
   testEnvironment: "node",
   extensionsToTreatAsEsm: [".ts"],
   moduleNameMapper: {
+    "^ioredis$": "<rootDir>/test/mocks/ioredis.ts",
+    "^pg$": "<rootDir>/test/mocks/pg.ts",
     "^(\\.{1,2}/.*)\\.js$": "$1",
     "^(\\.{1,2}/.*)$": "$1",
   },
   transform: { "^.+\\.tsx?$": ["ts-jest", { useESM: true }] },
-  testMatch: ["**/__tests__/**/*.test.ts"],
+  testMatch: ["**/__tests__/**/*.test.ts", "**/*.test.ts"],
+  testPathIgnorePatterns: ["/node_modules/", "/stryker-tmp/", "/\\.stryker-tmp/", "/child-process-proxy-worker\\.js$/"],
   clearMocks: true,
+  forceExit: true,
+  coverageDirectory: "coverage",
+  coverageReporters: ["lcov", "text-summary"],
+  collectCoverageFrom: [
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    "!src/index.ts",
+    "!src/**/__tests__/**",
+    "!scripts/**/__tests__/**",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts",
+  ],
+  coverageThreshold: {
+    global: {
+      branches: 80,
+      functions: 80,
+      lines: 80,
+      statements: 80,
+    },
+  },
 };

@@ -102,6 +102,22 @@ export interface LegacyAuditLogEntry {
 }
 
 /**
+ * Impersonation-specific audit action constants.
+ * Use these as the `action` field in audit events emitted during
+ * impersonation sessions so review tooling can filter easily.
+ */
+export const IMPERSONATION_AUDIT_ACTIONS = {
+  SESSION_OPENED: "impersonation.session.opened",
+  SESSION_CLOSED: "impersonation.session.closed",
+  SESSION_EXPIRED: "impersonation.session.expired",
+  REQUEST_RECORDED: "impersonation.request.recorded",
+  WRITE_DETECTED: "impersonation.write.detected",
+} as const;
+
+export type ImpersonationAuditAction =
+  (typeof IMPERSONATION_AUDIT_ACTIONS)[keyof typeof IMPERSONATION_AUDIT_ACTIONS];
+
+/**
  * Error types for validation
  */
 export class AuditEventValidationError extends Error {

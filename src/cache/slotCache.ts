@@ -1,3 +1,4 @@
+import { logger } from "../utils/logger.js";
 /**
  *
  * High-level cache helpers for the slot resource.
@@ -30,7 +31,9 @@ import {
   getRedisClient,
   SLOT_CACHE_TTL_SECONDS,
 } from "./redisClient.js";
-import { recordCacheHit, recordCacheMiss, recordStampedeBlocked } from "../metrics.js";
+import {
+  recordDependencyFault,
+} from "../metrics.js";
 
 
 export const SLOT_CACHE_KEYS = {
@@ -38,7 +41,6 @@ export const SLOT_CACHE_KEYS = {
   page: (pageNum: number) => `slots:page:${pageNum}`,
   pattern: "slots:page:*",
 } as const;
-
 
 export interface Slot {
   id: number;
@@ -54,7 +56,6 @@ export interface PaginatedSlotsResult {
   total: number;
   totalPages: number;
 }
-
 
 /**
  * Retrieve cached slots for a specific page.
@@ -72,7 +73,8 @@ export async function getCachedSlotsPage(page: number): Promise<PaginatedSlotsRe
     if (raw === null) return null;
     return JSON.parse(raw) as PaginatedSlotsResult;
   } catch (err) {
-    console.warn("[slotCache] getCachedSlotsPage error:", (err as Error).message);
+    recordDependencyFault("redis", "cache_read");
+    logger.warn({ err }, "[slotCache] getCachedSlotsPage error");
     return null;
   }
 }
@@ -83,20 +85,19 @@ export async function getCachedSlotsPage(page: number): Promise<PaginatedSlotsRe
  * @param page - Page number (1-indexed)
  * @param result - Paginated result to serialise and store.
  */
-export async function setCachedSlotsPage(page: number, result: PaginatedSlotsResult): Promise<void> {
+export async function setCachedSlotsPage(
+  page: number,
+  result: PaginatedSlotsResult,
+): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
 
   try {
     const key = SLOT_CACHE_KEYS.page(page);
-    await redis.set(
-      key,
-      JSON.stringify(result),
-      "EX",
-      SLOT_CACHE_TTL_SECONDS,
-    );
+    await redis.set(key, JSON.stringify(result), "EX", SLOT_CACHE_TTL_SECONDS);
   } catch (err) {
-    console.warn("[slotCache] setCachedSlotsPage error:", (err as Error).message);
+    recordDependencyFault("redis", "cache_write");
+    logger.warn({ err }, "[slotCache] setCachedSlotsPage error");
   }
 }
 
@@ -117,13 +118,14 @@ export async function invalidateSlotsCache(): Promise<void> {
     // Delete all paginated slot cache keys
     const keys = await redis.keys(SLOT_CACHE_KEYS.pattern);
     if (keys.length > 0) {
-      await Promise.all(keys.map(key => redis.del(key)));
+      await Promise.all(keys.map((key) => redis.del(key)));
     }
-    
+
     // Also delete legacy key for backward compatibility
     await redis.del(SLOT_CACHE_KEYS.all);
   } catch (err) {
-    console.warn("[slotCache] invalidateSlotsCache error:", (err as Error).message);
+    recordDependencyFault("redis", "cache_invalidate");
+    logger.warn({ err }, "[slotCache] invalidateSlotsCache error");
   }
 }
 
@@ -142,7 +144,8 @@ export async function getCachedSlots(): Promise<Slot[] | null> {
     if (raw === null) return null;
     return JSON.parse(raw) as Slot[];
   } catch (err) {
-    console.warn("[slotCache] getCachedSlots error:", (err as Error).message);
+    recordDependencyFault("redis", "cache_read");
+    logger.warn({ err }, "[slotCache] getCachedSlots error");
     return null;
   }
 }
@@ -158,18 +161,16 @@ export async function setCachedSlots(slots: Slot[]): Promise<void> {
   if (!redis) return;
 
   try {
-    await redis.set(
-      SLOT_CACHE_KEYS.all,
-      JSON.stringify(slots),
-      "EX",
-      SLOT_CACHE_TTL_SECONDS,
-    );
+    await redis.set(SLOT_CACHE_KEYS.all, JSON.stringify(slots), "EX", SLOT_CACHE_TTL_SECONDS);
   } catch (err) {
-    console.warn("[slotCache] setCachedSlots error:", (err as Error).message);
+    recordDependencyFault("redis", "cache_write");
+    logger.warn({ err }, "[slotCache] setCachedSlots error");
   }
 }
 
-export async function getOrFetchSlots(fetcher: () => Promise<Slot[]>): Promise<{ slots: Slot[], cacheStatus: "HIT" | "MISS" }> {
+export async function getOrFetchSlots(
+  fetcher: () => Promise<Slot[]>,
+): Promise<{ slots: Slot[]; cacheStatus: "HIT" | "MISS" }> {
   const slots = await fetcher();
   return { slots, cacheStatus: "MISS" };
 }

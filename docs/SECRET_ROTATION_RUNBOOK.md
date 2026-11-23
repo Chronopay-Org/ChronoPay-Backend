@@ -12,6 +12,7 @@ This runbook applies to:
 - `JWT_SECRET`: Used for signing and verifying authentication tokens.
 - `API_KEY`: Used for external service integration.
 - `STELLAR_SECRET_KEY`: Used for transaction signing.
+- `COSIGN_PUBLIC_KEY` & `COSIGN_PRIVATE_KEY`: Used for container image signing and deploy-time admission verification.
 
 ---
 

@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { ZodSchema, ZodError } from "zod";
 import {
   BadRequestError,
   InternalServerError,
@@ -52,6 +53,28 @@ function sortDetails(details: ValidationDetail[]): ValidationDetail[] {
 }
 
 /**
+ * Picks the status for a schema violation.
+ *
+ * A field that is simply absent is a malformed request (400) regardless of the
+ * route's preferred status — the client forgot to send it. A field that was
+ * sent but cannot be used keeps the route's status, so callers can distinguish
+ * "you sent nonsense" from "you sent something impossible".
+ *
+ * Membership is tested against the raw body rather than Zod's issue metadata,
+ * because a missing key surfaces as `invalid_union` for union schemas rather
+ * than `invalid_type`.
+ */
+function resolveStatus(error: ZodError, status: number, body: unknown): number {
+  if (status === 400) return 400;
+  const isRecord = typeof body === "object" && body !== null;
+  const allMissing = error.errors.every((issue) => {
+    const path = issue.path.join(".");
+    return isRecord && !(path in (body as Record<string, unknown>));
+  });
+  return allMissing ? 400 : status;
+}
+
+/**
  * Build a deterministic 400 response.
  * This is the only place the response shape is constructed so the format
  * stays consistent across all validators.
@@ -59,15 +82,18 @@ function sortDetails(details: ValidationDetail[]): ValidationDetail[] {
 function buildValidationError(
   res: Response,
   details: ValidationDetail[],
+  status: number = 400,
 ): Response {
   const sorted = sortDetails(details);
   const body: ValidationErrorResponse = {
     success: false,
     code: "VALIDATION_ERROR",
-    error: "One or more fields failed validation",
+    // `details` is sorted for determinism, but the headline message names the
+    // first problem in request order, which is what a client acts on.
+    error: details[0]?.message ?? "One or more fields failed validation",
     details: sorted,
   };
-  return res.status(400).json(body);
+  return res.status(status).json(body);
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -126,6 +152,66 @@ export function validateRequiredFields(
         new InternalServerError("Validation middleware error"),
         req,
       );
+    }
+  };
+}
+
+/**
+ * Zod-based body validation middleware.
+ *
+ * Parses and validates `req.body` against the provided Zod schema using
+ * `schema.strip()` semantics (unknown fields are stripped, not rejected).
+ * On success, `req.body` is replaced with the parsed (stripped) output.
+ * On failure, returns a uniform 400 error envelope.
+ *
+ * Error envelope shape:
+ *   { success: false, code: "VALIDATION_ERROR", error: string, details: ValidationDetail[] }
+ *
+ * Security notes:
+ * - Unknown fields are stripped, never silently forwarded.
+ * - Raw field values are never included in error messages.
+ * - Field paths come from the Zod schema, not from user input.
+ *
+ * @param schema  A Zod schema. Must be a ZodObject or ZodEffects wrapping one.
+ */
+/**
+ * Validates `req.body` against a Zod schema, replacing it with the parsed
+ * (stripped) output on success.
+ *
+ * `status` overrides the HTTP status used for schema violations. The default
+ * is 400 (malformed request); routes whose schema encodes semantic limits —
+ * e.g. a timestamp that parses but is out of range — pass 422 so clients can
+ * tell "I sent nonsense" apart from "I sent something impossible".
+ */
+export function validateBody<T>(schema: ZodSchema<T>, status: number = 400) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      const result = schema.safeParse(req.body);
+
+      if (!result.success) {
+        const details: ValidationDetail[] = result.error.errors.map((issue) => ({
+          path: issue.path.join(".") || "body",
+          rule: issue.code,
+          message: issue.message,
+        }));
+        buildValidationError(res, details, resolveStatus(result.error, status, req.body));
+        return;
+      }
+
+      // Replace body with the parsed (stripped) output
+      req.body = result.data;
+      next();
+    } catch (err) {
+      if (err instanceof ZodError) {
+        const details: ValidationDetail[] = err.errors.map((issue) => ({
+          path: issue.path.join(".") || "body",
+          rule: issue.code,
+          message: issue.message,
+        }));
+        buildValidationError(res, details, resolveStatus(err, status, req.body));
+        return;
+      }
+      sendErrorResponse(res, new InternalServerError("Validation middleware error"), req);
     }
   };
 }

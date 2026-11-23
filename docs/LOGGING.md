@@ -165,6 +165,8 @@ All HTTP requests are automatically logged with standardized fields:
 | Field | Type | Description |
 |-------|------|-------------|
 | `requestId` | string | Unique request identifier (auto-generated or from `x-request-id` header) |
+| `traceId` | string | Active tracing identifier for distributed trace correlation |
+| `spanId` | string | Active span identifier for the current request scope |
 | `route` | string | Route pattern (path parameters sanitized, e.g., `/users/:id` → `/users/:REDACTED`) |
 | `method` | string | HTTP method (GET, POST, etc.) |
 | `status` | number | HTTP status code |

@@ -1,10 +1,11 @@
 /**
  * Audit Event Validator and Encoder
- * 
+ *
  * Centralized validation, encoding, and redaction for audit events.
  * Enforces schema compliance, data minimization, and security rules.
  */
 
+import { isIP } from "node:net";
 import {
   AuditEvent,
   AuditEventEnvelope,
@@ -71,22 +72,6 @@ const SENSITIVE_FIELD_PATTERNS = [
 ];
 
 /**
- * Fields that are always allowed (never redacted)
- */
-const ALLOWED_FIELDS = [
-  "id",
-  "name",
-  "email",
-  "action",
-  "resource",
-  "status",
-  "timestamp",
-  "method",
-  "userId",
-  "sessionId",
-];
-
-/**
  * Maximum size for audit event payload (in bytes)
  * Prevents log injection and excessive storage usage
  */
@@ -126,9 +111,7 @@ export function redactSensitiveData(data: unknown): unknown {
     const redacted: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
       // Check if field matches sensitive pattern
-      const isSensitive = SENSITIVE_FIELD_PATTERNS.some((pattern) =>
-        pattern.test(key)
-      );
+      const isSensitive = SENSITIVE_FIELD_PATTERNS.some((pattern) => pattern.test(key));
 
       if (isSensitive) {
         redacted[key] = REDACTION_MARKER;
@@ -158,7 +141,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       "version is required and must be a string",
       "version",
-      envelope.version
+      envelope.version,
     );
   }
 
@@ -166,7 +149,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       "timestamp is required and must be a string",
       "timestamp",
-      envelope.timestamp
+      envelope.timestamp,
     );
   }
 
@@ -175,7 +158,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       "timestamp must be in ISO 8601 format",
       "timestamp",
-      envelope.timestamp
+      envelope.timestamp,
     );
   }
 
@@ -183,7 +166,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       "eventId is required and must be a string",
       "eventId",
-      envelope.eventId
+      envelope.eventId,
     );
   }
 
@@ -192,7 +175,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       "eventId must be a valid UUID v4",
       "eventId",
-      envelope.eventId
+      envelope.eventId,
     );
   }
 
@@ -200,7 +183,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       "action is required and must be a string",
       "action",
-      envelope.action
+      envelope.action,
     );
   }
 
@@ -208,7 +191,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       "action must not exceed 256 characters",
       "action",
-      envelope.action
+      envelope.action,
     );
   }
 
@@ -217,7 +200,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
       throw new AuditEventValidationError(
         "actorIp must be a string if provided",
         "actorIp",
-        envelope.actorIp
+        envelope.actorIp,
       );
     }
     // Basic IP validation (accepts IPv4 and IPv6)
@@ -225,7 +208,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
       throw new AuditEventValidationError(
         "actorIp must be a valid IP address",
         "actorIp",
-        envelope.actorIp
+        envelope.actorIp,
       );
     }
   }
@@ -235,31 +218,27 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
       throw new AuditEventValidationError(
         "resource must be a string if provided",
         "resource",
-        envelope.resource
+        envelope.resource,
       );
     }
     if (envelope.resource.length > 2048) {
       throw new AuditEventValidationError(
         "resource must not exceed 2048 characters",
         "resource",
-        envelope.resource
+        envelope.resource,
       );
     }
   }
 
   if (envelope.status === undefined) {
-    throw new AuditEventValidationError(
-      "status is required",
-      "status",
-      envelope.status
-    );
+    throw new AuditEventValidationError("status is required", "status", envelope.status);
   }
 
   if (typeof envelope.status !== "number" && typeof envelope.status !== "string") {
     throw new AuditEventValidationError(
       "status must be a number or string",
       "status",
-      envelope.status
+      envelope.status,
     );
   }
 
@@ -267,7 +246,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       "data is required and must be an object",
       "data",
-      envelope.data
+      envelope.data,
     );
   }
 
@@ -275,7 +254,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       "service is required and must be a string",
       "service",
-      envelope.service
+      envelope.service,
     );
   }
 
@@ -283,7 +262,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       "environment is required and must be a string",
       "environment",
-      envelope.environment
+      envelope.environment,
     );
   }
 
@@ -293,7 +272,7 @@ export function validateEnvelope(envelope: AuditEventEnvelope): void {
     throw new AuditEventValidationError(
       `environment must be one of: ${allowedEnvironments.join(", ")}`,
       "environment",
-      envelope.environment
+      envelope.environment,
     );
   }
 }
@@ -307,7 +286,7 @@ export function validatePayloadV1(payload: AuditEventPayloadV1): void {
       throw new AuditEventValidationError(
         "method must be a string if provided",
         "data.method",
-        payload.method
+        payload.method,
       );
     }
     const allowedMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
@@ -315,7 +294,7 @@ export function validatePayloadV1(payload: AuditEventPayloadV1): void {
       throw new AuditEventValidationError(
         `method must be one of: ${allowedMethods.join(", ")}`,
         "data.method",
-        payload.method
+        payload.method,
       );
     }
   }
@@ -325,7 +304,7 @@ export function validatePayloadV1(payload: AuditEventPayloadV1): void {
       throw new AuditEventValidationError(
         "body must be an object if provided",
         "data.body",
-        payload.body
+        payload.body,
       );
     }
   }
@@ -335,7 +314,7 @@ export function validatePayloadV1(payload: AuditEventPayloadV1): void {
       throw new AuditEventValidationError(
         "context must be an object if provided",
         "data.context",
-        payload.context
+        payload.context,
       );
     }
   }
@@ -345,7 +324,7 @@ export function validatePayloadV1(payload: AuditEventPayloadV1): void {
       throw new AuditEventValidationError(
         "userId must be a string if provided",
         "data.userId",
-        payload.userId
+        payload.userId,
       );
     }
   }
@@ -355,7 +334,7 @@ export function validatePayloadV1(payload: AuditEventPayloadV1): void {
       throw new AuditEventValidationError(
         "sessionId must be a string if provided",
         "data.sessionId",
-        payload.sessionId
+        payload.sessionId,
       );
     }
   }
@@ -373,12 +352,12 @@ export function validateAuditEvent(event: AuditEvent): void {
     if (DEPRECATED_SCHEMA_VERSIONS.includes(event.version)) {
       throw new AuditEventVersionError(
         `Schema version ${event.version} is deprecated and no longer supported for writing`,
-        event.version
+        event.version,
       );
     }
     throw new AuditEventVersionError(
       `Unsupported schema version: ${event.version}. Supported versions: ${SUPPORTED_SCHEMA_VERSIONS.join(", ")}`,
-      event.version
+      event.version,
     );
   }
 
@@ -390,7 +369,7 @@ export function validateAuditEvent(event: AuditEvent): void {
     default:
       throw new AuditEventVersionError(
         `No validator implemented for version: ${event.version}`,
-        event.version
+        event.version,
       );
   }
 
@@ -400,7 +379,7 @@ export function validateAuditEvent(event: AuditEvent): void {
     throw new AuditEventValidationError(
       `Payload size (${payloadSize} bytes) exceeds maximum allowed size (${MAX_PAYLOAD_SIZE} bytes)`,
       "data",
-      payloadSize
+      payloadSize,
     );
   }
 }
@@ -418,7 +397,7 @@ export function createAuditEvent(
     status?: number | string;
     service?: string;
     environment?: string;
-  }
+  },
 ): AuditEventV1 {
   const service = options?.service || "chronopay-backend";
   const environment = options?.environment || "dev";
@@ -464,11 +443,7 @@ export function decodeAuditEvent(json: string): AuditEvent {
     return event;
   } catch (error) {
     if (error instanceof SyntaxError) {
-      throw new AuditEventValidationError(
-        "Invalid JSON format",
-        undefined,
-        json
-      );
+      throw new AuditEventValidationError("Invalid JSON format", undefined, json);
     }
     throw error;
   }
@@ -482,7 +457,7 @@ export function migrateLegacyEntry(
   options?: {
     service?: string;
     environment?: string;
-  }
+  },
 ): AuditEventV1 {
   const service = options?.service || "chronopay-backend";
   const environment = options?.environment || "dev";
@@ -495,21 +470,17 @@ export function migrateLegacyEntry(
   // Create redacted payload
   const data: AuditEventPayloadV1 = {
     method,
-    body: body ? redactSensitiveData(body) as Record<string, unknown> : undefined,
+    body: body ? (redactSensitiveData(body) as Record<string, unknown>) : undefined,
     context: metadata,
   };
 
-  return createAuditEvent(
-    legacy.action,
-    data,
-    {
-      actorIp: legacy.actorIp,
-      resource: legacy.resource,
-      status: legacy.status,
-      service,
-      environment,
-    }
-  );
+  return createAuditEvent(legacy.action, data, {
+    actorIp: legacy.actorIp,
+    resource: legacy.resource,
+    status: legacy.status,
+    service,
+    environment,
+  });
 }
 
 /**
@@ -529,13 +500,9 @@ function isValidUUID(uuid: string): boolean {
 }
 
 /**
- * Helper function to validate IP address (basic check)
+ * Helper function to validate IP address using Node's built-in parser.
+ * Accepts IPv4, IPv6 (including IPv4-mapped forms such as "::ffff:127.0.0.1").
  */
 function isValidIPAddress(ip: string): boolean {
-  // IPv4 basic validation
-  const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-  // IPv6 basic validation (simplified)
-  const ipv6Regex = /^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/;
-  
-  return ipv4Regex.test(ip) || ipv6Regex.test(ip) || ip === "::1";
+  return isIP(ip) !== 0;
 }

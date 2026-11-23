@@ -1,0 +1,40 @@
+{
+  "grants": {
+    "admin": [
+      "*"
+    ],
+    "support": [
+      "bookings:*",
+      "slots:read",
+      "slots:list",
+      "users:read",
+      "users:list",
+      "payments:read",
+      "payments:list",
+      "audit:read",
+      "reports:read"
+    ],
+    "auditor": [
+      "audit:*",
+      "reports:read"
+    ],
+    "professional": [
+      "bookings:read",
+      "bookings:list",
+      "bookings:update",
+      "bookings:cancel",
+      "slots:*",
+      "users:read",
+      "payments:read",
+      "payments:list"
+    ],
+    "customer": [
+      "bookings:create",
+      "bookings:read",
+      "bookings:cancel",
+      "slots:read",
+      "slots:list",
+      "users:read"
+    ]
+  }
+}

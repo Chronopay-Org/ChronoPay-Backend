@@ -85,3 +85,23 @@ Run with:
 ```bash
 npm test -- --testPathPattern dependency-outage
 ```
+
+## Chaos Fault Tests
+
+Chaos-style dependency tests live in `src/__tests__/chaos-dependency-faults.test.ts`.
+They inject Redis disconnects with `ioredis-mock` and Postgres timeout /
+pool-exhaustion failures with test-only pg pool factories. Each fault is toggled
+per test, asserts the typed dependency error envelope, verifies
+`dependency_faults_total` increments, and installs an `unhandledRejection`
+listener so regressions that crash outside Express fail the suite.
+
+Partial Redis cache outages are treated as degraded read paths: cache reads may
+fail, but the endpoint falls back to the origin data source and returns `200`
+with `X-Cache: MISS`. Write/idempotency paths still fail closed when Redis is
+required for correctness.
+
+Run with:
+
+```bash
+npm test -- --testPathPattern chaos-dependency-faults
+```

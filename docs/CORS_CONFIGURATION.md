@@ -24,7 +24,7 @@ CORS configuration is loaded from environment variables:
 |----------|-------------|---------|---------|
 | `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed origins | See below | `https://example.com, https://*.example.com` |
 | `CORS_ALLOWED_METHODS` | Comma-separated HTTP methods | `GET,POST,PUT,DELETE,PATCH,OPTIONS` | `GET, POST` |
-| `CORS_ALLOWED_HEADERS` | Comma-separated request headers | `Content-Type,Authorization` | `Content-Type, X-Custom-Header` |
+| `CORS_ALLOWED_HEADERS` | Comma-separated request headers | `Content-Type,Authorization,Idempotency-Key,x-chronopay-mfa,x-api-key,x-chronopay-admin-token,x-chronopay-user-id,x-chronopay-role` | `Content-Type, X-Custom-Header` |
 | `CORS_ALLOW_CREDENTIALS` | Allow credentials (cookies, etc.) | `true` | `false` |
 | `CORS_MAX_AGE` | Preflight cache duration (seconds) | `86400` | `3600` |
 | `NODE_ENV` | Environment (development/staging/production) | `development` | `production` |
@@ -146,6 +146,7 @@ The `createCORSMiddleware()` function:
 3. For disallowed origins: Only processes request without CORS headers
 4. Handles OPTIONS (preflight) requests specially
 5. Returns 403 for disallowed preflight requests
+6. Adds `Vary: Origin` to every response and exposes rate-limit and `X-Cache` response headers to allowed origins
 
 ## Testing
 

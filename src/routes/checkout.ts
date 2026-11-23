@@ -1,34 +1,118 @@
 /**
  * Checkout Session API Routes
- * 
+ *
  * RESTful endpoints for checkout session management:
  * - POST /api/v1/checkout/sessions - Create new session
- * - GET /api/v1/checkout/sessions/:sessionId - Retrieve session
- * - POST /api/v1/checkout/sessions/:sessionId/complete - Mark as completed
- * - POST /api/v1/checkout/sessions/:sessionId/cancel - Cancel session
+ * - GET /api/v1/checkout/sessions/:sessionId - Retrieve session (owner or admin)
+ * - POST /api/v1/checkout/sessions/:sessionId/complete - Mark as completed (HMAC or admin only)
+ * - POST /api/v1/checkout/sessions/:sessionId/pay - Initiate payment (owner or admin)
+ * - POST /api/v1/checkout/sessions/:sessionId/fail - Mark as failed (HMAC or admin only)
+ * - POST /api/v1/checkout/sessions/:sessionId/cancel - Cancel session (owner or admin)
  */
 
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { CheckoutSessionService } from "../services/checkout.js";
 import {
   validateCreateCheckoutSession,
   validateSessionIdParam,
 } from "../middleware/checkout-validation.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
+import { optionalAuth } from "../middleware/auth.js";
 import {
-  CheckoutError,
-  CheckoutErrorCode,
   CreateCheckoutSessionResponse,
   GetCheckoutSessionResponse,
-  CheckoutErrorResponse,
+  CheckoutError,
+  CheckoutErrorCode,
 } from "../types/checkout.js";
 import { requireFeatureFlag } from "../middleware/featureFlags.js";
 import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../middleware/payloadLimit.js";
+import {
+  authenticateToken,
+  authorizeOwnerOrAdmin,
+} from "../middleware/auth.middleware.js";
+import { internalHmacAuth } from "../middleware/internalHmacAuth.js";
 
 const checkoutRouter = Router();
 
 // Kill-switch: all checkout routes are guarded by FF_CHECKOUT.
 checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolves the secret to use for checkout provider callbacks.
+ * Uses CHECKOUT_WEBHOOK_SECRET when set, otherwise falls back to
+ * SETTLEMENTS_WEBHOOK_SECRET (shared signing key).
+ */
+function getCheckoutHmacSecret(): string | undefined {
+  return process.env.CHECKOUT_WEBHOOK_SECRET ?? process.env.SETTLEMENTS_WEBHOOK_SECRET;
+}
+
+/**
+ * Combined middleware: accepts either a valid HMAC-signed provider callback
+ * OR a JWT-authenticated admin user.  Used on /complete and /fail, which
+ * must not be callable by regular customers.
+ *
+ * Decision tree:
+ *   1. If x-webhook-signature header is present → enforce HMAC (internalHmacAuth).
+ *   2. Otherwise → enforce JWT (authenticateToken) and require role=admin.
+ */
+function hmacOrAdminAuth(req: Request, res: Response, next: NextFunction): void {
+  if (req.headers["x-webhook-signature"]) {
+    // Provider callback path — validate HMAC.
+    internalHmacAuth({ current: getCheckoutHmacSecret(), secretName: "Checkout" })(req, res, next);
+  } else {
+    // Human/admin path — validate JWT then enforce admin role.
+    authenticateToken(req, res, (err) => {
+      if (err) return next(err);
+
+      const role = (req as any).user?.role;
+      if (role !== "admin") {
+        res.status(403).json({
+          success: false,
+          error: "Forbidden: requires admin role or valid HMAC signature",
+        });
+        return;
+      }
+      next();
+    });
+  }
+}
+
+/**
+ * Inline ownership guard used after the session has already been fetched.
+ * Returns false (and writes the response) if the caller is not the session
+ * owner and not an admin; returns true when the caller is allowed to proceed.
+ */
+function assertOwnerOrAdmin(
+  req: Request,
+  res: Response,
+  sessionCustomerId: string,
+): boolean {
+  const user = (req as any).user;
+  if (!user) {
+    res.status(401).json({ success: false, error: "Unauthorized" });
+    return false;
+  }
+
+  if (user.role === "admin") {
+    return true;
+  }
+
+  const callerId: string | undefined = user.sub ?? user.id;
+  if (!callerId || callerId !== sessionCustomerId) {
+    res.status(403).json({ success: false, error: "Access denied" });
+    return false;
+  }
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
 
 /**
  * @openapi
@@ -37,11 +121,10 @@ checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
  *     summary: Create a new checkout session
  *     description: >
  *       Creates a new checkout session for payment processing. Supports multiple
- *       payment methods and currencies. Optional JWT authentication for enhanced
- *       tracking and user association.
+ *       payment methods and currencies. Optional JWT authentication; when a token
+ *       is present the token subject (sub) must match customer.customerId.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - [] # Optional authentication
  *     requestBody:
@@ -83,31 +166,18 @@ checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
  *               successUrl:
  *                 type: string
  *                 format: uri
- *                 description: Optional redirect URL on successful payment
+ *                 maxLength: 2048
+ *                 description: Optional absolute HTTPS redirect URL on an exact configured host; HTTP allowed only outside production. Invalid values return 400 INVALID_REDIRECT_URL with details.field.
  *               cancelUrl:
  *                 type: string
  *                 format: uri
- *                 description: Optional redirect URL on cancelled payment
+ *                 maxLength: 2048
+ *                 description: Optional cancel redirect, subject to the same configured host and scheme policy as successUrl.
  *     responses:
  *       201:
  *         description: Checkout session created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 session:
- *                   type: object
- *                   description: Checkout session details
- *                 checkoutUrl:
- *                   type: string
- *                   format: uri
- *                   description: Direct payment URL
  *       400:
- *         description: Invalid input data
+ *         description: Invalid input data; redirect failures use the checkout envelope with code INVALID_REDIRECT_URL and details.field identifying successUrl or cancelUrl.
  *         content:
  *           application/json:
  *             schema:
@@ -118,26 +188,23 @@ checkoutRouter.use(requireFeatureFlag("CHECKOUT"));
  *         $ref: '#/components/responses/ForbiddenError'
  *       503:
  *         description: Session limit reached
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       500:
  *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  */
 checkoutRouter.post(
   "/sessions",
   ...payloadLimit(ROUTE_PAYLOAD_LIMITS.checkout),
   validateCreateCheckoutSession(),
+  // Checkout authentication is optional, but idempotencyMiddleware must run
+  // after a presented JWT has been VERIFIED so that Idempotency-Key entries are
+  // namespaced per caller instead of shared globally. optionalAuth never
+  // rejects: absent/invalid tokens continue as anonymous requests.
+  optionalAuth(),
   idempotencyMiddleware,
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const authToken = req.headers.authorization?.replace("Bearer ", "");
-      const session = CheckoutSessionService.createSession(req.body, authToken);
+      const session = await CheckoutSessionService.createSession(req.body, authToken);
 
       const response: CreateCheckoutSessionResponse = {
         success: true,
@@ -147,7 +214,7 @@ checkoutRouter.post(
 
       res.status(201).json(response);
     } catch (error) {
-      handleCheckoutError(error, res);
+      next(error);
     }
   },
 );
@@ -158,13 +225,11 @@ checkoutRouter.post(
  *   get:
  *     summary: Retrieve a checkout session
  *     description: >
- *       Retrieves a checkout session by ID. Returns current status and all
- *       session details. No authentication required for basic session lookup.
+ *       Retrieves a checkout session by ID. Requires a valid JWT; only the
+ *       session owner or an admin may read the session.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
- *       - [] # Optional authentication
  *     parameters:
  *       - in: path
  *         name: sessionId
@@ -172,57 +237,32 @@ checkoutRouter.post(
  *         schema:
  *           type: string
  *           format: uuid
- *         description: Session ID (UUID format)
  *     responses:
  *       200:
  *         description: Session retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 session:
- *                   type: object
- *                   description: Checkout session details
  *       400:
  *         description: Invalid session ID format
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       401:
  *         $ref: '#/components/responses/UnauthorizedError'
  *       403:
  *         $ref: '#/components/responses/ForbiddenError'
  *       404:
  *         description: Session not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       410:
  *         description: Session expired
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       500:
  *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  */
 checkoutRouter.get(
   "/sessions/:sessionId",
   validateSessionIdParam(),
-  (req: Request, res: Response) => {
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
-      const session = CheckoutSessionService.getSession(sessionId);
+      const session = await CheckoutSessionService.getSession(sessionId);
+
+      if (!assertOwnerOrAdmin(req, res, session.customer.customerId)) return;
 
       const response: GetCheckoutSessionResponse = {
         success: true,
@@ -231,7 +271,7 @@ checkoutRouter.get(
 
       res.status(200).json(response);
     } catch (error) {
-      handleCheckoutError(error, res);
+      next(error);
     }
   },
 );
@@ -242,11 +282,10 @@ checkoutRouter.get(
  *   post:
  *     summary: Mark checkout session as completed
  *     description: >
- *       Marks a checkout session as completed (payment successful). Requires
- *       authentication to prevent unauthorized completion attempts.
+ *       Marks a checkout session as completed (payment successful). Restricted
+ *       to trusted payment-provider callbacks (HMAC-signed) or admin users.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - adminTokenAuth: []
  *     parameters:
@@ -256,7 +295,6 @@ checkoutRouter.get(
  *         schema:
  *           type: string
  *           format: uuid
- *         description: Session ID (UUID format)
  *     requestBody:
  *       content:
  *         application/json:
@@ -269,64 +307,31 @@ checkoutRouter.get(
  *     responses:
  *       200:
  *         description: Session marked as completed
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 session:
- *                   type: object
- *                   description: Updated checkout session with COMPLETED status
  *       400:
  *         description: Invalid session ID format
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       401:
  *         $ref: '#/components/responses/UnauthorizedError'
  *       403:
  *         $ref: '#/components/responses/ForbiddenError'
  *       404:
  *         description: Session not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       409:
- *         description: Session in invalid state (already completed/failed/cancelled)
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
+ *         description: Session in invalid state
  *       410:
  *         description: Session expired
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       500:
  *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  */
 checkoutRouter.post(
   "/sessions/:sessionId/complete",
   validateSessionIdParam(),
-  (req: Request, res: Response) => {
+  hmacOrAdminAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
       const { paymentToken } = req.body;
 
-      const session = CheckoutSessionService.completeSession(
-        sessionId,
-        paymentToken,
-      );
+      const session = await CheckoutSessionService.completeSession(sessionId, paymentToken);
 
       const response: GetCheckoutSessionResponse = {
         success: true,
@@ -335,7 +340,69 @@ checkoutRouter.post(
 
       res.status(200).json(response);
     } catch (error) {
-      handleCheckoutError(error, res);
+      next(error);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /api/v1/checkout/sessions/{sessionId}/pay:
+ *   post:
+ *     summary: Initiate payment for a checkout session
+ *     description: >
+ *       Initiates payment processing for a checkout session. Requires a valid
+ *       JWT; only the session owner or an admin may trigger payment.
+ *     tags: [Checkout]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Payment processed successfully (COMPLETED or FAILED)
+ *       400:
+ *         description: Invalid session ID format
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ *       404:
+ *         description: Session not found
+ *       409:
+ *         description: Session in invalid state
+ *       410:
+ *         description: Session expired
+ *       500:
+ *         description: Internal server error
+ */
+checkoutRouter.post(
+  "/sessions/:sessionId/pay",
+  validateSessionIdParam(),
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { sessionId } = req.params;
+
+      // Fetch first to check ownership before touching state.
+      const sessionForAuth = await CheckoutSessionService.getSession(sessionId);
+      if (!assertOwnerOrAdmin(req, res, sessionForAuth.customer.customerId)) return;
+
+      const session = await CheckoutSessionService.paySession(sessionId);
+
+      const response: GetCheckoutSessionResponse = {
+        success: true,
+        session,
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
     }
   },
 );
@@ -346,11 +413,10 @@ checkoutRouter.post(
  *   post:
  *     summary: Mark checkout session as failed
  *     description: >
- *       Marks a checkout session as failed (payment failed). Requires authentication
- *       to prevent unauthorized status changes.
+ *       Marks a checkout session as failed (payment failed). Restricted to
+ *       trusted payment-provider callbacks (HMAC-signed) or admin users.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - adminTokenAuth: []
  *     parameters:
@@ -360,7 +426,6 @@ checkoutRouter.post(
  *         schema:
  *           type: string
  *           format: uuid
- *         description: Session ID (UUID format)
  *     requestBody:
  *       content:
  *         application/json:
@@ -373,61 +438,31 @@ checkoutRouter.post(
  *     responses:
  *       200:
  *         description: Session marked as failed
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 session:
- *                   type: object
- *                   description: Updated checkout session with FAILED status
  *       400:
  *         description: Invalid session ID format
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       401:
  *         $ref: '#/components/responses/UnauthorizedError'
  *       403:
  *         $ref: '#/components/responses/ForbiddenError'
  *       404:
  *         description: Session not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       409:
  *         description: Session in invalid state
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       410:
  *         description: Session expired
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       500:
  *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  */
 checkoutRouter.post(
   "/sessions/:sessionId/fail",
   validateSessionIdParam(),
-  (req: Request, res: Response) => {
+  hmacOrAdminAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
       const { reason } = req.body;
 
-      const session = CheckoutSessionService.failSession(sessionId, reason);
+      const session = await CheckoutSessionService.failSession(sessionId, reason);
 
       const response: GetCheckoutSessionResponse = {
         success: true,
@@ -436,7 +471,7 @@ checkoutRouter.post(
 
       res.status(200).json(response);
     } catch (error) {
-      handleCheckoutError(error, res);
+      next(error);
     }
   },
 );
@@ -447,11 +482,10 @@ checkoutRouter.post(
  *   post:
  *     summary: Cancel a checkout session
  *     description: >
- *       Cancels a checkout session. Can be called by the session owner or
- *       authenticated admin users.
+ *       Cancels a checkout session. Requires a valid JWT; only the session
+ *       owner or an admin may cancel.
  *     tags: [Checkout]
  *     security:
- *       - chronoPayAuth: []
  *       - bearerAuth: []
  *       - adminTokenAuth: []
  *     parameters:
@@ -461,63 +495,37 @@ checkoutRouter.post(
  *         schema:
  *           type: string
  *           format: uuid
- *         description: Session ID (UUID format)
  *     responses:
  *       200:
  *         description: Session cancelled successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 session:
- *                   type: object
- *                   description: Updated checkout session with CANCELLED status
  *       400:
  *         description: Invalid session ID format
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       401:
  *         $ref: '#/components/responses/UnauthorizedError'
  *       403:
  *         $ref: '#/components/responses/ForbiddenError'
  *       404:
  *         description: Session not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       409:
- *         description: Session in invalid state (already completed/failed/cancelled)
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
+ *         description: Session in invalid state
  *       410:
  *         description: Session expired
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  *       500:
  *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorEnvelope'
  */
 checkoutRouter.post(
   "/sessions/:sessionId/cancel",
   validateSessionIdParam(),
-  (req: Request, res: Response) => {
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
-      const session = CheckoutSessionService.cancelSession(sessionId);
+
+      // Fetch first to check ownership before touching state.
+      const sessionForAuth = await CheckoutSessionService.getSession(sessionId);
+      if (!assertOwnerOrAdmin(req, res, sessionForAuth.customer.customerId)) return;
+
+      const session = await CheckoutSessionService.cancelSession(sessionId);
 
       const response: GetCheckoutSessionResponse = {
         success: true,
@@ -526,45 +534,9 @@ checkoutRouter.post(
 
       res.status(200).json(response);
     } catch (error) {
-      handleCheckoutError(error, res);
+      next(error);
     }
   },
 );
-
-/**
- * Error handler for checkout operations
- * Converts CheckoutError to appropriate HTTP response
- * 
- * @param error - Error object
- * @param res - Express response object
- */
-function handleCheckoutError(error: unknown, res: Response): void {
-  if (error instanceof CheckoutError) {
-    const statusCode = error.status || 400;
-    const response: CheckoutErrorResponse = {
-      success: false,
-      code: error.code,
-      message: error.message,
-      details: error.details,
-    };
-    res.status(statusCode).json(response);
-  } else if (error instanceof Error) {
-    // Unexpected error
-    const response: CheckoutErrorResponse = {
-      success: false,
-      code: CheckoutErrorCode.INTERNAL_ERROR,
-      message: "Internal server error",
-    };
-    res.status(500).json(response);
-  } else {
-    // Unknown error type
-    const response: CheckoutErrorResponse = {
-      success: false,
-      code: CheckoutErrorCode.INTERNAL_ERROR,
-      message: "Unknown error",
-    };
-    res.status(500).json(response);
-  }
-}
 
 export default checkoutRouter;

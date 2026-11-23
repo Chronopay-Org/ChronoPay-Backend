@@ -1,147 +1,152 @@
 import type { NextFunction, Request, Response } from "express";
-import { jwtVerify } from "jose";
+
+
+import { defaultAuditLogger } from "../services/auditLogger.js";
+import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
+import { configService } from "../config/config.service.js";
 import {
-  ForbiddenError,
-  InternalServerError,
-  UnauthorizedError,
-} from "../errors/AppError.js";
-import { ERROR_CODES } from "../errors/errorCodes.js";
-import { sendErrorResponse } from "../errors/sendError.js";
+  getUserId,
+  readBearerToken,
+  verifyRequestJwt,
+  MissingBearerTokenError,
+} from "./jwtIdentity.js";
+import {
+  auditRoleDenied,
+  isKnownRole,
+  roleSatisfies,
+  type UserRole,
+} from "./rbac.js";
 
 export type ChronoPayRole = "customer" | "admin" | "professional" | "supplier";
+export type ChronoPayRole = UserRole;
 
 export interface AuthContext {
   userId: string;
   role: ChronoPayRole;
+  claims: VerifiedJwtPayload;
 }
 
-export interface AuthenticatedRequest extends Request {
-  auth?: AuthContext;
-}
+export { getUserId, readBearerToken };
 
-export async function authenticateToken(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-) {
-  try {
-    const authHeader =
-      (typeof req.header === "function" ? req.header("authorization") : undefined) ??
-      (typeof req.headers?.authorization === "string" ? req.headers.authorization : undefined);
-    const jwtSecret = process.env.JWT_SECRET;
-
-    if (!authHeader) {
-      if (!jwtSecret) {
-        return next();
-      }
-
-      return sendErrorResponse(
-        res,
-        new UnauthorizedError(
-          "Authorization header is required",
-          ERROR_CODES.AUTHENTICATION_REQUIRED.code,
-        ),
-        req,
-      );
+declare global {
+  namespace Express {
+    interface Request {
+      auth?: AuthContext;
+      user?: VerifiedJwtPayload;
     }
-
-    if (!authHeader.startsWith("Bearer ")) {
-      return sendErrorResponse(
-        res,
-        new UnauthorizedError(
-          "Authorization header must use Bearer scheme",
-          ERROR_CODES.INVALID_TOKEN.code,
-        ),
-        req,
-      );
-    }
-
-    const token = authHeader.slice("Bearer ".length).trim();
-    if (!token) {
-      return sendErrorResponse(
-        res,
-        new UnauthorizedError(
-          "Bearer token is missing",
-          ERROR_CODES.INVALID_TOKEN.code,
-        ),
-        req,
-      );
-    }
-
-    if (!jwtSecret) {
-      return sendErrorResponse(
-        res,
-        new InternalServerError("Authentication middleware error"),
-        req,
-      );
-    }
-
-    const { payload } = await jwtVerify(token, new TextEncoder().encode(jwtSecret));
-    req.user = payload as Request["user"];
-    next();
-  } catch {
-    return sendErrorResponse(
-      res,
-      new UnauthorizedError(
-        "Invalid or expired token",
-        ERROR_CODES.INVALID_TOKEN.code,
-      ),
-      req,
-    );
   }
 }
 
-/**
- * Require a trusted upstream identity header for protected routes.
- */
-export function requireAuthenticatedActor(
-  allowedRoles: ChronoPayRole[] = ["customer", "admin"],
-) {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    const rawUserId = req.header("x-chronopay-user-id");
-    const rawRole = req.header("x-chronopay-role");
+export function parseRole(value: unknown): ChronoPayRole | null {
+  const role = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (isKnownRole(role)) {
+    return role;
+  }
 
-    if (!rawUserId || rawUserId.trim().length === 0) {
-      emitAuthAudit(req, "AUTH_MISSING", 401);
-      return sendErrorResponse(
-        res,
-        new UnauthorizedError(
-          "Authentication required.",
-          ERROR_CODES.AUTHENTICATION_REQUIRED.code,
-        ),
-        req,
-      );
+  return null;
+}
+
+export function parseJwtRole(value: unknown): ChronoPayRole {
+  return parseRole(value) ?? "customer";
+}
+
+export function requireAuth(expectedIssuer?: string) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const token = readBearerToken(req);
+      if (!token) {
+        return res.status(401).json({ success: false, error: "Missing Authorization header" });
+      }
+
+      const payload = await verifyRequestJwt(req, expectedIssuer);
+      const userId = getUserId(payload);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: "Token subject missing" });
+      }
+
+      // @ts-expect-error - Auto-fixed by script
+      req.user = payload;
+      req.auth = {
+        userId,
+        role: parseJwtRole(payload.role),
+        claims: payload,
+      };
+
+      next();
+    } catch {
+      return res.status(401).json({ success: false, error: "Invalid or expired token" });
     }
-
-    const role = parseRole(rawRole);
-    if (!allowedRoles.includes(role)) {
-      // Safe to log the resolved role — it is a controlled enum value, not a raw header.
-      emitAuthAudit(req, "AUTH_FORBIDDEN", 403, { role });
-      return sendErrorResponse(
-        res,
-        new ForbiddenError(
-          "Role is not authorized for this action.",
-          ERROR_CODES.INSUFFICIENT_PERMISSIONS.code,
-        ),
-        req,
-      );
-    }
-
-    req.auth = {
-      userId: rawUserId.trim(),
-      role,
-    };
-
-    (req as any).logContext = { userId: rawUserId.trim() };
-
-    next();
   };
 }
 
-function parseRole(rawRole: string | undefined): ChronoPayRole {
-  if (!rawRole || rawRole.trim().length === 0) {
-    return "customer";
+// Named export retained for booking-intents JWT authentication.
+export { requireAuthenticatedActor as authenticateToken };
+
+export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
+  const requiredRoles = allowedRoles.map((role) => role.trim().toLowerCase());
+  for (const requiredRole of requiredRoles) {
+    if (!isKnownRole(requiredRole)) {
+      throw new Error(`requireAuthenticatedActor declares unknown role ${requiredRole}`);
+    }
   }
+
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const claims = await verifyRequestJwt(req);
+      const userId = getUserId(claims);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: "Authentication required." });
+      }
+
+      const role = parseJwtRole(claims.role);
+
+      req.auth = {
+        userId,
+        role,
+        claims,
+      };
+
+      if (!requiredRoles.some((requiredRole) => roleSatisfies(req.auth!.role, requiredRole))) {
+        auditRoleDenied(req, "RBAC_FORBIDDEN", 403, {
+          role: req.auth.role,
+          requiredRoles,
+        });
+        return res.status(403).json({ success: false, error: "Role is not authorized for this action." });
+      }
+
+      next();
+    } catch (error) {
+      const message =
+        error instanceof MissingBearerTokenError
+          ? "Authentication required."
+          : "Invalid or expired token";
+      return res.status(401).json({ success: false, error: message });
+    }
+  };
+}
+
+/**
+ * Best-effort authentication for routes where authentication is OPTIONAL
+ * (e.g. POST /api/v1/checkout/sessions).
+ *
+ * When a `Bearer` token is present and verifies against the configured JWT
+ * secrets, `req.auth` is attached exactly like `requireAuth()`. Missing,
+ * malformed or invalid tokens fall through unauthenticated — this middleware
+ * never rejects a request.
+ *
+ * Mount it BEFORE middleware that derives per-caller state from `req.auth`
+ * (such as `idempotencyMiddleware`, which namespaces Idempotency-Key entries by
+ * the verified principal). Enforcing REQUIRED authentication remains the job
+ * of `requireAuth()`.
+ */
+export function optionalAuth(expectedIssuer?: string) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const token = readBearerToken(req);
+      if (!token) {
+        next();
+        return;
+      }
 
   const normalized = rawRole.trim().toLowerCase();
   if (
@@ -152,8 +157,50 @@ function parseRole(rawRole: string | undefined): ChronoPayRole {
   ) {
     return normalized;
   }
+      const payload = await verifyJwt(token, {
+        issuer: expectedIssuer ?? configService.jwtIssuer ?? undefined,
+      });
 
-  return "professional";
+      const userId = getUserId(payload);
+      if (!userId) {
+        next();
+        return;
+      }
+
+      req.auth = {
+        userId,
+        role: parseJwtRole(payload.role),
+        claims: payload,
+      };
+
+      next();
+    } catch {
+      // Invalid/expired token: treat as anonymous. Routes that REQUIRE auth
+      // must use requireAuth() instead.
+      next();
+    }
+  };
+}
+
+// eslint-disable-next-line unused-imports/no-unused-vars
+function emitAuthAudit(
+  req: Request,
+  action: string,
+  status: number,
+  extra?: Record<string, unknown>,
+): void {
+  defaultAuditLogger.log(
+    `auth.${action}`,
+    {
+      method: req.method,
+      ...extra,
+    },
+    {
+      actorIp: req.ip || req.socket?.remoteAddress,
+      resource: req.originalUrl,
+      status,
+    },
+  ).catch(() => {}); // Fire and forget
 }
 
 // Removed duplicate export of authenticateToken

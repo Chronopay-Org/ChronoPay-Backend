@@ -22,6 +22,28 @@ Labels are restricted to a fixed, bounded set of values — no user IDs, no raw 
 | `outcome` | `success`, `error` |
 | `cache_status` | `hit`, `miss`, `bypass` |
 
+The Prometheus-facing registry in `src/metrics.ts` requires every locally
+registered counter and histogram to go through a budgeted wrapper:
+
+```ts
+createBudgetedCounter({
+  name: "example_total",
+  help: "Example counter",
+  labels: ["route"],
+  budget: 32,
+});
+```
+
+The wrapper tracks seen label tuples per metric with a small LRU map. Existing
+tuples are accepted and refreshed. Once the metric reaches its declared budget,
+new tuples are relabeled to `__overflow__` instead of creating new series.
+Every relabeled observation increments `metric_cardinality_overflow_total` with
+the metric name only, so attacker-controlled label values are not copied into
+overflow telemetry.
+
+Use `budget: 0` for no-label aggregation. This intentionally ignores supplied
+label values and records all observations on the unlabeled series.
+
 ## Integration
 
 `slotService.listSlots()` automatically records:
@@ -65,6 +87,8 @@ resetSlotMetrics();
 ## Security notes
 
 - No user data or request-scoped identifiers are ever used as label values.
+- High-cardinality offenders are relabeled to `__overflow__`; raw offending values are not exposed in metric output.
+- The overflow metric labels by static metric name only, not by the rejected value.
 - `resetSlotMetrics()` is intended for test isolation only; do not call it in production code.
 - The registry is a plain singleton object — no external metrics server is required.
 

@@ -1,0 +1,11 @@
+{
+  "tiers": {
+    "basic": [
+      "GET /api/v1/public/*",
+      "POST /api/v1/transactions"
+    ],
+    "premium": [
+      "*"
+    ]
+  }
+}

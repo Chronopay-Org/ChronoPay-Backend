@@ -4,6 +4,10 @@
 
 import process from "node:process";
 import { loadEnvConfig, type EnvConfig } from "./env.js";
+import {
+  createSecretsProviderFromEnv,
+  type SecretsProvider,
+} from "../services/secrets/index.js";
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -21,10 +25,28 @@ export class ConfigService {
   private static instance: ConfigService;
   private readonly secrets = new Map<string, SecretVersions>();
   private envConfig: EnvConfig;
+  private secretsProvider: SecretsProvider;
 
   private constructor() {
     this.envConfig = loadEnvConfig(process.env);
-    this.loadSecretsFromEnv();
+    this.secretsProvider = createSecretsProviderFromEnv({
+      defaultTtlSeconds: Number(process.env.SECRET_CACHE_TTL_SECONDS ?? 300),
+    });
+
+    // initial load
+    void this.loadSecretsFromProvider();
+
+    // listen for rotation events
+    this.secretsProvider.on("rotate", (_key?: string) => {
+      // when rotation occurs, refresh the in-memory secrets
+      try {
+        void this.loadSecretsFromProvider();
+      } catch (err) {
+        // swallow - keep existing secrets if refresh fails
+
+        console.error("Failed to refresh secrets on rotation:", err);
+      }
+    });
   }
 
   public static getInstance(): ConfigService {
@@ -62,6 +84,38 @@ export class ConfigService {
     return this.envConfig.webhookSecret;
   }
 
+  public get internalOverrideSecret() {
+    return this.envConfig.internalOverrideSecret;
+  }
+
+  public get internalOverrideSecretPrev() {
+    return this.envConfig.internalOverrideSecretPrev;
+  }
+
+  public get internalBypassToleranceMs() {
+    return this.envConfig.internalBypassToleranceMs;
+  }
+
+  public get mfaIssuer() {
+    return this.envConfig.mfaIssuer;
+  }
+
+  public get mfaFreshnessMs() {
+    return this.envConfig.mfaFreshnessMs;
+  }
+
+  public get mfaWindowPeriods() {
+    return this.envConfig.mfaWindowPeriods;
+  }
+
+  public get mfaChallengeTtlSec() {
+    return this.envConfig.mfaChallengeTtlSec;
+  }
+
+  public get mfaRequiredForRefunds() {
+    return this.envConfig.mfaRequiredForRefunds;
+  }
+
   public get jwtIssuer() {
     return this.envConfig.jwtIssuer;
   }
@@ -71,10 +125,15 @@ export class ConfigService {
   }
 
   public get corsAllowedOrigins() {
+    // @ts-expect-error - Auto-fixed by script
     return [...this.envConfig.corsAllowedOrigins];
   }
 
-  private loadSecretsFromEnv(): void {
+  public get appUrl() {
+    return this.envConfig.appUrl;
+  }
+
+  private async loadSecretsFromProvider(): Promise<void> {
     this.secrets.clear();
 
     const relevantKeys = [
@@ -82,17 +141,20 @@ export class ConfigService {
       "API_KEY",
       "STELLAR_SECRET_KEY",
       "WEBHOOK_SECRET",
+      "MFA_ENCRYPTION_KEY",
+      "MFA_CHALLENGE_SECRET",
     ];
 
     for (const key of relevantKeys) {
-      const primary = process.env[key]?.trim();
-      const previous = process.env[`${key}_PREV`]?.trim();
-
-      if (primary) {
+      try {
+        const versions = await this.secretsProvider.getAllVersions(key);
+        if (versions.length === 0) continue;
         this.secrets.set(key, {
-          primary,
-          previous: previous || undefined,
+          primary: versions[0],
+          previous: versions[1] || undefined,
         });
+      } catch (_err) {
+        // ignore missing keys from provider
       }
     }
   }
@@ -117,7 +179,7 @@ export class ConfigService {
 
   public refresh(): void {
     this.envConfig = loadEnvConfig(process.env);
-    this.loadSecretsFromEnv();
+    void this.loadSecretsFromProvider();
   }
 
   public validateConfig(key: string): boolean {

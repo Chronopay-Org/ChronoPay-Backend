@@ -1,18 +1,12 @@
 import { NextFunction, Request, Response } from "express";
-import {
-  AppError,
-  MalformedJsonError,
-  isAppError,
-  type AppErrorEnvelope,
-} from "../errors/AppError.js";
+import { AppError, MalformedJsonError, type AppErrorEnvelope } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
+import { logger } from "../utils/logger.js";
 
-function withRequestContext(
-  envelope: AppErrorEnvelope,
-  req: Request,
-): AppErrorEnvelope {
+function withRequestContext(envelope: AppErrorEnvelope, req: Request): AppErrorEnvelope {
   const requestId = req.requestId ?? req.id;
   if (requestId !== undefined) {
+    // @ts-expect-error - Auto-fixed by script
     envelope.requestId = requestId;
   }
   return envelope;
@@ -34,14 +28,32 @@ export function jsonParseErrorHandler(
   res: Response,
   next: NextFunction,
 ) {
-  if (err.type !== "entity.parse.failed") {
-    return next(err);
+  if (err.type === "entity.parse.failed") {
+    const wrapped = new MalformedJsonError();
+    return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
   }
 
-  const wrapped = new MalformedJsonError();
-  return res
-    .status(wrapped.statusCode)
-    .json(withRequestContext(wrapped.toJSON(), req));
+  if (err.type === "entity.too.large") {
+    const wrapped = new AppError(
+      "Request body exceeds the maximum allowed size.",
+      413,
+      "PAYLOAD_TOO_LARGE",
+      true,
+    );
+    return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
+  }
+
+  if (err.type === "charset.unsupported" || err.type === "encoding.unsupported") {
+    const wrapped = new AppError(
+      "Unsupported request body encoding.",
+      ERROR_CODES.UNSUPPORTED_MEDIA_TYPE.status,
+      ERROR_CODES.UNSUPPORTED_MEDIA_TYPE.code,
+      true,
+    );
+    return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
+  }
+
+  return next(err);
 }
 
 export function genericErrorHandler(
@@ -50,26 +62,18 @@ export function genericErrorHandler(
   res: Response,
   _next: NextFunction,
 ) {
-  if (
-    err instanceof Error &&
-    "statusCode" in err &&
-    "code" in err
-  ) {
+  logger.error({ err, requestId: req.requestId ?? req.id }, "unhandled error");
+  if (err instanceof Error && "statusCode" in err && "code" in err) {
     const e = err as any;
-    // Emit a consistent envelope for any AppError-shaped error (includes
-    // ServiceUnavailableError / 503 from dependency outages).
     if (typeof e.statusCode === "number" && typeof e.code === "string") {
-      return res.status(e.statusCode).json({
-        success: false,
-        code: e.code,
-        error: e.message,
-      });
+      return res.status(e.statusCode).json(withRequestContext(e.toJSON(), req));
     }
   }
 
   const fallback: AppErrorEnvelope = {
     success: false,
     code: ERROR_CODES.INTERNAL_ERROR.code,
+    message: "Internal server error",
     error: "Internal server error",
     timestamp: new Date().toISOString(),
   };

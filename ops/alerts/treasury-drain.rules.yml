@@ -1,0 +1,54 @@
+groups:
+  - name: treasury_drain_alerts
+    rules:
+      - alert: TreasuryDrainWarning
+        expr: |
+          treasury_drain_severity >= 1
+          and
+          treasury_drain_severity < 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Treasury balance approaching floor for {{ $labels.asset }} ({{ $labels.account }})"
+          description: "Treasury {{ $labels.asset }} balance on {{ $labels.account }} is between 1.0x and 1.1x of floor. Current severity: warning."
+
+      - alert: TreasuryDrainPage
+        expr: |
+          treasury_drain_severity >= 2
+          and
+          treasury_drain_severity < 3
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "Treasury balance below floor for {{ $labels.asset }} ({{ $labels.account }})"
+          description: "Treasury {{ $labels.asset }} balance on {{ $labels.account }} has dropped below the configured floor. Immediate attention required."
+
+      - alert: TreasuryDrainCritical
+        expr: treasury_drain_severity >= 3
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Treasury critically low for {{ $labels.asset }} ({{ $labels.account }})"
+          description: "Treasury {{ $labels.asset }} balance on {{ $labels.account }} is below 50% of floor. Instant payouts may be at risk of outage."
+
+      - alert: TreasuryPollStale
+        expr: |
+          time() - treasury_poll_failures_total > 300
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Treasury poll failures detected"
+          description: "Treasury balance poller has been failing for over 5 minutes. Alarm state may be stale."
+
+      - alert: TreasuryUnknownAsset
+        expr: rate(treasury_unknown_asset_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Unknown asset observed in treasury for {{ $labels.asset }}"
+          description: "An asset not in the known-assets set was observed in a treasury balance response. Verify treasury configuration."
