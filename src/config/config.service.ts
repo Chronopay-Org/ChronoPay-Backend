@@ -76,6 +76,10 @@ export class ConfigService {
     return this.envConfig.rateLimitMax;
   }
 
+  public get quotaFailMode() {
+    return this.envConfig.quotaFailMode;
+  }
+
   public get trustProxy() {
     return this.envConfig.trustProxy;
   }
@@ -125,7 +129,6 @@ export class ConfigService {
   }
 
   public get corsAllowedOrigins() {
-    // @ts-expect-error - Auto-fixed by script
     return [...this.envConfig.corsAllowedOrigins];
   }
 

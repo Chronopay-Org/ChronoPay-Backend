@@ -55,25 +55,25 @@ export function createErrorHandler(
   ): void => {
     logError(err, req);
 
-    const requestId = req.requestId ?? req.id;
+    const requestId =
+      req.requestId ?? (typeof req.id === "string" ? req.id : undefined);
     const statusCode = getStatusCode(err);
 
-    let envelope: AppErrorEnvelope & { stack?: string };
+    let envelope: AppErrorEnvelope;
 
     if (isAppError(err)) {
       envelope = (err as AppError).toJSON();
     } else {
-      // @ts-expect-error - Auto-fixed by script
       envelope = {
         success: false,
         code: ERROR_CODES.INTERNAL_ERROR.code,
+        message: unknownErrorMessage,
         error: unknownErrorMessage,
         timestamp: new Date().toISOString(),
       };
     }
 
     if (requestId !== undefined) {
-      // @ts-expect-error - Auto-fixed by script
       envelope.requestId = requestId;
     }
 

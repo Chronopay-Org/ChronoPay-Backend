@@ -78,6 +78,11 @@ describe("AccessReviewService", () => {
   // ── Quarter Label Helpers (module-level functions) ───────────────────────
 
   describe("computeQuarterLabel (module-level)", () => {
+    it("uses UTC quarter boundaries at March 31 and April 1", () => {
+      expect(computeQuarterLabel(new Date("2025-03-31T23:59:59Z"))).toBe("2025-Q1");
+      expect(computeQuarterLabel(new Date("2025-04-01T00:00:00Z"))).toBe("2025-Q2");
+    });
+
     it("computes Q1 for January", () => {
       expect(computeQuarterLabel(new Date("2026-01-15"))).toBe("2026-Q1");
     });
@@ -103,11 +108,11 @@ describe("AccessReviewService", () => {
   describe("computeQuarterRange (module-level)", () => {
     it("returns correct range for Q2 2026", () => {
       const range = computeQuarterRange("2026-Q2");
-      expect(range.start.getFullYear()).toBe(2026);
-      expect(range.start.getMonth()).toBe(3);
-      expect(range.start.getDate()).toBe(1);
-      expect(range.end.getMonth()).toBe(5);
-      expect(range.end.getDate()).toBe(30);
+      expect(range.start.getUTCFullYear()).toBe(2026);
+      expect(range.start.getUTCMonth()).toBe(3);
+      expect(range.start.getUTCDate()).toBe(1);
+      expect(range.end.getUTCMonth()).toBe(5);
+      expect(range.end.getUTCDate()).toBe(30);
     });
 
     it("throws on invalid quarter label", () => {

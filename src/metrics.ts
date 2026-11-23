@@ -16,7 +16,7 @@ try {
 const OVERFLOW_LABEL_VALUE = "__overflow__";
 
 type LabelValues = Record<string, string | number | boolean | null | undefined>;
-type BudgetedLabelMetric<T> = T & {
+export type BudgetedLabelMetric<T> = T & {
   labels: (...values: Array<string | number | boolean | LabelValues>) => T;
 };
 
@@ -544,6 +544,18 @@ export const partnerQuotaExceededTotal = createBudgetedCounter({
   help: "Total number of blocked requests due to quota exhaustion per token",
   labels: ["token_id"],
   budget: 512,
+  registers: [register],
+});
+
+/**
+ * Counter incremented when a partner quota check fails, labelled by the
+ * configured failure mode.
+ */
+export const partnerQuotaCheckFailures = createBudgetedCounter({
+  name: "partner_quota_check_failures_total",
+  help: "Total number of failed partner quota checks by failure mode",
+  labels: ["mode"],
+  budget: 2,
   registers: [register],
 });
 
