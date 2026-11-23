@@ -16,7 +16,7 @@ try {
 const OVERFLOW_LABEL_VALUE = "__overflow__";
 
 type LabelValues = Record<string, string | number | boolean | null | undefined>;
-type BudgetedLabelMetric<T> = T & {
+export type BudgetedLabelMetric<T> = T & {
   labels: (...values: Array<string | number | boolean | LabelValues>) => T;
 };
 
@@ -34,6 +34,11 @@ interface BudgetedCounterOptions extends CardinalityBudgetOptions {
 interface BudgetedHistogramOptions extends CardinalityBudgetOptions {
   help: string;
   buckets: number[];
+  registers?: Registry[];
+}
+
+interface BudgetedGaugeOptions extends CardinalityBudgetOptions {
+  help: string;
   registers?: Registry[];
 }
 
@@ -135,7 +140,7 @@ export function createBudgetedHistogram(options: BudgetedHistogramOptions): Budg
   return histogram;
 }
 
-export function createBudgetedGauge(options: BudgetedHistogramOptions): BudgetedLabelMetric<Gauge> {
+export function createBudgetedGauge(options: BudgetedGaugeOptions): BudgetedLabelMetric<Gauge> {
   registerCardinalityBudget(options);
   const gauge = new Gauge({
     name: options.name,

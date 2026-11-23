@@ -1,6 +1,67 @@
+import { jest } from "@jest/globals";
 import { expandRRule, RecurrenceError } from "../recurrenceService.js";
 
 describe("RecurrenceService", () => {
+  describe("expandRRule() dtstartIso handling", () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("uses dtstartIso as DTSTART when the text has none", () => {
+      const rrule = "FREQ=WEEKLY;COUNT=3;BYDAY=MO";
+      const occ = expandRRule(rrule, "2026-07-06T10:00:00.000Z");
+
+      expect(occ).toHaveLength(3);
+      expect(occ[0].toISOString()).toBe("2026-07-06T10:00:00.000Z");
+      expect(occ[1].toISOString()).toBe("2026-07-13T10:00:00.000Z");
+      expect(occ[2].toISOString()).toBe("2026-07-20T10:00:00.000Z");
+    });
+
+    it("honours an existing DTSTART instead of dtstartIso", () => {
+      const rrule =
+        "DTSTART:20260101T090000Z\nRRULE:FREQ=DAILY;COUNT=2";
+      const occ = expandRRule(rrule, "2026-07-06T10:00:00.000Z");
+
+      expect(occ[0].toISOString()).toBe("2026-01-01T09:00:00.000Z");
+      expect(occ[1].toISOString()).toBe("2026-01-02T09:00:00.000Z");
+    });
+
+    it("detects an existing DTSTART with parameters case-insensitively", () => {
+      const rrule =
+        "dtstart;tzid=UTC:20260201T120000Z\nRRULE:FREQ=DAILY;COUNT=1";
+      const occ = expandRRule(rrule, "2026-07-06T10:00:00.000Z");
+
+      expect(occ[0].toISOString()).toBe("2026-02-01T12:00:00.000Z");
+    });
+
+    it("throws RecurrenceError for invalid dtstartIso", () => {
+      const rrule = "FREQ=WEEKLY;COUNT=3;BYDAY=MO";
+      expect(() => expandRRule(rrule, "")).toThrow(RecurrenceError);
+      expect(() => expandRRule(rrule, "   ")).toThrow(RecurrenceError);
+      expect(() => expandRRule(rrule, "not-a-date")).toThrow(RecurrenceError);
+      expect(() => expandRRule(rrule, "2026-13-45T99:99:99Z")).toThrow(
+        RecurrenceError,
+      );
+    });
+
+    it("is deterministic across different system clocks", () => {
+      const rrule = "FREQ=WEEKLY;COUNT=3;BYDAY=MO";
+      const dtstartIso = "2026-07-06T10:00:00.000Z";
+
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+      const first = expandRRule(rrule, dtstartIso);
+
+      jest.setSystemTime(new Date("1990-06-15T23:59:59.000Z"));
+      const second = expandRRule(rrule, dtstartIso);
+
+      expect(second.map((d) => d.toISOString())).toEqual(
+        first.map((d) => d.toISOString()),
+      );
+      expect(first[0].toISOString()).toBe("2026-07-06T10:00:00.000Z");
+    });
+  });
+
   describe("Basic limitations", () => {
     it("rejects unbounded rrule", () => {
       const rrule = "FREQ=WEEKLY;BYDAY=MO"; // no COUNT or UNTIL

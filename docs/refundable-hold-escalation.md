@@ -4,6 +4,25 @@
 
 When a payment capture completes for a refundable hold, the booking state automatically escalates from `confirmed` to `firm`, representing a non-refundable commitment.
 
+## Hold Auto-Refund Worker
+
+Holds that are never captured expire when their `holdUntilMs` deadline passes. The hold auto-refund worker (`src/scheduler/holdAutoRefundWorker.ts`) runs in the background, polls `BookingIntentRepository.findExpiredHolds`, and calls `BookingIntentService.autoRefundHold` for each expired hold.
+
+The worker is wired from `src/index.ts` and shares the process-wide singleton repository with the HTTP routes (via `src/modules/booking-intents/bookingIntentContainer.ts`), so refunds issued by the worker are immediately visible through the API.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `HOLD_AUTO_REFUND_DISABLED` | _(unset)_ | Set to `"true"` to disable the worker entirely (e.g. read-only replicas, single-shot scripts). |
+| `HOLD_AUTO_REFUND_INTERVAL_MS` | `60000` | Polling interval in milliseconds. |
+| `HOLD_AUTO_REFUND_BATCH_SIZE` | `100` | Maximum holds processed per cycle. |
+| `HOLD_AUTO_REFUND_SAFETY_THRESHOLD` | `1000` | Circuit-breaker: the cycle is skipped if more expired holds are found than this value, to prevent runaway mass-refunds. |
+
+### Lifecycle
+
+The worker registers a stop hook with `ApplicationLifecycle` under the name `"hold-auto-refund"`. On `SIGTERM` or `SIGINT` the loop exits cleanly via an `AbortController` without leaving a pending timer.
+
 ## State Transitions
 
 - **confirmed → firm**: Payment captured (Captured event)

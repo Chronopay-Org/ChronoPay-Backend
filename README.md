@@ -73,6 +73,8 @@ Copy `.env.example` to `.env`. Variables listed there:
 
 | Variable | Purpose |
 | --- | --- |
+| `REDIS_URL` | Redis connection URL for local development (default `redis://localhost:6379`) |
+| `DATABASE_URL` | PostgreSQL connection URL for local development |
 | `JWT_SECRET` | JWT signing secret (>= 32 random chars) |
 | `PORT` | Listen port (default 3001) |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated origins; must be set explicitly in production |
@@ -80,7 +82,7 @@ Copy `.env.example` to `.env`. Variables listed there:
 | `MFA_ENCRYPTION_KEY`, `MFA_CHALLENGE_SECRET` | Required for MFA endpoints |
 | `MFA_ISSUER`, `MFA_FRESHNESS_MS`, `MFA_WINDOW_PERIODS`, `MFA_CHALLENGE_TTL_SEC` | Optional MFA tuning |
 
-`src/config/env.ts` additionally reads (not all in `.env.example`): `NODE_ENV`, `REDIS_URL` (required), `HORIZON_URL`/`HORIZON_URLS`, `STELLAR_NETWORK_PASSPHRASE`, `ESCROW_CONTRACT_HASH`, `JWT_ISSUER`, `JWT_AUDIENCE`, `WEBHOOK_SECRET`, `INTERNAL_OVERRIDE_SECRET(_PREV)`, `INTERNAL_BYPASS_TOLERANCE_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, `REQUEST_TIMEOUT_MS`, `TRUST_PROXY`. See [docs/environment-validation.md](docs/environment-validation.md) for validation rules. A database connection is configured in `src/db/` (see [docs/database/migrations.md](docs/database/migrations.md)).
+`src/config/env.ts` additionally reads (not all in `.env.example`): `NODE_ENV`, `HORIZON_URL`/`HORIZON_URLS`, `STELLAR_NETWORK_PASSPHRASE`, `ESCROW_CONTRACT_HASH`, `JWT_ISSUER`, `JWT_AUDIENCE`, `WEBHOOK_SECRET`, `INTERNAL_OVERRIDE_SECRET(_PREV)`, `INTERNAL_BYPASS_TOLERANCE_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, `REQUEST_TIMEOUT_MS`, `TRUST_PROXY`. See [docs/environment-validation.md](docs/environment-validation.md) for validation rules. A database connection is configured in `src/db/` (see [docs/database/migrations.md](docs/database/migrations.md)).
 
 ### Checkout redirect destinations (#1325)
 

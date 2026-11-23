@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Reputation Transparency Routes
  *
@@ -6,52 +5,123 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import { reputationTransparencyService } from "../services/reputationTransparencyService.js";
+import {
+  reputationTransparencyService,
+  type ReputationSignalProjectionResponse,
+} from "../services/reputationTransparencyService.js";
 import { recordReputationQuery } from "../metrics.js";
 import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 
 const router = Router();
 
+const TENANT_ID_MAX_LENGTH = 128;
+const TENANT_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+
 /**
- * Extracts authenticated actor details from JWT payload or ChronoPay custom headers.
+ * Shape of the JWT payload attached to `req.user` by the auth middleware.
  */
-function getAuthenticatedActor(req: Request): {
-  userId: string | null;
+interface JwtUser {
+  sub?: string;
+  id?: string;
+  role?: string;
+  tenantId?: string;
+}
+
+/**
+ * Shape of the legacy `req.auth` context attached by header-based auth.
+ */
+interface AuthContext {
+  userId?: unknown;
+  role?: unknown;
+}
+
+/**
+ * Verified caller identity used by the reputation authorization checks.
+ */
+interface Actor {
+  userId: string;
   role: string | null;
   tenantId: string | null;
-} {
-  const tenantId = (req.headers["x-tenant-id"] as string)?.trim() || null;
+}
 
-  if (req.auth?.userId) {
+/**
+ * Normalise an optional header value into a trimmed, non-empty string.
+ */
+function readNonEmptyString(value: unknown): string | null {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (typeof candidate !== "string") return null;
+  const trimmed = candidate.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Validate the `x-tenant-id` header.
+ *
+ * A malformed tenant header is ignored rather than rejected so that legacy
+ * clients without tenant scoping keep their existing authorization result.
+ * Valid values are 1..128 characters from a conservative, URL-safe charset.
+ */
+export function parseValidTenantId(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const tenantId = raw.trim();
+  if (tenantId.length === 0) return undefined;
+  if (tenantId.length > TENANT_ID_MAX_LENGTH) return undefined;
+  if (!TENANT_ID_PATTERN.test(tenantId)) return undefined;
+  return tenantId;
+}
+
+function readHeader(req: Request, names: string[]): string | null {
+  for (const name of names) {
+    const value = readNonEmptyString(req.headers[name]);
+    if (value) return value;
+  }
+  return null;
+}
+
+/**
+ * Extracts authenticated actor details from JWT payload or ChronoPay custom headers.
+ * Returns `null` when the request carries no usable identity.
+ */
+function getAuthenticatedActor(req: Request): Actor | null {
+  const tenantId = parseValidTenantId(req.headers["x-tenant-id"]) ?? null;
+
+  const auth = req.auth as AuthContext | undefined;
+  const authUserId = readNonEmptyString(auth?.userId);
+  if (authUserId) {
     return {
-      userId: req.auth.userId,
-      role: req.auth.role || null,
+      userId: authUserId,
+      role: readNonEmptyString(auth?.role),
       tenantId,
     };
   }
 
-  if (req.user) {
-    const userObj = req.user as any;
-    return {
-      userId: userObj.sub || userObj.id || null,
-      role: userObj.role || null,
-      tenantId,
-    };
+  const jwtUser = req.user as JwtUser | undefined;
+  if (jwtUser) {
+    const jwtUserId =
+      readNonEmptyString(jwtUser.sub) ?? readNonEmptyString(jwtUser.id);
+    if (jwtUserId) {
+      return {
+        userId: jwtUserId,
+        role: readNonEmptyString(jwtUser.role),
+        tenantId,
+      };
+    }
   }
 
-  const userIdHeader =
-    (req.headers["x-supplier-owner-id"] as string) ||
-    (req.headers["x-chronopay-user-id"] as string) ||
-    (req.headers["x-user-id"] as string);
-
-  const roleHeader =
-    (req.headers["x-chronopay-role"] as string) ||
-    (req.headers["x-user-role"] as string) ||
-    (req.headers["x-role"] as string);
+  const userId = readHeader(req, [
+    "x-supplier-owner-id",
+    "x-chronopay-user-id",
+    "x-user-id",
+  ]);
+  if (!userId) return null;
 
   return {
-    userId: userIdHeader ? userIdHeader.trim() : null,
-    role: roleHeader ? roleHeader.trim().toLowerCase() : null,
+    userId,
+    role: readHeader(req, [
+      "x-chronopay-role",
+      "x-user-role",
+      "x-role",
+    ])?.toLowerCase() ?? null,
     tenantId,
   };
 }
@@ -65,53 +135,61 @@ router.get(
   "/:supplierId/reputation/signals",
   createAuthAwareRateLimiter(),
   (req: Request, res: Response) => {
-  try {
     const { supplierId } = req.params;
+    const tenantId = parseValidTenantId(req.headers["x-tenant-id"]) ?? "unknown";
     const actor = getAuthenticatedActor(req);
 
-    if (!actor.userId) {
-      recordReputationQuery(actor.tenantId || "unknown", "unauthorized");
-      return res.status(401).json({
+    try {
+      if (!actor) {
+        recordReputationQuery(tenantId, "unauthorized");
+        return res.status(401).json({
+          success: false,
+          error: "Authentication required to access reputation signals",
+        });
+      }
+
+      const { isAuthorized, isNotFound, isForbidden } =
+        reputationTransparencyService.verifyOwnership(
+          supplierId,
+          actor.userId,
+          actor.role ?? undefined,
+          actor.tenantId ?? undefined,
+        );
+
+      if (isNotFound) {
+        recordReputationQuery(actor.tenantId ?? "unknown", "not_found");
+        return res.status(404).json({
+          success: false,
+          error: `Supplier with ID '${supplierId}' was not found.`,
+        });
+      }
+
+      if (isForbidden || !isAuthorized) {
+        recordReputationQuery(actor.tenantId ?? "unknown", "forbidden");
+        return res.status(403).json({
+          success: false,
+          error:
+            "Access denied: you are not authorized to view this supplier's reputation signals.",
+        });
+      }
+
+      const projection: ReputationSignalProjectionResponse =
+        reputationTransparencyService.getSignalProjection(supplierId);
+
+      return res.status(200).json({
+        success: true,
+        data: projection,
+      });
+    } catch (error) {
+      return res.status(500).json({
         success: false,
-        error: "Authentication required to access reputation signals",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to retrieve reputation signals",
       });
     }
-
-    const { isAuthorized, isNotFound, isForbidden } = reputationTransparencyService.verifyOwnership(
-      supplierId,
-      actor.userId,
-      actor.role || undefined,
-      actor.tenantId || undefined
-    );
-
-    if (isNotFound) {
-      recordReputationQuery(actor.tenantId || "unknown", "not_found");
-      return res.status(404).json({
-        success: false,
-        error: `Supplier with ID '${supplierId}' was not found.`,
-      });
-    }
-
-    if (isForbidden || !isAuthorized) {
-      recordReputationQuery(actor.tenantId || "unknown", "forbidden");
-      return res.status(403).json({
-        success: false,
-        error: "Access denied: you are not authorized to view this supplier's reputation signals.",
-      });
-    }
-
-    const projection = reputationTransparencyService.getSignalProjection(supplierId);
-
-    return res.status(200).json({
-      success: true,
-      data: projection,
-    });
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: error.message || "Failed to retrieve reputation signals",
-    });
-  }
-});
+  },
+);
 
 export default router;
