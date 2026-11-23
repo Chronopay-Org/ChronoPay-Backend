@@ -11,6 +11,10 @@
  * These tests drive the full createApp() wiring because the exposure only
  * exists at the app-mount level (registerWebhookRoutes + app.use("/api/v1",
  * webhookRoutes)).
+ *
+ * Also covers the transactionId / x-tenant-id validation added for the
+ * idempotency-key issue: malformed ids must be rejected with 400 before any
+ * store access, so they can never collapse onto a shared "undefined" key.
  */
 import {
   jest,
@@ -63,7 +67,7 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-function settlementPayload(transactionId = "txn-1307-unsigned") {
+function settlementPayload(transactionId: unknown = "txn-1307-unsigned") {
   return {
     eventType: "settlement_completed",
     transactionId,
@@ -71,6 +75,16 @@ function settlementPayload(transactionId = "txn-1307-unsigned") {
     // Fresh timestamp: the /api/v1 settlement handler rejects stale payloads.
     timestamp: Date.now(),
   };
+}
+
+function signedRequest(body: unknown) {
+  const signature = createHmac("sha256", SETTLEMENT_SECRET)
+    .update(JSON.stringify(body))
+    .digest("hex");
+  return request(app)
+    .post("/api/v1/webhooks/settlements")
+    .set("x-webhook-signature", signature)
+    .send(body as object);
 }
 
 describe("security regression #1307: unauthenticated settlement & idempotency routes", () => {
@@ -148,14 +162,7 @@ describe("security regression #1307: unauthenticated settlement & idempotency ro
   describe("POST /api/v1/webhooks/settlements (the protected provider path)", () => {
     it("keeps working with a valid HMAC signature", async () => {
       const body = settlementPayload("txn-1307-signed");
-      const signature = createHmac("sha256", SETTLEMENT_SECRET)
-        .update(JSON.stringify(body))
-        .digest("hex");
-
-      const res = await request(app)
-        .post("/api/v1/webhooks/settlements")
-        .set("x-webhook-signature", signature)
-        .send(body);
+      const res = await signedRequest(body);
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
@@ -163,6 +170,62 @@ describe("security regression #1307: unauthenticated settlement & idempotency ro
         status: "pending_finality",
         amount: 100,
       });
+    });
+
+    it("rejects a missing transactionId with 400 and writes nothing", async () => {
+      const body = settlementPayload(undefined);
+      delete (body as Record<string, unknown>).transactionId;
+      const idemSpy = jest.spyOn(WebhookIdempotencyStore, "saveKey");
+
+      const res = await signedRequest(body);
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(JSON.stringify(res.body)).toMatch(/transactionId/);
+      expect(idemSpy).not.toHaveBeenCalled();
+      expect(_settlements.size).toBe(0);
+    });
+
+    it("rejects a numeric-object transactionId with 400 and writes nothing", async () => {
+      const idemSpy = jest.spyOn(WebhookIdempotencyStore, "saveKey");
+
+      const res = await signedRequest(settlementPayload({ id: 1307 }));
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(JSON.stringify(res.body)).toMatch(/transactionId/);
+      expect(idemSpy).not.toHaveBeenCalled();
+      expect(_settlements.size).toBe(0);
+    });
+
+    it("rejects an oversize transactionId (>128 chars) with 400 and writes nothing", async () => {
+      const idemSpy = jest.spyOn(WebhookIdempotencyStore, "saveKey");
+
+      const res = await signedRequest(settlementPayload("a".repeat(129)));
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(JSON.stringify(res.body)).toMatch(/transactionId/);
+      expect(idemSpy).not.toHaveBeenCalled();
+      expect(_settlements.size).toBe(0);
+    });
+
+    it("rejects an x-tenant-id that exceeds the length bound with 400", async () => {
+      const body = settlementPayload("txn-1307-tenant");
+      const signature = createHmac("sha256", SETTLEMENT_SECRET)
+        .update(JSON.stringify(body))
+        .digest("hex");
+
+      const res = await request(app)
+        .post("/api/v1/webhooks/settlements")
+        .set("x-webhook-signature", signature)
+        .set("x-tenant-id", "t".repeat(129))
+        .send(body);
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(JSON.stringify(res.body)).toMatch(/x-tenant-id/);
+      expect(_settlements.has("txn-1307-tenant")).toBe(false);
     });
   });
 });
