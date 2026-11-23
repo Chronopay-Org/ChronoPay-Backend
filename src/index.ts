@@ -20,6 +20,37 @@ const lifecycle = new ApplicationLifecycle(
 );
 lifecycle.registerStop("reminders", stopScheduler);
 
+// Evaluates supplier tier alerts hourly when the alert service is enabled.
+(async () => {
+  if (process.env.TIER_ALERT_SCHEDULER_DISABLED === "true") {
+    logger.info("tier-alert-scheduler disabled via TIER_ALERT_SCHEDULER_DISABLED");
+    return;
+  }
+
+  const { defaultSupplierTierAlertService } = await import(
+    "./services/supplierTierAlertService.js"
+  );
+  if (!defaultSupplierTierAlertService.isEnabled()) {
+    logger.info("tier-alert-scheduler skipped: supplier tier alert service is disabled");
+    return;
+  }
+
+  const { createTierAlertScheduler } = await import("./scheduler/tierAlertScheduler.js");
+  if (lifecycle.isShuttingDown) return;
+  const scheduler = createTierAlertScheduler({
+    runIntervalMs: Number(process.env.TIER_ALERT_INTERVAL_MS) || undefined,
+    onAlert: (alert) => {
+      logger.warn(
+        { supplierId: alert.supplierId, tier: alert.toTier },
+        "supplier tier alert",
+      );
+    },
+  });
+  lifecycle.registerStop("tier-alert-scheduler", () => scheduler.stop());
+  scheduler.start();
+  logger.info("tier-alert-scheduler started");
+})();
+
 // Validate pinned escrow contract hash on startup
 const pinnedHash = escrowMigrationState.getPinnedHash();
 if (pinnedHash) {
