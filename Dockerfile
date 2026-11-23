@@ -39,5 +39,8 @@ EXPOSE 3001
 # Use a non-root user for security
 USER node
 
+# Probe /live rather than /health/ready so external dependencies do not affect liveness
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3001)+'/live',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+
 # Start the application
 CMD ["node", "dist/index.js"]
