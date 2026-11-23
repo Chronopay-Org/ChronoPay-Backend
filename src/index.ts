@@ -64,8 +64,8 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   const { startDisputeDeadlineScheduler, stopDisputeDeadlineScheduler } =
     await import("./scheduler/disputeDeadlineScheduler.js");
 
-  // Dynamically import admin routes to get the disputes map.
-  const { getDisputes } = await import("./routes/admin.js");
+  // Dynamically import the disputes router to get its in-memory state.
+  const { getDisputes } = await import("./routes/adminDisputes.js");
 
   if (lifecycle.isShuttingDown) return;
   lifecycle.registerStop("dispute-deadline", stopDisputeDeadlineScheduler);
