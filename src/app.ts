@@ -11,7 +11,7 @@ import {
   genericErrorHandler,
   jsonParseErrorHandler,
   notFoundHandler,
-} from "./middleware/errorHandling.js";
+} from "./middleware/errorHandler.js";
 
 import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware } from "./middleware/featureFlags.js";
