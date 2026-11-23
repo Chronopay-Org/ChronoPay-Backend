@@ -45,7 +45,7 @@ new bookable slot record into `SlotRepository`. This composition fix verifies
 those actual existing effects rather than claiming SQL/on-chain slot creation.
 Persistent/bookable slot insertion and route authentication remain separate work.
 
-All business routes are under `/api/v1`. Interactive docs are served at `/api-docs` and the generated spec is in `openapi-spec.json` (`npm run generate-openapi`). The list below is derived from the router files; consult the OpenAPI spec and `docs/api/` for request/response shapes.
+All business routes are under `/api/v1`. Interactive docs are served at `/api-docs` and the generated spec is in `openapi-spec.json` (`npm run generate-openapi`). The OpenAPI info version follows the `version` in `package.json`. The list below is derived from the router files; consult the OpenAPI spec and `docs/api/` for request/response shapes.
 
 **Operational (unversioned):** `GET /health`, `/health/horizon`, `/health/ready`, `/ready`, `/live`, `/metrics`.
 
