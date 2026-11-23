@@ -98,7 +98,7 @@ export interface CheckoutSession {
   status: CheckoutSessionStatus;
   /** Unix timestamp when session was created */
   createdAt: number;
-  /** Unix timestamp when session expires */
+  /** Unix timestamp in seconds when the session expires. */
   expiresAt: number;
   /** Optional metadata for tracking */
   metadata?: Record<string, string | number | boolean>;

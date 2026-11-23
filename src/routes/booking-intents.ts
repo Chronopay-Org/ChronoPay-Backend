@@ -34,6 +34,7 @@ import {
 import { isAppError } from "../errors/AppError.js";
 import { InMemoryBookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
 import { InMemorySlotRepository } from "../modules/slots/slot-repository.js";
+import { bookingIntentContainer } from "../modules/booking-intents/bookingIntentContainer.js";
 import { logger } from "../utils/logger.js";
 import { FraudScorer } from "../services/fraudScorer.js";
 import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../middleware/payloadLimit.js";
@@ -45,11 +46,18 @@ export function createBookingIntentsRouter(
   } = {},
 ) {
   const router = Router();
-  // ─── Repositories (replace with DB layer in production) ────────────────────
+  // ─── Repositories ───────────────────────────────────────────────────────────
+  // When called with no arguments (the default from app.ts) we use the
+  // process-wide singleton from bookingIntentContainer so that the HTTP routes
+  // and the hold auto-refund worker share the same in-memory state.
+  // Tests that need isolated state pass their own repository instances.
   const bookingIntentRepository =
-    options.bookingIntentRepository ?? new InMemoryBookingIntentRepository();
-  const slotRepository = options.slotRepository ?? new InMemorySlotRepository();
-  const bookingIntentService = new BookingIntentService(bookingIntentRepository, slotRepository);
+    options.bookingIntentRepository ?? bookingIntentContainer.bookingIntentRepository;
+  const slotRepository = options.slotRepository ?? bookingIntentContainer.slotRepository;
+  const bookingIntentService =
+    options.bookingIntentRepository != null || options.slotRepository != null
+      ? new BookingIntentService(bookingIntentRepository, slotRepository)
+      : bookingIntentContainer.bookingIntentService;
 
   function handleServiceError(error: unknown, res: Response): void {
     if (error instanceof BookingIntentError) {

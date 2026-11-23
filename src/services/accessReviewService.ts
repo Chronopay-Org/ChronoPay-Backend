@@ -34,11 +34,11 @@ import type {
   ReportFormat,
   SnapshotSummary,
 } from "../types/accessReview.js";
+import { ACCESS_REVIEW_MAX_LIMIT as MAX_LIST_LIMIT } from "../constants/accessReview.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEFAULT_LIST_LIMIT = 50;
-const MAX_LIST_LIMIT = 200;
 const ROLES_CONFIG_URL = new URL("../config/roles.json", import.meta.url);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -705,3 +705,4 @@ export const accessReviewService = new AccessReviewService();
 export function resetAccessReviewService(): void {
   accessReviewService.clear();
 }
+

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * outboxRelay.ts
  *
@@ -34,8 +33,16 @@ export interface OutboxEvent {
   event_type: string;
   aggregate_id: string;
   payload: unknown;
-  created_at: Date;
+  created_at: Date | number;
   acked_at: Date | null;
+}
+
+function timestampMilliseconds(value: Date | number): number {
+  return value instanceof Date ? value.getTime() : value;
+}
+
+function compareCreatedAt(a: OutboxEvent, b: OutboxEvent): number {
+  return timestampMilliseconds(a.created_at) - timestampMilliseconds(b.created_at);
 }
 
 /**
@@ -109,9 +116,7 @@ export class SqlOutboxStore implements OutboxStore {
                  events.payload, events.created_at, events.acked_at`,
       [limit, OUTBOX_CLAIM_LEASE_MS],
     );
-    return result.rows.sort(
-      (a, b) => a.created_at.getTime() - b.created_at.getTime(),
-    );
+    return result.rows.sort(compareCreatedAt);
   }
 
   async markAcked(id: string): Promise<void> {
@@ -127,7 +132,7 @@ export class SqlOutboxStore implements OutboxStore {
 /**
  * In-memory outbox store for testing.
  */
-export class InMemoryOutboxStore {
+export class InMemoryOutboxStore implements OutboxStore {
   private readonly rows = new Map<string, OutboxEvent>();
   private readonly claimedUntil = new Map<string, number>();
 
@@ -148,7 +153,7 @@ export class InMemoryOutboxStore {
           row.acked_at === null &&
           (this.claimedUntil.get(row.id) ?? 0) <= now,
       )
-      .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())
+      .sort(compareCreatedAt)
       .slice(0, limit);
     const claimedUntil = now + this.claimLeaseMs;
     for (const row of unacked) {

@@ -76,6 +76,10 @@ export class ConfigService {
     return this.envConfig.rateLimitMax;
   }
 
+  public get quotaFailMode() {
+    return this.envConfig.quotaFailMode;
+  }
+
   public get trustProxy() {
     return this.envConfig.trustProxy;
   }

@@ -60,6 +60,15 @@ export const CreateSlotBodySchema = z
 
 export type CreateSlotBody = z.infer<typeof CreateSlotBodySchema>;
 
+/**
+ * Schema for PATCH /api/v1/slots/:id body.
+ *
+ * Accepts any subset of the slot creation fields and rejects unknown fields.
+ */
+export const UpdateSlotBodySchema = CreateSlotBodySchema.partial().strict();
+
+export type UpdateSlotBody = z.infer<typeof UpdateSlotBodySchema>;
+
 // ─── Booking Intents ──────────────────────────────────────────────────────────
 
 /**
