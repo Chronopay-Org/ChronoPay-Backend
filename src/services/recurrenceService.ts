@@ -225,11 +225,46 @@ export function expandRRuleWithExdate(
  * existing callers that do not need the detailed exclusion report can continue
  * to use this function unchanged.
  *
- * @param rruleText  iCalendar text (may include EXDATE lines).
- * @param _dtstartIso  Unused; retained for API compatibility.
+ * When `dtstartIso` is supplied and the text does not already contain a
+ * `DTSTART` line, the parsed instant is normalised to RFC 5545 UTC form
+ * (`YYYYMMDDTHHMMSSZ`) and prepended as `DTSTART:<stamp>`. This makes expansion
+ * deterministic instead of defaulting to the system clock. If the text already
+ * contains a `DTSTART` line it takes precedence and is left untouched.
+ *
+ * @param rruleText   iCalendar text (may include DTSTART and EXDATE lines).
+ * @param dtstartIso  Optional ISO-8601 instant used as DTSTART when absent.
+ * @throws RecurrenceError if `dtstartIso` is not a valid ISO-8601 date.
  */
-export function expandRRule(rruleText: string, _dtstartIso?: string): Date[] {
-  return expandRRuleWithExdate(rruleText).occurrences;
+export function expandRRule(rruleText: string, dtstartIso?: string): Date[] {
+  let effectiveText = rruleText;
+
+  if (dtstartIso !== undefined) {
+    const dtstart = new Date(dtstartIso);
+    if (
+      typeof dtstartIso !== "string" ||
+      dtstartIso.trim().length === 0 ||
+      Number.isNaN(dtstart.getTime())
+    ) {
+      throw new RecurrenceError(`Invalid dtstartIso: ${String(dtstartIso)}`);
+    }
+
+    // Respect an explicit DTSTART already present in the text.
+    if (!/^DTSTART(?:;[^:]*)?:/im.test(effectiveText)) {
+      effectiveText = `DTSTART:${formatUtcStamp(dtstart)}\n${effectiveText}`;
+    }
+  }
+
+  return expandRRuleWithExdate(effectiveText).occurrences;
+}
+
+/**
+ * Format a Date as an RFC 5545 UTC date-time stamp: `YYYYMMDDTHHMMSSZ`.
+ */
+function formatUtcStamp(date: Date): string {
+  return date
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}Z$/, "Z");
 }
 
 export interface RegionalHoliday {
