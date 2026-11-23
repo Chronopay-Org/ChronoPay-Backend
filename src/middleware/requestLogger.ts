@@ -220,10 +220,19 @@ export const createRequestLogger = () => {
     /**
      * Add standardized log fields to every request
      */
-    // @ts-expect-error - Auto-fixed by script
-    customProps: (req: Request, _res: Response) => {
-      const baseContext = buildRequestLogContext(req);
-      const identity = extractIdentity(req);
+    customProps: (req: IncomingMessage, _res: ServerResponse) => {
+      // pino-http also accepts plain Node requests without Express helpers.
+      if (
+        !("get" in req) ||
+        typeof req.get !== "function" ||
+        !("header" in req) ||
+        typeof req.header !== "function"
+      ) {
+        return {};
+      }
+      const expressReq = req as Request;
+      const baseContext = buildRequestLogContext(expressReq);
+      const identity = extractIdentity(expressReq);
       const contextWithIdentity = addIdentityToContext(baseContext, identity);
 
       const traceContext = getTraceContext();

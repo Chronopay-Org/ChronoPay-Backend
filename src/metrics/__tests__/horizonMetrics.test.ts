@@ -12,6 +12,10 @@ function makeGaugeMock(name: string) {
       },
       get: () => gaugeStore[`${name}:${host}`] ?? 0,
     }),
+    remove: (host: string) => {
+      delete gaugeStore[`${name}:${host}`];
+      return true;
+    },
   };
 }
 
@@ -33,6 +37,18 @@ function getRateLimitRemaining(host: string): number {
 }
 function getQueueDepth(host: string): number {
   return gaugeStore[`horizon_request_queue_depth:${host}`] ?? 0;
+}
+function hasRateLimitRemaining(host: string): boolean {
+  return Object.prototype.hasOwnProperty.call(
+    gaugeStore,
+    `horizon_rate_limit_remaining:${host}`,
+  );
+}
+function hasQueueDepth(host: string): boolean {
+  return Object.prototype.hasOwnProperty.call(
+    gaugeStore,
+    `horizon_request_queue_depth:${host}`,
+  );
 }
 
 describe("horizonMetrics", () => {
@@ -61,6 +77,10 @@ describe("horizonMetrics", () => {
 
     it("ignores NaN values without throwing", () => {
       expect(() => recordRateLimitRemaining(HOST, NaN)).not.toThrow();
+    });
+
+    it("ignores Infinity values without throwing", () => {
+      expect(() => recordRateLimitRemaining(HOST, Infinity)).not.toThrow();
     });
 
     it("ignores empty host string without throwing", () => {
@@ -102,6 +122,10 @@ describe("horizonMetrics", () => {
       expect(() => recordQueueDepth(HOST, NaN)).not.toThrow();
     });
 
+    it("ignores Infinity without throwing", () => {
+      expect(() => recordQueueDepth(HOST, Infinity)).not.toThrow();
+    });
+
     it("ignores empty host without throwing", () => {
       expect(() => recordQueueDepth("", 5)).not.toThrow();
     });
@@ -114,6 +138,8 @@ describe("horizonMetrics", () => {
       resetHorizonMetricsForHost(HOST);
       expect(getRateLimitRemaining(HOST)).toBe(0);
       expect(getQueueDepth(HOST)).toBe(0);
+      expect(hasRateLimitRemaining(HOST)).toBe(false);
+      expect(hasQueueDepth(HOST)).toBe(false);
     });
 
     it("does not affect metrics for other hosts", () => {

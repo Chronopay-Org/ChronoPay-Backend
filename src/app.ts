@@ -6,6 +6,7 @@ import express, { type Request, type Response } from "express";
 import { getCORSConfig, validateCORSConfig } from "./config/cors.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
+import { requestIdMiddleware } from "./middleware/requestId.js";
 import { parseCookies } from "./middleware/cookieParser.js";
 import { authenticateTokenIfPresent } from "./middleware/auth.middleware.js";
 import {
@@ -17,6 +18,14 @@ import {
 import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
+import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
+import { createRequestLogger } from "./middleware/requestLogger.js";
+import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./middleware/featureFlags.js";
+import { configService } from "./config/config.service.js";
+import { createBookingIntentsRouter } from "./routes/booking-intents.js";
+import { AmountUtils } from "./utils/amount.js";
+import checkoutRouter from "./routes/checkout.js";
+import discountCurvesRouter from "./routes/discountCurves.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
 import type { Pool } from "pg";
@@ -249,6 +258,8 @@ export function createApp(options: AppFactoryOptions = {}) {
   }
 
   // 0. Global Middleware
+  // Request ids must be resolved before anything that logs or echoes them.
+  app.use(requestIdMiddleware);
   app.use(tracingMiddleware);
   app.use(metricsMiddleware);
   app.use(featureFlagContextMiddleware);
@@ -517,6 +528,10 @@ export function createApp(options: AppFactoryOptions = {}) {
   registerWebhookRoutes(app);
   app.use("/api/v1", webhookRoutes);
 
+  // ── Booking intents routes ─────────────────────────────────────────────────
+  app.use("/api/v1/booking-intents", createBookingIntentsRouter());
+  app.use("/api/v1/checkout", checkoutRouter);
+  app.use("/api/v1/discount-curves", discountCurvesRouter);
   // 6. Notification Routes (SMS)
   // The router enforces its own authentication (requireAuthenticatedActor),
   // feature flag, rate limiting and validation — never bypass it with an
