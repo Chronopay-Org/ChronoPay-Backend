@@ -546,6 +546,18 @@ export const partnerQuotaExceededTotal = createBudgetedCounter({
   registers: [register],
 });
 
+/**
+ * Counter incremented when a partner quota check fails, labelled by the
+ * configured failure mode.
+ */
+export const partnerQuotaCheckFailures = createBudgetedCounter({
+  name: "partner_quota_check_failures_total",
+  help: "Total number of failed partner quota checks by failure mode",
+  labels: ["mode"],
+  budget: 2,
+  registers: [register],
+});
+
 export type DependencyFaultName =
   | "disconnect"
   | "timeout"
