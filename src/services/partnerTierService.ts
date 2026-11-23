@@ -35,5 +35,6 @@ export const partnerTierService = {
 };
 
 export function reloadPartnerTierMap(raw = process.env.PARTNER_API_KEY_TIERS): void {
-  partnerTierMap = parsePartnerTierMap(raw);
+  const next = parsePartnerTierMap(raw);
+  partnerTierMap = next;
 }
