@@ -13,9 +13,11 @@ import { validateRequiredFields } from "./middleware/validation.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
 import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./middleware/featureFlags.js";
+import { configService } from "./config/config.service.js";
 import { createBookingIntentsRouter } from "./routes/booking-intents.js";
 import { AmountUtils } from "./utils/amount.js";
 import checkoutRouter from "./routes/checkout.js";
+import discountCurvesRouter from "./routes/discountCurves.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
 
@@ -580,6 +582,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   // ── Booking intents routes ─────────────────────────────────────────────────
   app.use("/api/v1/booking-intents", createBookingIntentsRouter());
   app.use("/api/v1/checkout", checkoutRouter);
+  app.use("/api/v1/discount-curves", discountCurvesRouter);
 
   if (options.enableTestRoutes) {
     app.get("/__test__/explode", () => {

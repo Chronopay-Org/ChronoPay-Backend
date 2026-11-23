@@ -1,4 +1,5 @@
 import "express";
+import type { ChronoPayRole } from "../middleware/auth.js";
 import type { FeatureFlagAccessor } from "../flags/types.js";
 
 declare module "express-serve-static-core" {
@@ -22,7 +23,7 @@ declare module "express-serve-static-core" {
      */
     auth?: {
       userId: string;
-      role: string;
+      role: ChronoPayRole;
     };
     /**
      * API key identifier (SHA-256 hash) set by requireApiKey middleware.

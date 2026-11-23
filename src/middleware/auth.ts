@@ -8,7 +8,7 @@ import {
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
 
-export type ChronoPayRole = "customer" | "admin" | "professional";
+export type ChronoPayRole = "customer" | "admin" | "professional" | "supplier";
 
 export interface AuthContext {
   userId: string;
@@ -147,7 +147,8 @@ function parseRole(rawRole: string | undefined): ChronoPayRole {
   if (
     normalized === "customer" ||
     normalized === "admin" ||
-    normalized === "professional"
+    normalized === "professional" ||
+    normalized === "supplier"
   ) {
     return normalized;
   }
