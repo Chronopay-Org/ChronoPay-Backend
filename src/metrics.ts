@@ -37,6 +37,12 @@ interface BudgetedHistogramOptions extends CardinalityBudgetOptions {
   registers?: Registry[];
 }
 
+interface BudgetedGaugeOptions extends CardinalityBudgetOptions {
+  help: string;
+  buckets?: number[];
+  registers?: Registry[];
+}
+
 const metricLabelBudgets = new Map<string, {
   labels: string[];
   budget: number;
@@ -135,7 +141,7 @@ export function createBudgetedHistogram(options: BudgetedHistogramOptions): Budg
   return histogram;
 }
 
-export function createBudgetedGauge(options: BudgetedHistogramOptions): BudgetedLabelMetric<Gauge> {
+export function createBudgetedGauge(options: BudgetedGaugeOptions): BudgetedLabelMetric<Gauge> {
   registerCardinalityBudget(options);
   const gauge = new Gauge({
     name: options.name,
