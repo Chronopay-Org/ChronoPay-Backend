@@ -48,6 +48,20 @@ describe("defaults", () => {
   it("applies default enableTestRoutes=false when omitted", () => {
     expect(load().enableTestRoutes).toBe(false);
   });
+
+  it("defaults quotaFailMode to open", () => {
+    expect(load().quotaFailMode).toBe("open");
+  });
+});
+
+describe("QUOTA_FAIL_MODE", () => {
+  it.each(["open", "closed"] as const)("accepts %s", (value) => {
+    expect(load({ QUOTA_FAIL_MODE: value }).quotaFailMode).toBe(value);
+  });
+
+  it("rejects values other than open or closed", () => {
+    expectIssue({ ...VALID, QUOTA_FAIL_MODE: "sometimes" }, "QUOTA_FAIL_MODE");
+  });
 });
 
 // ─── ENABLE_TEST_ROUTES ──────────────────────────────────────────────────────
