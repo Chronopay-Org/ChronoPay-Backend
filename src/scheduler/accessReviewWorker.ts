@@ -19,7 +19,7 @@
  *   ACCESS_REVIEW_LOOKBACK   – How many quarters to check for gaps (default: 8)
  */
 
-import { accessReviewService } from "../services/accessReviewService.js";
+import { accessReviewService, computeQuarterLabel } from "../services/accessReviewService.js";
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -75,13 +75,6 @@ export async function runAccessReviewCheck(): Promise<{
     snapshotId,
     gapCount: gaps.missingQuarters.length,
   };
-}
-
-function computeQuarterLabel(date: Date = new Date()): string {
-  const year = date.getFullYear();
-  const month = date.getMonth();
-  const quarter = Math.floor(month / 3) + 1;
-  return `${year}-Q${quarter}`;
 }
 
 // ─── Scheduler Lifecycle ──────────────────────────────────────────────────────
