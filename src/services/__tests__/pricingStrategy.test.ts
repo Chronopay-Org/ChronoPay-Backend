@@ -254,13 +254,13 @@ describe("resolveBundlePrice", () => {
     resetStore();
   });
 
-  it("returns strategy result without discount when no curves exist", () => {
+  it("returns strategy result without discount when no curves exist", async () => {
     const input: PricingInput = {
       ...BASE,
       config: { strategy: "fixed" },
     };
 
-    const result = resolveBundlePrice("fixed", input, {
+    const result = await resolveBundlePrice("fixed", input, {
       bundleId: "bundle-1",
       supplierId: "supplier-1",
       quantity: 10,
@@ -272,7 +272,7 @@ describe("resolveBundlePrice", () => {
     expect(result.savings).toBe(0);
   });
 
-  it("applies discount curve to bundle pricing", () => {
+  it("applies discount curve to bundle pricing", async () => {
     createDiscountCurve({
       id: "curve-1",
       name: "Test Discount",
@@ -297,7 +297,7 @@ describe("resolveBundlePrice", () => {
       config: { strategy: "fixed" },
     };
 
-    const result = resolveBundlePrice("fixed", input, {
+    const result = await resolveBundlePrice("fixed", input, {
       bundleId: "bundle-1",
       supplierId: "supplier-1",
       quantity: 10,
@@ -310,7 +310,7 @@ describe("resolveBundlePrice", () => {
     expect(result.savings).toBe(2000);
   });
 
-  it("uses strategy result as base for discount", () => {
+  it("uses strategy result as base for discount", async () => {
     createDiscountCurve({
       id: "curve-1",
       name: "Test Discount",
@@ -331,7 +331,7 @@ describe("resolveBundlePrice", () => {
       config: { strategy: "fixed" },
     };
 
-    const result = resolveBundlePrice("fixed", input, {
+    const result = await resolveBundlePrice("fixed", input, {
       bundleId: "bundle-1",
       supplierId: "supplier-1",
       quantity: 1,

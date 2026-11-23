@@ -9,16 +9,16 @@ REST API for **ChronoPay**, a time-tokenization and scheduling marketplace on St
 
 Node.js (ESM) + TypeScript + Express 4. Entry point `src/index.ts` builds the app from `src/app.ts` (`createApp`) and listens on `PORT` (default `3001`).
 
-| Area | Location |
-| --- | --- |
-| Routers (HTTP surface) | `src/routes/`, `src/buyer-profile/` |
-| Business logic | `src/services/`, `src/modules/`, `src/scheduler/` |
-| Persistence | `src/db/` (pg pool, migration runner, drift detector), `src/repositories/` |
-| Redis (idempotency, caching, rate limits) | `src/cache/`, `src/lib/` |
-| Stellar / escrow clients | `src/clients/`, `src/stellar/` |
-| Cross-cutting middleware | `src/middleware/` (auth, RBAC, CORS, rate limit, validation, error envelope) |
-| Observability | `src/metrics/`, `src/tracing/`, pino logging, `ops/` (alert rules, dashboards) |
-| Config validation | `src/config/env.ts` (fails fast on invalid env) |
+| Area                                                                 | Location                                                                             |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Routers (HTTP surface)                                               | `src/routes/`, `src/buyer-profile/`                                                  |
+| Business logic                                                       | `src/services/`, `src/modules/`, `src/scheduler/`                                    |
+| Persistence                                                          | `src/db/` (pg pool, migration runner, drift detector), `src/repositories/`           |
+| Redis (idempotency, caching, rate limits; three client entry points) | `src/cache/redisClient.ts`, `src/utils/redis.ts`, `src/middleware/rateLimitStore.ts` |
+| Stellar / escrow clients                                             | `src/clients/`, `src/stellar/`, `src/lib/`                                           |
+| Cross-cutting middleware                                             | `src/middleware/` (auth, RBAC, CORS, rate limit, validation, error envelope)         |
+| Observability                                                        | `src/metrics/`, `src/tracing/`, pino logging, `ops/` (alert rules, dashboards)       |
+| Config validation                                                    | `src/config/env.ts` (fails fast on invalid env)                                      |
 
 Other dependencies in `package.json`: ethers, `@stellar/stellar-sdk`, zod, prom-client, ioredis, KMS clients (AWS/GCP), swagger-ui-express.
 
@@ -71,16 +71,16 @@ All business routes are under `/api/v1`. Interactive docs are served at `/api-do
 
 Copy `.env.example` to `.env`. Variables listed there:
 
-| Variable | Purpose |
-| --- | --- |
-| `REDIS_URL` | Redis connection URL for local development (default `redis://localhost:6379`) |
-| `DATABASE_URL` | PostgreSQL connection URL for local development |
-| `JWT_SECRET` | JWT signing secret (>= 32 random chars) |
-| `PORT` | Listen port (default 3001) |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated origins; must be set explicitly in production |
+| Variable                                                                                  | Purpose                                                                             |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `REDIS_URL`                                                                               | Redis connection URL for local development (default `redis://localhost:6379`)       |
+| `DATABASE_URL`                                                                            | PostgreSQL connection URL for local development                                     |
+| `JWT_SECRET`                                                                              | JWT signing secret (>= 32 random chars)                                             |
+| `PORT`                                                                                    | Listen port (default 3001)                                                          |
+| `CORS_ALLOWED_ORIGINS`                                                                    | Comma-separated origins; must be set explicitly in production                       |
 | `IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED`, `_ACTIVE_KEY_ID`, `_ACTIVE_KEY`, `_PREVIOUS_KEYS` | Optional AES-256-GCM encryption of idempotency payloads in Redis, with key rotation |
-| `MFA_ENCRYPTION_KEY`, `MFA_CHALLENGE_SECRET` | Required for MFA endpoints |
-| `MFA_ISSUER`, `MFA_FRESHNESS_MS`, `MFA_WINDOW_PERIODS`, `MFA_CHALLENGE_TTL_SEC` | Optional MFA tuning |
+| `MFA_ENCRYPTION_KEY`, `MFA_CHALLENGE_SECRET`                                              | Required for MFA endpoints                                                          |
+| `MFA_ISSUER`, `MFA_FRESHNESS_MS`, `MFA_WINDOW_PERIODS`, `MFA_CHALLENGE_TTL_SEC`           | Optional MFA tuning                                                                 |
 
 `src/config/env.ts` additionally reads (not all in `.env.example`): `NODE_ENV`, `HORIZON_URL`/`HORIZON_URLS`, `STELLAR_NETWORK_PASSPHRASE`, `ESCROW_CONTRACT_HASH`, `JWT_ISSUER`, `JWT_AUDIENCE`, `WEBHOOK_SECRET`, `INTERNAL_OVERRIDE_SECRET(_PREV)`, `INTERNAL_BYPASS_TOLERANCE_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, `REQUEST_TIMEOUT_MS`, `TRUST_PROXY`. See [docs/environment-validation.md](docs/environment-validation.md) for validation rules. A database connection is configured in `src/db/` (see [docs/database/migrations.md](docs/database/migrations.md)).
 
@@ -144,7 +144,7 @@ shutdown deadline; this does not redesign those workers or merge the DB pools.
 
 ## CI and deployment
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`: `npm ci` then `npm run build`. The `Dockerfile` is a multi-stage build producing a production image. `scripts/release-sdk.js` is a helper for OpenAPI-diff-driven SDK versioning (run with `--dry-run` to validate); the only workflow in the repo is the CI build above. Operational material: alert rules and dashboards in `ops/`, secret rotation in `docs/SECRET_ROTATION_RUNBOOK.md`, escrow migration in `docs/runbook/escrow-migration.md`.
+GitHub Actions (`.github/workflows/ci.yml`) runs the CI build (`npm ci` then `npm run build`) on push/PR to `main`. `.github/workflows/malware-scan.yml` and `.github/workflows/pr-malware-guard.yml` also scan pushes and pull requests for malware indicators. The `Dockerfile` is a multi-stage build producing a production image. `scripts/release-sdk.js` is a helper for OpenAPI-diff-driven SDK versioning (run with `--dry-run` to validate). Operational material: alert rules and dashboards in `ops/`, secret rotation in `docs/SECRET_ROTATION_RUNBOOK.md`, escrow migration in `docs/runbook/escrow-migration.md`.
 
 ## Documentation
 

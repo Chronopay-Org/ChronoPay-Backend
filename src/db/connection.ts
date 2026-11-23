@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Pool, PoolClient, PoolConfig } from "pg";
 import { logger } from "../utils/logger.js";
 import { slowQueryCounter, slowQueryDuration, queryBudgetBreaches } from "../metrics.js";
@@ -13,7 +12,7 @@ let pool: Pool | null = null;
 
 /**
  * Replaceable pool factory. Defaults to creating a real pg.Pool.
- * Tests inject a mock factory via _setPoolFactorx() to avoid needing to
+ * Tests inject a mock factory via _setPoolFactory() to avoid needing to
  * mock the `pg` module (which is a CommonJS module and harder to mock in ESM).
  *
  * @internal
@@ -195,8 +194,8 @@ export async function closePool(): Promise<void> {
  * Executes `fn` inside a database transaction with per-request statement_timeout.
  *
  * When an active QueryBudgetContext exists (set by the query-budget middleware),
- * the transaction client runs `SET LOCAL statement_timeout` after BEGIN so that
- * all statements within the transaction respect the budget.
+ * the transaction client calls `set_config('statement_timeout', ...)` after
+ * BEGIN so that all statements within the transaction respect the budget.
  *
  * Acquires a client from the pool, issues BEGIN, and invokes `fn`. On success,
  * COMMIT is issued and the result is returned. On any error thrown by `fn`,
@@ -213,11 +212,19 @@ export async function withTransaction<T>(
   try {
     await client.query("BEGIN");
 
-    // Set statement_timeout for the transaction if a budget is active
-    if (ctx && !ctx.breached) {
-      await client.query(
-        `SET LOCAL statement_timeout = '${ctx.budgetMs}ms'`,
-      );
+    // Set statement_timeout for the transaction if a valid budget is active.
+    // Invalid budgets are skipped so they never reach the database.
+    const ms = ctx?.budgetMs;
+    if (
+      ctx &&
+      !ctx.breached &&
+      typeof ms === "number" &&
+      Number.isSafeInteger(ms) &&
+      ms > 0
+    ) {
+      await client.query("SELECT set_config('statement_timeout', $1, true)", [
+        String(Math.trunc(ms)),
+      ]);
     }
 
     const result = await fn(client);
