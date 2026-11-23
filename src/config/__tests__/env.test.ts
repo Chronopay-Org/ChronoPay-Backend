@@ -266,6 +266,13 @@ describe("optional fields", () => {
     expect(load().corsAllowedOrigins).toEqual([]);
   });
 
+  it("exposes a required origin list and removes blank comma-separated entries", () => {
+    const origins: readonly string[] = load({
+      CORS_ALLOWED_ORIGINS: " https://a.com, ,https://b.com, ",
+    }).corsAllowedOrigins;
+    expect(origins).toEqual(["https://a.com", "https://b.com"]);
+  });
+
   it("accepts TRUST_PROXY=true", () => {
     expect(load({ TRUST_PROXY: "true" }).trustProxy).toBe(true);
   });

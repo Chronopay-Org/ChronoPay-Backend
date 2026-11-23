@@ -39,7 +39,7 @@ export interface EnvConfig {
   webhookSecret?: string;
   jwtIssuer?: string;
   jwtAudience?: string;
-  corsAllowedOrigins?: string[];
+  corsAllowedOrigins: readonly string[];
   /** Stellar Horizon base URLs (comma-separated, first is primary) */
   horizonUrls?: string[];
   /** Stellar network passphrase used to identify the target network */

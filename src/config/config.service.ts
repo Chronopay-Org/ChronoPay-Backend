@@ -129,7 +129,6 @@ export class ConfigService {
   }
 
   public get corsAllowedOrigins() {
-    // @ts-expect-error - Auto-fixed by script
     return [...this.envConfig.corsAllowedOrigins];
   }
 
