@@ -1,0 +1,35 @@
+{
+  "consumer": "frontend-client",
+  "provider": "chronopay-backend",
+  "interactions": [
+    {
+      "description": "creates a checkout session",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/checkout/sessions",
+        "body": {
+          "payment": {
+            "amount": 1000,
+            "currency": "USD",
+            "paymentMethod": "credit_card"
+          },
+          "customer": {
+            "customerId": "cust-123",
+            "email": "person@example.com"
+          }
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "success": true,
+          "session": {
+            "id": "checkout-session-123",
+            "status": "pending"
+          },
+          "checkoutUrl": "https://example.test/checkout/checkout-session-123"
+        }
+      }
+    }
+  ]
+}

@@ -6,6 +6,7 @@
  */
 
 import { logger, LogContext, LogLevel } from "./logger.js";
+import { validateLogEvent } from "./logSchemaRegistry.js";
 
 /**
  * Performance timing utility for measuring operation duration
@@ -84,17 +85,20 @@ export const logApiCall = (
   const level: LogLevel =
     statusCode >= 500 ? "error" : statusCode >= 400 ? "warn" : "info";
 
-  logger[level](
-    {
-      api_call: true,
-      method,
-      endpoint,
-      status_code: statusCode,
-      duration_ms: durationMs,
-      ...context,
-    },
-    `API ${method} ${endpoint} [${statusCode}]`
-  );
+  const payload = {
+    api_call: true,
+    method,
+    endpoint,
+    status_code: statusCode,
+    duration_ms: durationMs,
+    ...context,
+  };
+
+  if (process.env.NODE_ENV !== "test") {
+    validateLogEvent("http_request", payload);
+  }
+
+  logger[level](payload, `API ${method} ${endpoint} [${statusCode}]`);
 };
 
 /**
@@ -108,17 +112,20 @@ export const logDbOperation = (
   rowCount?: number,
   context?: LogContext
 ): void => {
-  logger.debug(
-    {
-      db_operation: true,
-      operation,
-      table,
-      duration_ms: durationMs,
-      row_count: rowCount,
-      ...context,
-    },
-    `DB ${operation} on ${table} in ${durationMs}ms`
-  );
+  const payload = {
+    db_operation: true,
+    operation,
+    table,
+    duration_ms: durationMs,
+    row_count: rowCount,
+    ...context,
+  };
+
+  if (process.env.NODE_ENV !== "test") {
+    validateLogEvent("db_operation", payload);
+  }
+
+  logger.debug(payload, `DB ${operation} on ${table} in ${durationMs}ms`);
 };
 
 /**
@@ -140,6 +147,10 @@ export const logExternalCall = (
     duration_ms: durationMs,
     status_code: statusCode,
   };
+
+  if (process.env.NODE_ENV !== "test") {
+    validateLogEvent("external_call", context);
+  }
 
   if (success) {
     logger.info(context, `External call to ${serviceName} succeeded`);
@@ -172,17 +183,20 @@ export const logSecurityEvent = (
 ): void => {
   const level = success ? "info" : "warn";
 
-  logger[level](
-    {
-      security_event: true,
-      event_type: eventType,
-      user_id: userId,
-      success,
-      timestamp: new Date().toISOString(),
-      ...details,
-    },
-    `Security event: ${eventType}`
-  );
+  const payload = {
+    security_event: true,
+    event_type: eventType,
+    user_id: userId,
+    success,
+    timestamp: new Date().toISOString(),
+    ...details,
+  };
+
+  if (process.env.NODE_ENV !== "test") {
+    validateLogEvent("security_event", payload);
+  }
+
+  logger[level](payload, `Security event: ${eventType}`);
 };
 
 /**

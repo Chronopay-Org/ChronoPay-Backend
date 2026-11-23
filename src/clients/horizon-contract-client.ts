@@ -1,0 +1,1635 @@
+import { randomUUID } from "crypto";
+import { IContractClient } from "./contract-client.interface.js";
+import { ContractInteractionArgs, ContractCallResult, TransactionResult } from "./types.js";
+import { ContractService } from "../services/contract.service.js";
+import {
+  ContractInvalidRequestError,
+  ContractRateLimitError,
+  ContractProviderUnavailableError,
+  ContractSequenceCollisionError,
+} from "../errors/contractErrors.js";
+import { withTimeout } from "../utils/outbound-helper.js";
+import { timeoutConfig } from "../config/timeouts.js";
+import { validateFeeBumpTransaction } from "./fee-bump-validator.js";
+import { CursorStore, InMemoryCursorStore } from "./cursor-store.js";
+import {
+  DEFAULT_RATE_LIMIT_RETRY_CONFIG,
+  RateLimitRetryConfig,
+} from "../utils/retry-policy.js";
+import { recordRateLimitRemaining, recordQueueDepth } from "../metrics/horizonMetrics.js";
+import { AmountUtils } from "../utils/amount.js";
+
+export interface StellarAsset {
+  asset_type: "native" | "credit_alphanum4" | "credit_alphanum12";
+  asset_code?: string;
+  asset_issuer?: string;
+}
+
+export interface HorizonPathRecord {
+  source_asset_type: string;
+  source_asset_code?: string;
+  source_asset_issuer?: string;
+  source_amount: string;
+  destination_asset_type: string;
+  destination_asset_code?: string;
+  destination_asset_issuer?: string;
+  destination_amount: string;
+  path: Array<{
+    asset_type: string;
+    asset_code?: string;
+    asset_issuer?: string;
+  }>;
+}
+
+export interface HorizonPathResponse {
+  _embedded: {
+    records: HorizonPathRecord[];
+  };
+}
+
+export interface PathPaymentQuoteOptions {
+  sourceAsset: StellarAsset;
+  sourceAmount: string | number;
+  destinationAsset: StellarAsset;
+  destinationAmount?: string | number;
+  tenantId?: string;
+  maxSlippageTolerancePercent?: number;
+  oracleRate?: number;
+  oracleTimestamp?: number;
+  oracleMaxAgeSeconds?: number;
+  dustThresholdStroops?: number;
+}
+
+export interface ExecutedPathPaymentQuote {
+  quoteId: string;
+  tenantId: string;
+  sourceAsset: StellarAsset;
+  sourceAmount: string;
+  destinationAsset: StellarAsset;
+  destinationAmount: string;
+  minDestinationAmount: string;
+  effectiveSlippagePercent: number;
+  maxSlippageTolerancePercent: number;
+  oracleRateUsed?: number;
+  oracleAgeSeconds?: number;
+  path: StellarAsset[];
+  quotedAt: number;
+}
+
+/**
+ * Options for the per-host token-bucket scheduler inside HorizonContractClient.
+ *
+ * The bucket tracks remaining requests in the current Horizon rate-limit
+ * window using the `X-RateLimit-Remaining` / `X-RateLimit-Reset` response
+ * headers.  When the bucket is empty, outgoing requests are queued until the
+ * window resets.
+ */
+export interface TokenBucketOptions {
+  /**
+   * Initial token capacity assumed before the first response headers arrive.
+   * Defaults to 10 to allow the first few requests to go through and prime
+   * the bucket from real header values.
+   */
+  initialCapacity?: number;
+  /**
+   * Maximum number of requests allowed to queue while waiting for the bucket
+   * to refill.  Additional requests beyond this limit are rejected immediately
+   * with a ContractRateLimitError.  Defaults to 200.
+   */
+  maxQueueDepth?: number;
+  /**
+   * Override the per-host 429-backoff configuration used when the server
+   * returns HTTP 429 despite the local bucket having tokens.
+   */
+  rateLimitRetryConfig?: Partial<RateLimitRetryConfig>;
+}
+
+/**
+ * Per-host token-bucket that throttles outgoing Horizon requests based on
+ * rate-limit response headers.
+ *
+ * - Reads `X-RateLimit-Remaining` and `X-RateLimit-Reset` from each response.
+ * - When `remaining` drops to zero, queues new requests in a FIFO promise
+ *   queue and releases them once the reset epoch has passed.
+ * - Emits `horizon_rate_limit_remaining` and `horizon_request_queue_depth`
+ *   gauges on every state change.
+ *
+ * Thread-safety: JavaScript is single-threaded, so no explicit locking is
+ * required.  All mutations occur synchronously between `await` boundaries.
+ */
+export class HorizonTokenBucket {
+  private readonly host: string;
+  private readonly maxQueueDepth: number;
+
+  /** Tokens remaining in the current window (-1 = unknown / not yet seen). */
+  private remaining: number;
+  /** Unix timestamp (ms) at which the window resets.  0 = unknown. */
+  private resetAtMs: number;
+
+  /** FIFO queue of resolve callbacks for requests waiting on a refill. */
+  private readonly queue: Array<() => void> = [];
+
+  /** Whether a drain loop is currently running. */
+  private draining = false;
+
+  constructor(host: string, options: TokenBucketOptions = {}) {
+    this.host = host;
+    this.remaining = options.initialCapacity ?? 10;
+    this.maxQueueDepth = options.maxQueueDepth ?? 200;
+    this.resetAtMs = 0;
+    this.publishMetrics();
+  }
+
+  /**
+   * Acquire a token before sending a request.  If the bucket is empty, the
+   * returned promise resolves once the window has reset.
+   *
+   * @throws ContractRateLimitError when the queue is full.
+   */
+  async acquire(): Promise<void> {
+    // Fast path: tokens are available.
+    if (this.remaining > 0 || this.remaining === -1) {
+      if (this.remaining > 0) {
+        this.remaining -= 1;
+        this.publishMetrics();
+      }
+      return;
+    }
+
+    // Bucket is empty — check whether the reset has already passed.
+    const now = Date.now();
+    if (this.resetAtMs > 0 && now >= this.resetAtMs) {
+      // Window has reset; the next response will give us a fresh count.
+      this.remaining = -1;
+      this.publishMetrics();
+      return;
+    }
+
+    // Queue the request.
+    if (this.queue.length >= this.maxQueueDepth) {
+      throw new ContractRateLimitError(
+        `Horizon rate limit queue for ${this.host} is full (depth=${this.maxQueueDepth})`,
+      );
+    }
+
+    await new Promise<void>((resolve) => {
+      this.queue.push(resolve);
+      this.publishMetrics();
+    });
+  }
+
+  /**
+   * Update the bucket state from a response's rate-limit headers and drain
+   * any queued requests.
+   *
+   * @param remaining  Value of the `X-RateLimit-Remaining` header (NaN = absent).
+   * @param resetEpoch Value of the `X-RateLimit-Reset` header in Unix seconds (NaN = absent).
+   */
+  update(remaining: number, resetEpoch: number): void {
+    if (Number.isFinite(remaining) && remaining >= 0) {
+      this.remaining = remaining;
+    }
+    if (Number.isFinite(resetEpoch) && resetEpoch > 0) {
+      this.resetAtMs = resetEpoch * 1_000;
+    }
+
+    this.publishMetrics();
+    this.drain();
+  }
+
+  /**
+   * Called when a 429 is received.  Drains the queue once the reset time is
+   * reached (or after the supplied retryAfterMs delay).
+   */
+  async backoff(retryAfterMs?: number): Promise<void> {
+    const now = Date.now();
+    const waitMs =
+      retryAfterMs !== undefined && retryAfterMs > 0
+        ? retryAfterMs
+        : this.resetAtMs > now
+          ? this.resetAtMs - now
+          : 1_000; // fallback: wait 1 s
+
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+
+    // After waiting, reset to unknown so the next response re-initialises.
+    this.remaining = -1;
+    this.publishMetrics();
+    this.drain();
+  }
+
+  /** Number of requests currently in the queue. */
+  get queueDepth(): number {
+    return this.queue.length;
+  }
+
+  /** Current remaining-token count (−1 means unknown). */
+  get tokens(): number {
+    return this.remaining;
+  }
+
+  // ─── Private helpers ────────────────────────────────────────────────────────
+
+  private drain(): void {
+    if (this.draining) return;
+    this.draining = true;
+
+    try {
+      while (
+        this.queue.length > 0 &&
+        (this.remaining > 0 || this.remaining === -1)
+      ) {
+        const resolve = this.queue.shift()!;
+        if (this.remaining > 0) {
+          this.remaining -= 1;
+        }
+        resolve();
+      }
+    } finally {
+      this.draining = false;
+      this.publishMetrics();
+    }
+  }
+
+  private publishMetrics(): void {
+    if (this.remaining >= 0) {
+      recordRateLimitRemaining(this.host, this.remaining);
+    }
+    recordQueueDepth(this.host, this.queue.length);
+  }
+}
+
+// ─── Internal bucket registry ─────────────────────────────────────────────────
+
+const _tokenBuckets = new Map<string, HorizonTokenBucket>();
+
+/**
+ * Return the shared token-bucket for a given host URL, creating it on first
+ * access.  Exported for test access.
+ */
+export function getTokenBucketForHost(
+  host: string,
+  options?: TokenBucketOptions,
+): HorizonTokenBucket {
+  if (!_tokenBuckets.has(host)) {
+    _tokenBuckets.set(host, new HorizonTokenBucket(host, options));
+  }
+  return _tokenBuckets.get(host)!;
+}
+
+/**
+ * Replace the bucket for a given host.  Intended for test injection only.
+ * @internal
+ */
+export function _setTokenBucketForHost(host: string, bucket: HorizonTokenBucket): void {
+  _tokenBuckets.set(host, bucket);
+}
+
+/**
+ * Clear all registered token-buckets.  Intended for test isolation only.
+ * @internal
+ */
+export function _clearTokenBuckets(): void {
+  _tokenBuckets.clear();
+}
+
+// ─── HorizonContractClient class ──────────────────────────────────────────────
+
+
+/** Initial backoff delay (ms) before the first reconnect attempt. */
+export const SSE_BACKOFF_BASE_MS = 1_000;
+
+/** Maximum backoff delay (ms) — caps exponential growth. */
+export const SSE_BACKOFF_MAX_MS = 30_000;
+
+/** Multiplier applied to the backoff on each successive failure. */
+export const SSE_BACKOFF_FACTOR = 2;
+
+/**
+ * Upper bound of the jitter window as a fraction of the current backoff value.
+ * e.g. 0.3 → up to ±30 % of the base delay is added randomly.
+ */
+export const SSE_JITTER_FACTOR = 0.3;
+
+// ─── SSE public types ─────────────────────────────────────────────────────────
+
+/** A single SSE event parsed from the Horizon stream. */
+export interface HorizonSseEvent {
+  /** Horizon paging token — use as the next `resumeAfter` cursor. */
+  cursor: string;
+  /** Raw event type field from the SSE frame (e.g. "payment", "close"). */
+  eventType: string;
+  /** Parsed JSON data payload from the `data:` field. */
+  data: unknown;
+}
+
+/** Options accepted by {@link HorizonContractClient.streamEvents}. */
+export interface StreamEventsOptions {
+  /**
+   * Horizon resource path to stream, relative to the base URL.
+   * e.g. `/accounts/GABC…/payments`
+   */
+  path: string;
+
+  /**
+   * Key used to read / write the cursor in the {@link CursorStore}.
+   * Defaults to the `path` if omitted.
+   */
+  streamKey?: string;
+
+  /**
+   * Override the initial cursor.  When supplied, this value is used for the
+   * very first connection instead of whatever is in the cursor store.
+   */
+  resumeAfter?: string;
+
+  /**
+   * Invoked for every successfully parsed event.
+   * **Must** be async-safe — the stream waits for the promise to resolve
+   * before advancing to the next event so that the cursor is only saved
+   * after the caller has handled the event.
+   */
+  onEvent: (event: HorizonSseEvent) => Promise<void>;
+
+  /**
+   * Invoked whenever a reconnect attempt is about to be made.
+   * Useful for metrics / logging.
+   */
+  onReconnect?: (attempt: number, delayMs: number, cursor: string | undefined) => void;
+
+  /**
+   * AbortSignal — when aborted, the stream stops cleanly without throwing.
+   */
+  signal?: AbortSignal;
+
+  /**
+   * Cursor store to use for durable bookmark persistence.
+   * Defaults to a new {@link InMemoryCursorStore} per stream if omitted.
+   */
+  cursorStore?: CursorStore;
+
+  /**
+   * Override for the initial backoff in tests.  Defaults to
+   * {@link SSE_BACKOFF_BASE_MS}.
+   */
+  backoffBaseMs?: number;
+
+  /**
+   * Override for the maximum backoff in tests.  Defaults to
+   * {@link SSE_BACKOFF_MAX_MS}.
+   */
+  backoffMaxMs?: number;
+}
+
+/**
+ * Jittered exponential backoff for SSE reconnects.
+ *
+ * Delay grows as `base * factor^attempt` (capped at `max`) with a random
+ * upward jitter of up to {@link SSE_JITTER_FACTOR} of the grown value, and is
+ * clamped to ≥ 0. Jitter is one-sided (never below the deterministic base) so
+ * successive delays stay ordered even after rounding.
+ */
+function streamBackoffDelay(baseMs: number, maxMs: number, attempt: number): number {
+  const growth = Math.min(baseMs * Math.pow(SSE_BACKOFF_FACTOR, attempt), maxMs);
+  const jitter = 1 + SSE_JITTER_FACTOR * Math.random();
+  return Math.max(0, Math.round(growth * jitter));
+}
+
+/**
+ * Abortable sleep used between reconnect attempts.
+ *
+ * The timer is cleared and the promise resolves immediately when `signal`
+ * aborts, so an abort during backoff stops the stream without waiting out the
+ * full delay.
+ */
+function streamSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+/**
+ * Parses one SSE frame (up to a blank line) into a {@link HorizonSseEvent}.
+ *
+ * Frames without a `data:` line and frames whose JSON payload fails to parse
+ * yield `undefined` — callers must skip them. The event type defaults to
+ * `"message"` per the SSE spec when the frame has no `event:` line.
+ */
+function parseSseFrame(frame: string): HorizonSseEvent | undefined {
+  let eventType = "message";
+  let dataLine: string | undefined;
+
+  for (const line of frame.split("\n")) {
+    if (line.startsWith(":")) continue; // comment / keep-alive
+    if (line.startsWith("event:")) {
+      eventType = line.slice("event:".length).trim();
+    } else if (line.startsWith("data:")) {
+      const chunk = line.slice("data:".length);
+      dataLine = dataLine === undefined ? chunk : dataLine + "\n" + chunk;
+    }
+  }
+
+  if (dataLine === undefined) return undefined;
+
+  let data: unknown;
+  try {
+    data = JSON.parse(dataLine.trim());
+  } catch {
+    return undefined;
+  }
+
+  if (data === null || typeof data !== "object") return undefined;
+
+  const payload = data as { paging_token?: unknown; id?: unknown };
+  const cursor =
+    typeof payload.paging_token === "string"
+      ? payload.paging_token
+      : typeof payload.id === "string"
+        ? payload.id
+        : "";
+
+  return { cursor, eventType, data };
+}
+
+/**
+ * How one SSE connection ended — drives the caller's stop/reconnect/finish
+ * decision without conflating the three cases.
+ */
+interface SseConnectionOutcome {
+  /** The external signal fired while consuming the body. */
+  aborted: boolean;
+  /** The body stream errored mid-flight (network disconnect). */
+  streamError: unknown;
+  /** The caller's onEvent callback rejected. */
+  handlerError: unknown;
+}
+
+/**
+ * Consumes an SSE body incrementally, delivering each parsed event to
+ * `onEvent` as soon as it is read (never buffering the whole stream), so an
+ * abort mid-stream is observed without waiting for the server to close.
+ *
+ * Handles frames split across chunk boundaries, CRLF line endings, and several
+ * frames in a single chunk. The returned outcome distinguishes the ways a
+ * connection can end so the caller can decide between stopping (abort),
+ * reconnecting (stream or handler error), and finishing (clean close).
+ */
+async function runSseConnection(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal | undefined,
+  onEvent: (event: HorizonSseEvent) => Promise<void>,
+): Promise<SseConnectionOutcome> {
+  const outcome: SseConnectionOutcome = {
+    aborted: false,
+    streamError: undefined,
+    handlerError: undefined,
+  };
+  const decoder = new TextDecoder();
+  const reader = body.getReader();
+
+  let buffer = "";
+  let aborted = false;
+  let notifyInterrupt: (() => void) | undefined;
+
+  const onAbort = () => {
+    aborted = true;
+    // Unblock a pending read awaiter, if any.
+    if (notifyInterrupt) {
+      const fn = notifyInterrupt;
+      notifyInterrupt = undefined;
+      fn();
+    }
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  /** Deliver one parsed frame, recording a handler crash. */
+  const deliver = async (event: HorizonSseEvent): Promise<boolean> => {
+    try {
+      await onEvent(event);
+      return true;
+    } catch (err) {
+      outcome.handlerError = err;
+      return false;
+    }
+  };
+
+  try {
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => {
+            notifyInterrupt = () => reject(new Error("aborted"));
+            // Abort may already have fired between reads.
+            if (aborted) {
+              const fn = notifyInterrupt;
+              notifyInterrupt = undefined;
+              fn();
+            }
+          }),
+        ]);
+        // Read won the race — drop the stale rejector so a later abort can
+        // never reject the already-settled loser promise.
+        notifyInterrupt = undefined;
+      } catch (err) {
+        // Abort while waiting for the next chunk — not a stream error.
+        if (aborted) {
+          outcome.aborted = true;
+          break;
+        }
+        outcome.streamError = err;
+        break;
+      }
+
+      if (chunk.done) break;
+
+      buffer += decoder.decode(chunk.value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+
+      for (const frame of frames) {
+        const normalized = frame.replace(/\r\n/g, "\n");
+        const parsed = parseSseFrame(normalized);
+        if (!parsed) continue;
+        if (!(await deliver(parsed))) return outcome;
+      }
+    }
+
+    if (!aborted && outcome.handlerError === undefined && buffer.length > 0) {
+      const parsed = parseSseFrame(buffer.replace(/\r\n/g, "\n"));
+      if (parsed) {
+        await deliver(parsed);
+      }
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    try {
+      await reader.cancel();
+    } catch {
+      // stream already closed or errored
+    }
+  }
+
+  return outcome;
+}
+
+export interface StellarPayoutBalanceOptions {
+  amount?: string | number;
+  baseReserve?: number;
+  subentries?: number;
+  trustlines?: number;
+  offers?: number;
+}
+
+interface HorizonAccountResponse {
+  id?: string;
+  subentry_count?: number;
+  balances?: Array<{
+    asset_type: string;
+    balance: string;
+  }>;
+}
+
+export function computeMinBalance(subentries: number, baseReserve = 5_000_000): number {
+  if (!Number.isInteger(subentries) || subentries < 0) {
+    throw new ContractInvalidRequestError("Subentry count must be a non-negative integer");
+  }
+
+  if (!Number.isFinite(baseReserve) || baseReserve <= 0) {
+    throw new ContractInvalidRequestError("Base reserve must be a positive number");
+  }
+
+  return (2 + subentries) * baseReserve;
+}
+
+function parseStellarAmount(amount: string | number | undefined): number {
+  if (amount === undefined || amount === null) {
+    return 0;
+  }
+
+  if (typeof amount === "number") {
+    return Math.trunc(amount);
+  }
+
+  const trimmed = amount.trim();
+  if (trimmed === "") {
+    return 0;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return Number.parseInt(trimmed, 10);
+  }
+
+  const match = trimmed.match(/^(\d+)(?:\.(\d{1,7}))?$/);
+  if (!match) {
+    throw new ContractInvalidRequestError(`Invalid Stellar amount: ${amount}`);
+  }
+
+  const whole = Number.parseInt(match[1], 10);
+  const fractional = match[2] ?? "";
+  return whole * 10_000_000 + Number.parseInt(fractional.padEnd(7, "0"), 10);
+}
+
+export class HorizonInsufficientBalanceError extends Error {
+  constructor(
+    public readonly accountId: string,
+    public readonly balance: number,
+    public readonly minimumBalance: number,
+  ) {
+    super(
+      `Account ${accountId} does not have enough balance to cover the Stellar reserve minimum: ${balance} < ${minimumBalance}`,
+    );
+    this.name = "HorizonInsufficientBalanceError";
+  }
+}
+
+
+/**
+ * Options for paginated Horizon endpoint queries.
+ */
+export interface HorizonPaginationOptions {
+  cursor?: string;
+  limit?: number;
+  order?: "asc" | "desc";
+}
+
+/**
+ * Structure of a transaction record returned by Horizon REST API.
+ */
+export interface HorizonTransactionRecord {
+  id: string;
+  paging_token: string;
+  hash: string;
+  ledger?: number;
+  created_at?: string;
+  memo?: string;
+  memo_type?: string;
+  successful?: boolean;
+  [key: string]: unknown;
+}
+
+/**
+ * Ledger headers can be present before the embedded records array (Horizon
+ * uses HAL-style envelopes), so the record's `sequence` is optional at the
+ * type level and validated at runtime by callers.
+ */
+export interface HorizonLedgerCollectionResponse {
+  _embedded: {
+    records: Array<{
+      sequence?: number;
+      [key: string]: unknown;
+    }>;
+  };
+}
+
+/**
+ * On-chain finality view of a single Stellar transaction, as reported by the
+ * `SettlementFinalityProbe` contract used by the SettlementReconciler.
+ *
+ * - `found: false` means Horizon has no record of the transaction (it may
+ *   not have been confirmed yet, or it has vanished on a fork/reorg). This is
+ *   a *business outcome*, not an error — callers must branch on it.
+ * - `successful` is `false` only when the transaction is on-chain but was
+ *   rejected; it is `true` for accepted transactions and `undefined` when the
+ *   field is absent (callers should treat anything other than `true` as a
+ *   failed/uncertain settlement).
+ * - `confirmations` is derived from the latest ledger sequence at query time:
+ *   `max(0, latestLedger - ledger + 1)`.
+ */
+export interface ChainFinalityStatus {
+  found: boolean;
+  txHash: string;
+  successful?: boolean;
+  ledger?: number;
+  latestLedger?: number | null;
+  confirmations: number;
+}
+
+/**
+ * The narrow, testable contract the SettlementReconciler depends on.
+ *
+ * HorizonContractClient implements it; callers only need `getLatestLedgerSequence`
+ * and `getTransactionFinality`, which keeps the worker free of fragile
+ * error-message scraping and lets tests inject a fake probe directly.
+ */
+export interface SettlementFinalityProbe {
+  getLatestLedgerSequence(): Promise<number>;
+  getTransactionFinality(
+    txHash: string,
+    options?: { latestLedger?: number },
+  ): Promise<ChainFinalityStatus>;
+}
+
+/**
+ * Structure of a collection response from Horizon REST API.
+ */
+export interface HorizonCollectionResponse<T = HorizonTransactionRecord> {
+  _embedded: {
+    records: T[];
+  };
+  _links?: {
+    next?: { href: string };
+    prev?: { href: string };
+    self?: { href: string };
+  };
+}
+
+/**
+ * Configuration options for fetchAllTransactionsPaged.
+ */
+export interface FetchAllPagesOptions {
+  limitPerPage?: number;
+  order?: "asc" | "desc";
+  initialCursor?: string;
+  maxRecords?: number;
+  maxRetriesOnRateLimit?: number;
+  onRateLimit?: (attempt: number) => Promise<void>;
+}
+
+export interface SequenceRecoveryOptions {
+  maxRetries?: number;
+  initialDelayMs?: number;
+  useJitter?: boolean;
+  onRetry?: (attempt: number, newSequence: string) => void;
+}
+
+/**
+ * Stellar Horizon HTTP API client implementing IContractClient.
+ *
+ * Maps Horizon REST endpoints onto the generic contract interface:
+ *   - call()            → GET  /accounts/:address  (read-only queries)
+ *   - sendTransaction() → POST /transactions        (XDR envelope submission)
+ *   - streamEvents()    → SSE  /<path>?cursor=<cursor>  (streaming with reconnect)
+ *
+ * The `method` field in ContractInteractionArgs selects the Horizon operation:
+ *   call:            "getAccount" | "getTransactions" | "getTransaction"
+ *   sendTransaction: "submitTransaction"
+ *
+ * `args[0]` carries the primary resource identifier (account id, tx hash, or XDR).
+ */
+import { HorizonHostManager } from "./horizon-host-manager.js";
+
+export class HorizonContractClient implements IContractClient {
+  private readonly hostManager: HorizonHostManager;
+  private readonly networkPassphrase: string;
+  private readonly contractService: ContractService;
+  private readonly tokenBucketOptions: TokenBucketOptions;
+  private readonly rateLimitRetryConfig: RateLimitRetryConfig;
+
+  constructor(
+    horizonUrls: string | string[],
+    networkPassphrase: string,
+    contractService: ContractService,
+    tokenBucketOptions: TokenBucketOptions = {},
+  ) {
+    const urls = Array.isArray(horizonUrls) ? horizonUrls : horizonUrls.split(',').map(u => u.trim());
+    this.hostManager = new HorizonHostManager(urls);
+    this.networkPassphrase = networkPassphrase;
+    this.contractService = contractService;
+    this.tokenBucketOptions = tokenBucketOptions;
+    this.rateLimitRetryConfig = {
+      ...DEFAULT_RATE_LIMIT_RETRY_CONFIG,
+      ...(tokenBucketOptions.rateLimitRetryConfig ?? {}),
+    };
+  }
+
+  /**
+   * Executes a read-only Horizon query.
+   */
+  async call<T>(args: ContractInteractionArgs): Promise<ContractCallResult<T>> {
+    const data = await this.contractService.call<T>(
+      `horizon:${args.method}`,
+      () =>
+        withTimeout(
+          async (signal) => {
+            const host = await this.hostManager.getHealthyHost();
+            const url = this.buildReadUrl(host, args.method, args.args);
+            return this.fetchJson<T>(url, host, { signal });
+          },
+          timeoutConfig.http.contractMs,
+          "horizon",
+        ),
+    );
+
+    return { data, blockNumber: 0 };
+  }
+
+  /**
+   * Streams events from a Horizon SSE endpoint with durable cursor resume.
+   *
+   * Behaviour:
+   *  - Connects to `GET <host><path>?cursor=<cursor>` with `Accept:
+   *    text/event-stream`.
+   *  - The initial cursor is `resumeAfter` if supplied, otherwise the value in
+   *    the cursor store, otherwise `"now"` (Horizon's "only future events"
+   *    sentinel).
+   *  - Every parsed frame is delivered to `onEvent`; the cursor is only
+   *    persisted **after** `onEvent` resolves, so a handler crash never skips
+   *    an event on reconnect.
+   *  - Network errors and 5xx responses reconnect with jittered exponential
+   *    backoff (`SSE_BACKOFF_BASE_MS`/`SSE_BACKOFF_MAX_MS`/`SSE_BACKOFF_FACTOR`,
+   *    overridable via `backoffBaseMs`/`backoffMaxMs` for tests); 4xx responses
+   *    are terminal and propagate as {@link HorizonHttpError}.
+   *  - `onReconnect(attempt, delayMs, cursor)` fires before each reconnect.
+   *  - An aborted `signal` stops the stream cleanly (resolves, no throw),
+   *    including while a backoff sleep or an inter-event idle timer is armed.
+   *  - A server-side close (`done: true` in the SSE payload) also ends the
+   *    stream without error.
+   */
+  async streamEvents(options: StreamEventsOptions): Promise<void> {
+    const store = options.cursorStore ?? new InMemoryCursorStore();
+    const key = options.streamKey ?? options.path;
+    const baseMs = options.backoffBaseMs ?? SSE_BACKOFF_BASE_MS;
+    const maxMs = options.backoffMaxMs ?? SSE_BACKOFF_MAX_MS;
+    const signal = options.signal;
+
+    // Aborted before we even start → no connection is made.
+    if (signal?.aborted) {
+      return;
+    }
+
+    let attempt = 0;
+
+    /** Backoff + onReconnect; false when the stream must stop (aborted). */
+    const reconnect = async (): Promise<boolean> => {
+      if (signal?.aborted) return false;
+      const delay = streamBackoffDelay(baseMs, maxMs, attempt);
+      options.onReconnect?.(++attempt, delay, await this.safeCursor(store, key));
+      await streamSleep(delay, signal);
+      return !signal?.aborted;
+    };
+
+    while (true) {
+      let cursor: string | undefined;
+      try {
+        cursor = options.resumeAfter ?? (await store.get(key));
+      } catch {
+        cursor = undefined; // a broken store must not kill the stream
+      }
+
+      const initialCursor = cursor ?? "now";
+      const host = await this.hostManager.getHealthyHost();
+      const url =
+        host.replace(/\/+$/, "") +
+        options.path +
+        `?cursor=${encodeURIComponent(initialCursor)}`;
+
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          headers: { Accept: "text/event-stream" },
+          signal,
+        });
+      } catch {
+        // Network-level failure (ECONNRESET, DNS, …) → backoff and reconnect.
+        if (!(await reconnect())) return;
+        continue;
+      }
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        // A 4xx means our request was wrong (expired cursor, auth, absent
+        // path…) — retrying cannot fix it, so surface it to the caller.
+        if (response.status >= 400 && response.status < 500) {
+          throw new HorizonHttpError(response.status, body);
+        }
+        // 5xx: transient server failure → backoff and reconnect.
+        if (!(await reconnect())) return;
+        continue;
+      }
+
+      if (!response.body) {
+        // No stream payload (e.g. mocked or empty 200) — clean stop.
+        return;
+      }
+
+      // Consume frames as they arrive; the persisted cursor only advances
+      // after each onEvent resolves, so a handler crash never skips an event.
+      const outcome = await runSseConnection(response.body, signal, async (event) => {
+        await options.onEvent(event);
+        await this.safeSetCursor(store, key, event.cursor);
+      });
+
+      // Abort mid-stream (or mid-backoff earlier) → stop cleanly.
+      if (outcome.aborted) return;
+
+      // Handler crashed → reconnect from the last acked cursor; the failing
+      // event is redelivered on the next connection.
+      if (outcome.handlerError !== undefined || outcome.streamError !== undefined) {
+        if (!(await reconnect())) return;
+        continue;
+      }
+
+      // Clean end-of-body (server closed the stream) — the stream is over.
+      return;
+    }
+  }
+
+  /** Cursor read that tolerates store failures. */
+  private async safeCursor(store: CursorStore, key: string): Promise<string | undefined> {
+    try {
+      return await store.get(key);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Cursor write that tolerates store failures. */
+  private async safeSetCursor(store: CursorStore, key: string, cursor: string): Promise<void> {
+    try {
+      await store.set(key, cursor);
+    } catch {
+      // best-effort persistence
+    }
+  }
+
+  /**
+   * Returns the sequence number of the latest ledger on the connected Horizon
+   * network. Part of the {@link SettlementFinalityProbe} contract.
+   *
+   * Uses the retry/circuit-breaker path (`call`) because there is nothing
+   * ambiguous about a missing ledger header — any failure here is transient
+   * and must not bubble up to the polling worker.
+   */
+  async getLatestLedgerSequence(): Promise<number> {
+    const { data } = await this.call<HorizonLedgerCollectionResponse>({
+      address: "",
+      abi: [],
+      method: "getLatestLedger",
+      args: [],
+    });
+
+    const sequence = data?._embedded?.records?.[0]?.sequence;
+    if (typeof sequence !== "number") {
+      throw new ContractInvalidRequestError("Horizon returned no latest ledger sequence");
+    }
+    return sequence;
+  }
+
+  /**
+   * Queries chain finality for a single transaction. Part of the
+   * {@link SettlementFinalityProbe} contract.
+   *
+   * Unlike `call`, this probes Horizon directly so a 404 (transaction missing —
+   * could be a reorg or a not-yet-confirmed payment) is surfaced as
+   * `{ found: false }` instead of being masked into a
+   * `ContractInvalidRequestError` by `mapContractError`. All non-404 HTTP and
+   * network errors are thrown and treated as transient by callers.
+   *
+   * When `latestLedger` is omitted the latest ledger sequence is fetched first.
+   * Callers that already hold the sequence (e.g. a poll loop) should pass it to
+   * avoid an extra round-trip.
+   */
+  async getTransactionFinality(
+    txHash: string,
+    options: { latestLedger?: number } = {},
+  ): Promise<ChainFinalityStatus> {
+    const host = await this.hostManager.getHealthyHost();
+    const latestLedger = options.latestLedger ?? (await this.getLatestLedgerSequence());
+
+    const response = await withTimeout(
+      async (signal) => this.fetchTransactionResponse(host, txHash, signal),
+      timeoutConfig.http.contractMs,
+      "horizon",
+    );
+
+    if (response.status === 404) {
+      return {
+        found: false,
+        txHash,
+        latestLedger,
+        confirmations: 0,
+      };
+    }
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      const err = new HorizonHttpError(response.status, body);
+      this.hostManager.recordError(host, err);
+      throw err;
+    }
+
+    let tx: HorizonTransactionRecord;
+    try {
+      tx = (await response.json()) as HorizonTransactionRecord;
+    } catch {
+      throw new Error("Horizon returned malformed JSON response");
+    }
+
+    const ledger = typeof tx.ledger === "number" ? tx.ledger : undefined;
+    const confirmations =
+      ledger === undefined || latestLedger === null
+        ? 0
+        : Math.max(0, latestLedger - ledger + 1);
+
+    return {
+      found: true,
+      txHash,
+      successful: tx.successful,
+      ledger,
+      latestLedger,
+      confirmations,
+    };
+  }
+
+  /**
+   * Fetches a single transaction from the given host, recording host health.
+   * A 404 is a valid response from a healthy host (the transaction simply is
+   * not known), so it does not count against the host's error rate.
+   */
+  private async fetchTransactionResponse(
+    host: string,
+    txHash: string,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    const url = `${host}/transactions/${encodeURIComponent(txHash)}`;
+    try {
+      const response = await fetch(url, { signal });
+      if (response.ok || response.status === 404) {
+        this.hostManager.recordSuccess(host);
+      } else {
+        this.hostManager.recordError(host, new HorizonHttpError(response.status, ""));
+      }
+      return response;
+    } catch (err) {
+      this.hostManager.recordError(host, err);
+      throw err;
+    }
+  }
+
+  /**
+   * Submits a signed Stellar transaction XDR envelope to Horizon.
+   */
+  async sendTransaction(args: ContractInteractionArgs): Promise<TransactionResult> {
+    const xdr = args.args[0] as string;
+
+    if (this.isFeeBumpTransaction(xdr)) {
+      validateFeeBumpTransaction(xdr);
+    }
+
+    const host = await this.hostManager.getHealthyHost();
+    const url = `${host}/transactions`;
+
+    const response = await this.contractService.sendTransaction<{ hash: string }>(
+      "horizon:submitTransaction",
+      () =>
+        withTimeout(
+          async (signal) =>
+            this.fetchJson<{ hash: string }>(url, host, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+              },
+              body: `tx=${encodeURIComponent(xdr)}`,
+              signal,
+            }),
+          timeoutConfig.http.contractMs,
+          "horizon",
+        ),
+    );
+
+    return {
+      hash: response.hash,
+      wait: async () => {
+        const currentHost = await this.hostManager.getHealthyHost();
+        const txUrl = `${currentHost}/transactions/${response.hash}`;
+        return withTimeout(
+          async (signal) => this.fetchJson(txUrl, currentHost, { signal }),
+          timeoutConfig.http.contractMs,
+          "horizon",
+        );
+      },
+    };
+  }
+
+  private isFeeBumpTransaction(xdrBase64: string): boolean {
+    try {
+      const buf = Buffer.from(xdrBase64, "base64");
+      if (buf.length < 4) return false;
+      return buf.readInt32BE(0) === 4;
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Checks the account balance against the Stellar minimum reserve before submitting a payout.
+   * The reserve is derived from the effective subentry count, including trustlines and offers.
+   */
+  async submitPayout(accountId: string, xdr: string, options: StellarPayoutBalanceOptions = {}): Promise<TransactionResult> {
+    const accountResponse = await this.call<HorizonAccountResponse>({
+      address: accountId,
+      abi: null,
+      method: "getAccount",
+      args: [accountId],
+    });
+
+    const account = accountResponse.data;
+    const baseReserve = options.baseReserve ?? 5_000_000;
+    const effectiveSubentries = (options.subentries ?? account.subentry_count ?? 0) + (options.trustlines ?? 0) + (options.offers ?? 0);
+    const minimumBalance = computeMinBalance(effectiveSubentries, baseReserve);
+    const payoutAmount = parseStellarAmount(options.amount);
+    const nativeBalance = account.balances?.find((balance) => balance.asset_type === "native")?.balance;
+    const balanceInStroops = nativeBalance === undefined ? 0 : parseStellarAmount(nativeBalance);
+
+    if (balanceInStroops < minimumBalance + payoutAmount) {
+      throw new HorizonInsufficientBalanceError(accountId, balanceInStroops, minimumBalance + payoutAmount);
+    }
+
+    return this.sendTransaction({
+      address: accountId,
+      abi: null,
+      method: "submitTransaction",
+      args: [xdr],
+    });
+  }
+
+
+  /**
+   * Submits a low-cost memo transaction anchoring a 32-byte (64 hex characters) hash on Stellar.
+   */
+  async submitMemoTransaction(memoHashHex: string): Promise<TransactionResult> {
+    const cleanHash = memoHashHex.trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(cleanHash)) {
+      throw new ContractInvalidRequestError("Memo hash must be a 32-byte hex string (64 characters)");
+    }
+
+    // Simple envelope payload containing memo hash
+    const memoPayload = `tx_memo_hash=${cleanHash}`;
+    return this.sendTransaction({
+      address: "",
+      abi: null,
+      method: "submitTransaction",
+      args: [memoPayload],
+    });
+  }
+
+  /**
+   * Fetches transaction details including memo from Horizon by transaction hash.
+   */
+  async getTransactionMemo(txHash: string): Promise<{ hash: string; memo?: string; memo_type?: string }> {
+    const res = await this.call<{ hash: string; memo?: string; memo_type?: string }>({
+      address: "",
+      abi: null,
+      method: "getTransaction",
+      args: [txHash],
+    });
+    return res.data;
+  }
+
+  /**
+   * Fetches the current sequence number for a Stellar account from Horizon.
+   * Returns the sequence as a string (matching the Stellar Horizon API format).
+   */
+  async getAccountSequence(accountId: string): Promise<string> {
+    const result = await this.call<{ sequence: string }>({
+      address: accountId,
+      abi: null,
+      method: "getAccount",
+      args: [accountId],
+    });
+    return result.data.sequence;
+  }
+
+  /**
+   * Submits a transaction with sequence-number collision recovery.
+   *
+   * On tx_bad_seq, re-reads the account sequence from Horizon and retries
+   * with jitter after the caller rebuilds the XDR using the fresh sequence.
+   *
+   * @param rebuildXdr - Callback that receives the fresh sequence string and returns a rebuilt XDR envelope.
+   * @param options - Recovery tuning: maxRetries, initialDelayMs, useJitter, onRetry.
+   */
+  async sendTransactionWithSequenceRecovery(
+    initialXdr: string,
+    accountId: string,
+    rebuildXdr: (freshSequence: string) => Promise<string>,
+    options: SequenceRecoveryOptions = {},
+  ): Promise<TransactionResult> {
+    const maxRetries = options.maxRetries ?? 5;
+    let delayMs = options.initialDelayMs ?? 100;
+    const useJitter = options.useJitter ?? true;
+
+    let currentXdr = initialXdr;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await this.sendTransaction({
+          address: accountId,
+          abi: null,
+          method: "submitTransaction",
+          args: [currentXdr],
+        });
+      } catch (err: unknown) {
+        if (!(err instanceof ContractSequenceCollisionError) || attempt === maxRetries) {
+          throw err;
+        }
+
+        const freshSequence = await this.getAccountSequence(accountId);
+        currentXdr = await rebuildXdr(freshSequence);
+
+        if (options.onRetry) {
+          options.onRetry(attempt + 1, freshSequence);
+        }
+
+        const jitterDelay = useJitter ? Math.floor(Math.random() * delayMs) : delayMs;
+        await new Promise((resolve) => setTimeout(resolve, jitterDelay));
+        delayMs = Math.min(delayMs * 2, 10_000);
+      }
+    }
+
+    throw new ContractSequenceCollisionError("Sequence collision recovery exhausted all retries");
+  }
+
+  /**
+   * Fetches paged transactions for an account with optional pagination options (cursor, limit, order).
+   */
+  async getTransactionsPaged<T = HorizonTransactionRecord>(
+    accountId: string,
+    options?: HorizonPaginationOptions,
+  ): Promise<ContractCallResult<HorizonCollectionResponse<T>>> {
+    return this.call<HorizonCollectionResponse<T>>({
+      address: accountId,
+      abi: null,
+      method: "getTransactions",
+      args: [accountId, options],
+    });
+  }
+
+  /**
+   * Iteratively fetches transactions for an account using strict cursor chaining to prevent cursor drift.
+   * Guaranteed to avoid duplicates and gaps by advancing the cursor to the last seen record's paging_token.
+   * Handles rate-limiting (429) gracefully using configurable retry logic.
+   */
+  async fetchAllTransactionsPaged<T extends { paging_token: string } = HorizonTransactionRecord>(
+    accountId: string,
+    options: FetchAllPagesOptions = {},
+  ): Promise<T[]> {
+    const limit = options.limitPerPage ?? 200;
+    const order = options.order ?? "asc";
+    let cursor = options.initialCursor;
+    const maxRecords = options.maxRecords ?? Infinity;
+
+    const records: T[] = [];
+    const seenCursors = new Set<string>();
+
+    while (records.length < maxRecords) {
+      const fetchLimit = Math.min(limit, maxRecords - records.length);
+      let pageData: HorizonCollectionResponse<T>;
+
+      let attempt = 0;
+      const maxRetries = options.maxRetriesOnRateLimit ?? 5;
+      while (true) {
+        try {
+          const res = await this.getTransactionsPaged<T>(accountId, {
+            cursor,
+            limit: fetchLimit,
+            order,
+          });
+          pageData = res.data;
+          break;
+        } catch (err: unknown) {
+          if (err instanceof ContractRateLimitError && attempt < maxRetries) {
+            attempt++;
+            if (options.onRateLimit) {
+              await options.onRateLimit(attempt);
+            } else {
+              await new Promise((resolve) => setTimeout(resolve, 10 * attempt));
+            }
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      const pageRecords = pageData?._embedded?.records || [];
+      if (pageRecords.length === 0) {
+        break;
+      }
+
+      let addedInThisPage = 0;
+      for (const rec of pageRecords) {
+        const token = rec.paging_token;
+        if (token && !seenCursors.has(token)) {
+          seenCursors.add(token);
+          records.push(rec);
+          addedInThisPage++;
+          cursor = token;
+          if (records.length >= maxRecords) {
+            break;
+          }
+        }
+      }
+
+      if (addedInThisPage === 0) {
+        break;
+      }
+    }
+
+    return records;
+  }
+
+  /**
+   * Finds payment paths on Stellar Horizon, validates against dust amounts, oracle staleness,
+   * and FX slippage tolerance, and returns an executed quote with a minimum-received guard.
+   */
+  async findPathPaymentQuote(options: PathPaymentQuoteOptions): Promise<ExecutedPathPaymentQuote> {
+    const rawSourceAmount = options.sourceAmount;
+    let sourceAmountStroops: bigint;
+    if (typeof rawSourceAmount === "number") {
+      if (!Number.isInteger(rawSourceAmount)) {
+        throw new ContractInvalidRequestError("Source amount must be an integer in stroops when provided as number");
+      }
+      sourceAmountStroops = BigInt(Math.trunc(rawSourceAmount));
+    } else if (typeof rawSourceAmount === "string") {
+      try {
+        sourceAmountStroops = BigInt(AmountUtils.parseFromMajorString(rawSourceAmount, "XLM"));
+      } catch (err: unknown) {
+        throw new ContractInvalidRequestError(
+          `Invalid source amount: ${(err as Error).message}`,
+        );
+      }
+    } else {
+      throw new ContractInvalidRequestError("Source amount must be a number or string");
+    }
+
+    const dustThreshold = options.dustThresholdStroops ?? 100;
+    if (sourceAmountStroops <= 0n || sourceAmountStroops < BigInt(dustThreshold)) {
+      throw new ContractInvalidRequestError(
+        `Dust amount error: Source amount ${sourceAmountStroops.toString()} is below minimum threshold ${dustThreshold}`,
+      );
+    }
+
+    if (options.oracleTimestamp !== undefined) {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const oracleTimeSec =
+        options.oracleTimestamp > 1e11
+          ? Math.floor(options.oracleTimestamp / 1000)
+          : options.oracleTimestamp;
+      const oracleAgeSeconds = nowSeconds - oracleTimeSec;
+      const maxAge = options.oracleMaxAgeSeconds ?? 300;
+
+      if (oracleAgeSeconds > maxAge || oracleAgeSeconds < 0) {
+        throw new ContractInvalidRequestError(
+          `Stale oracle rate: rate age ${oracleAgeSeconds}s exceeds maximum allowed age ${maxAge}s`,
+        );
+      }
+    }
+
+    const formatXlm = (stroops: bigint): string => {
+      const sign = stroops < 0n ? "-" : "";
+      const abs = stroops < 0n ? -stroops : stroops;
+      const major = abs / 10000000n;
+      const minor = abs % 10000000n;
+      return sign + major.toString() + "." + minor.toString().padStart(7, "0");
+    };
+    const queryParams: Record<string, string> = {
+      source_asset_type: options.sourceAsset.asset_type,
+      source_amount: formatXlm(sourceAmountStroops),
+    };
+    if (options.sourceAsset.asset_code) {
+      queryParams.source_asset_code = options.sourceAsset.asset_code;
+    }
+    if (options.sourceAsset.asset_issuer) {
+      queryParams.source_asset_issuer = options.sourceAsset.asset_issuer;
+    }
+
+    queryParams.destination_asset_type = options.destinationAsset.asset_type;
+    if (options.destinationAsset.asset_code) {
+      queryParams.destination_asset_code = options.destinationAsset.asset_code;
+    }
+    if (options.destinationAsset.asset_issuer) {
+      queryParams.destination_asset_issuer = options.destinationAsset.asset_issuer;
+    }
+
+    const host = await this.hostManager.getHealthyHost();
+    const url = `${host}/paths/strict-send?${new URLSearchParams(queryParams).toString()}`;
+
+    let response: HorizonPathResponse;
+    try {
+      response = await this.contractService.call<HorizonPathResponse>(
+        "horizon:findPaths",
+        () =>
+          withTimeout(
+            async (signal) => this.fetchJson<HorizonPathResponse>(url, host, { signal }),
+            timeoutConfig.http.contractMs,
+            "horizon",
+          ),
+      );
+    } catch (err: unknown) {
+      if (
+        err instanceof ContractInvalidRequestError ||
+        err instanceof ContractProviderUnavailableError
+      ) {
+        throw err;
+      }
+      throw new ContractInvalidRequestError(
+        `No path found for Stellar path payment: ${(err as Error).message}`,
+      );
+    }
+
+    const records = response?._embedded?.records;
+    if (!records || records.length === 0) {
+      throw new ContractInvalidRequestError("No path found for Stellar path payment");
+    }
+
+    const bestRecord = records.reduce((best, curr) => {
+      return parseFloat(curr.destination_amount) > parseFloat(best.destination_amount)
+        ? curr
+        : best;
+    }, records[0]);
+
+    const quotedDestAmountNum = parseFloat(bestRecord.destination_amount);
+    const quotedSrcAmountNum = parseFloat(bestRecord.source_amount);
+    const quotedRate = quotedSrcAmountNum > 0 ? quotedDestAmountNum / quotedSrcAmountNum : 0;
+    const tolerance = options.maxSlippageTolerancePercent ?? 0.5;
+
+    let effectiveSlippagePercent = 0;
+    if (options.oracleRate !== undefined && options.oracleRate > 0) {
+      effectiveSlippagePercent = ((options.oracleRate - quotedRate) / options.oracleRate) * 100;
+      if (effectiveSlippagePercent > tolerance) {
+        throw new ContractInvalidRequestError(
+          `Slippage tolerance exceeded: quoted slippage ${effectiveSlippagePercent.toFixed(2)}% exceeds maximum tolerance ${tolerance}%`,
+        );
+      }
+    }
+
+    const toleranceBps = Math.round(tolerance * 100);
+    let quotedDestStroops: bigint;
+    try {
+      quotedDestStroops = BigInt(AmountUtils.parseFromMajorString(bestRecord.destination_amount, "XLM"));
+    } catch {
+      quotedDestStroops = BigInt(Math.trunc(quotedDestAmountNum * 1e7 + 1e-12));
+    }
+    const minDestStroops = (quotedDestStroops * BigInt(10000 - toleranceBps)) / BigInt(10000);
+    const formatXlmBig = (stroops: bigint): string => {
+      const sign = stroops < 0n ? "-" : "";
+      const abs = stroops < 0n ? -stroops : stroops;
+      const major = abs / 10000000n;
+      const minor = abs % 10000000n;
+      return sign + major.toString() + "." + minor.toString().padStart(7, "0");
+    };
+    const minDestinationAmount = formatXlmBig(minDestStroops);
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const oracleAgeSeconds =
+      options.oracleTimestamp !== undefined
+        ? nowSeconds -
+          (options.oracleTimestamp > 1e11
+            ? Math.floor(options.oracleTimestamp / 1000)
+            : options.oracleTimestamp)
+        : undefined;
+
+    return {
+      quoteId: `quote_${randomUUID()}`,
+      tenantId: options.tenantId ?? "default",
+      sourceAsset: options.sourceAsset,
+      sourceAmount: bestRecord.source_amount,
+      destinationAsset: options.destinationAsset,
+      destinationAmount: bestRecord.destination_amount,
+      minDestinationAmount,
+      effectiveSlippagePercent: Math.max(0, effectiveSlippagePercent),
+      maxSlippageTolerancePercent: tolerance,
+      oracleRateUsed: options.oracleRate,
+      oracleAgeSeconds,
+      path: (bestRecord.path || []).map((p) => ({
+        asset_type: p.asset_type as StellarAsset["asset_type"],
+        asset_code: p.asset_code,
+        asset_issuer: p.asset_issuer,
+      })),
+      quotedAt: nowSeconds,
+    };
+  }
+
+  private buildReadUrl(host: string, method: string, methodArgs: any[]): string {
+    const id = methodArgs[0] as string;
+    switch (method) {
+      case "getAccount":
+        return `${host}/accounts/${encodeURIComponent(id)}`;
+      case "getTransactions": {
+        let url = `${host}/accounts/${encodeURIComponent(id)}/transactions`;
+        const options = methodArgs[1] as HorizonPaginationOptions | undefined;
+        if (options) {
+          const params = new URLSearchParams();
+          if (options.cursor !== undefined) params.set("cursor", options.cursor);
+          if (options.limit !== undefined) params.set("limit", options.limit.toString());
+          if (options.order !== undefined) params.set("order", options.order);
+          const queryString = params.toString();
+          if (queryString) {
+            url += `?${queryString}`;
+          }
+        }
+        return url;
+      }
+      case "getTransaction":
+        return `${host}/transactions/${encodeURIComponent(id)}`;
+      case "getLatestLedger":
+        return `${host}/ledgers?limit=1&order=desc`;
+      case "findPaths": {
+        const queryParams = methodArgs[0] as Record<string, string>;
+        const params = new URLSearchParams(queryParams);
+        return `${host}/paths/strict-send?${params.toString()}`;
+      }
+      default:
+        throw new ContractInvalidRequestError(`Unknown Horizon method: ${method}`);
+    }
+  }
+
+  private async fetchJson<T>(url: string, host: string, init: RequestInit = {}): Promise<T> {
+    // ── Token-bucket acquisition ────────────────────────────────────────────
+    const bucket = getTokenBucketForHost(host, this.tokenBucketOptions);
+    await bucket.acquire();
+
+    let response: Response;
+    try {
+      response = await fetch(url, init);
+      this.hostManager.recordSuccess(host);
+    } catch (err) {
+      this.hostManager.recordError(host, err);
+      // Network-level error (ECONNRESET, ETIMEDOUT, etc.) — rethrow raw so
+      // mapContractError in ContractService can classify it correctly.
+      throw err;
+    }
+
+    // ── Update bucket from response headers ─────────────────────────────────
+    const remainingHeader = response.headers.get("X-RateLimit-Remaining");
+    const resetHeader = response.headers.get("X-RateLimit-Reset");
+    const remaining = remainingHeader !== null ? parseInt(remainingHeader, 10) : NaN;
+    const resetEpoch = resetHeader !== null ? parseInt(resetHeader, 10) : NaN;
+    bucket.update(remaining, resetEpoch);
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+
+      if (response.status === 429) {
+        // Parse Retry-After header if present (seconds or HTTP-date).
+        const retryAfterHeader = response.headers.get("Retry-After");
+        let retryAfterMs: number | undefined;
+        if (retryAfterHeader !== null) {
+          const parsed = parseInt(retryAfterHeader, 10);
+          if (Number.isFinite(parsed) && parsed > 0) {
+            retryAfterMs = parsed * 1_000;
+          }
+        } else if (Number.isFinite(resetEpoch) && resetEpoch > 0) {
+          const nowMs = Date.now();
+          const resetMs = resetEpoch * 1_000;
+          retryAfterMs = Math.max(0, resetMs - nowMs);
+        }
+
+        // Schedule a bucket backoff so queued requests are held until the
+        // window resets.  The backoff fires asynchronously so we don't block
+        // the current call returning the error to the caller.
+        bucket.backoff(retryAfterMs).catch(() => {
+          /* Intentionally silent — backoff is best-effort */
+        });
+      }
+
+      const err = new HorizonHttpError(response.status, body);
+      this.hostManager.recordError(host, err);
+      throw err;
+    }
+
+    try {
+      return (await response.json()) as T;
+    } catch {
+      // "malformed" doesn't match any mapContractError pattern → ContractExecutionError
+      throw new Error("Horizon returned malformed JSON response");
+    }
+  }
+}
+
+/**
+ * Represents an HTTP error from the Horizon API.
+ * The message is crafted to match patterns in mapContractError:
+ *   - 5xx → "service unavailable" → ContractProviderUnavailableError
+ *   - 429 → "rate limit"          → ContractRateLimitError
+ *   - 4xx → "invalid argument"    → ContractInvalidRequestError
+ */
+export class HorizonHttpError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    body: string,
+  ) {
+    super(HorizonHttpError.buildMessage(statusCode, body));
+    this.name = "HorizonHttpError";
+  }
+
+  private static buildMessage(status: number, body: string): string {
+    const detail = body.slice(0, 200);
+    if (status >= 500) return `service unavailable: Horizon HTTP ${status}: ${detail}`;
+    if (status === 429) return `rate limit exceeded: Horizon HTTP ${status}: ${detail}`;
+    return `invalid argument: Horizon HTTP ${status}: ${detail}`;
+  }
+}

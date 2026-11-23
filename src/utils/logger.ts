@@ -1,4 +1,6 @@
-import pino, { LoggerOptions } from "pino";
+import pino from "pino";
+import { getTraceContext } from "../tracing/context.js";
+import { getReqId } from "./logContext.js";
 
 /**
  * Log levels following pino conventions:
@@ -13,6 +15,8 @@ export type LogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace";
 
 export interface LogContext {
   requestId?: string;
+  traceId?: string;
+  spanId?: string;
   userId?: string;
   service?: string;
   version?: string;
@@ -39,9 +43,7 @@ const getLogLevel = (): string => {
  * Sanitizes sensitive data from log objects to prevent security leaks
  * Removes or masks fields like passwords, tokens, and secrets
  */
-const sanitizeForLogging = (
-  obj: Record<string, unknown>
-): Record<string, unknown> => {
+const sanitizeForLogging = (obj: Record<string, unknown>): Record<string, unknown> => {
   const sensitiveFields = new Set([
     "password",
     "secret",
@@ -58,16 +60,17 @@ const sanitizeForLogging = (
   ]);
 
   const maskValue = (value: string): string =>
-    value.length > 4
-      ? `${value.substring(0, 2)}***${value.substring(value.length - 2)}`
-      : "***";
+    value.length > 4 ? `${value.substring(0, 2)}***${value.substring(value.length - 2)}` : "***";
 
+  const seen = new WeakSet();
   const sanitize = (input: unknown): unknown => {
     if (Array.isArray(input)) {
       return input.map(sanitize);
     }
 
     if (input && typeof input === "object") {
+      if (seen.has(input as object)) return "[Circular]";
+      seen.add(input as object);
       const result: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
         if (value === undefined) {
@@ -89,6 +92,20 @@ const sanitizeForLogging = (
   return sanitize(obj) as Record<string, unknown>;
 };
 
+export function addTraceCorrelationToLog(obj: Record<string, unknown>): Record<string, unknown> {
+  const formatted = { ...obj };
+  const traceContext = getTraceContext();
+
+  if (traceContext) {
+    formatted.traceId = traceContext.traceId;
+    formatted.spanId = traceContext.spanId;
+  } else if (!formatted.traceId && typeof formatted.requestId === "string") {
+    formatted.traceId = formatted.requestId;
+  }
+
+  return formatted;
+}
+
 /**
  * Creates the pino logger configuration with production-grade settings
  */
@@ -96,11 +113,33 @@ const createLoggerConfig = (): any => {
   const config: any = {
     level: getLogLevel(),
     timestamp: pino.stdTimeFunctions.isoTime,
+    /**
+     * mixin is called for every log record and merges the returned object as
+     * top-level fields.  We use it to inject req_id (from reqIdStorage ALS) and
+     * trace_id / span_id (from tracingStorage ALS) so they appear alongside
+     * level/time/msg without any manual threading of context.
+     */
+    mixin() {
+      const extra: Record<string, string> = {};
+
+      const reqId = getReqId();
+      if (reqId) {
+        extra["req_id"] = reqId;
+      }
+
+      const traceCtx = getTraceContext();
+      if (traceCtx) {
+        extra["trace_id"] = traceCtx.traceId;
+        extra["span_id"] = traceCtx.spanId;
+      }
+
+      return extra;
+    },
     formatters: {
       /**
        * Custom level formatter for better readability
        */
-      level(label: string, number: number) {
+      level(label: string) {
         return { level: label.toUpperCase() };
       },
       /**
@@ -117,10 +156,10 @@ const createLoggerConfig = (): any => {
         };
       },
       /**
-       * Object formatter to sanitize all logged objects
+       * Object formatter to sanitize all logged objects and add trace correlation fields.
        */
       log(obj: any) {
-        return sanitizeForLogging(obj);
+        return addTraceCorrelationToLog(sanitizeForLogging(obj));
       },
     },
     /**
@@ -136,21 +175,46 @@ const createLoggerConfig = (): any => {
       }),
     },
     /**
-     * Redact option provides additional security by completely removing sensitive paths
+     * Redact option provides additional security by completely removing sensitive paths.
+     *
+     * Buyer PII paths cover the canonical booking-intent payload shape:
+     *   { buyer: { name, email, phone } }
+     * as well as arrays of buyers (e.g. bulk intents):
+     *   { buyers[*].name, buyers[*].email, buyers[*].phone }
+     *
+     * `remove: true` drops the key entirely rather than replacing it with a
+     * censor string, so no PII placeholder ever reaches log stores.
      */
     redact: {
       paths: [
+        // HTTP transport headers
         "headers.authorization",
         "headers.cookie",
         "headers['x-api-key']",
         "req.headers.authorization",
         "req.headers.cookie",
         "req.headers['x-api-key']",
+        // Generic body secrets
         "body.password",
         "body.secret",
         "query.token",
+        // Buyer PII — top-level buyer object (booking-intent payload)
+        "buyer.name",
+        "buyer.email",
+        "buyer.phone",
+        // Buyer PII — arrays of buyers (e.g. bulk intents)
+        "buyers[*].name",
+        "buyers[*].email",
+        "buyers[*].phone",
+        // Nested inside intent or booking objects
+        "intent.buyer.name",
+        "intent.buyer.email",
+        "intent.buyer.phone",
+        "booking.buyer.name",
+        "booking.buyer.email",
+        "booking.buyer.phone",
       ],
-      censor: "[REDACTED]",
+      remove: true,
     },
     /**
      * Ensure error causes are serialized
@@ -201,11 +265,7 @@ export const createChildLogger = (context: LogContext) => {
  * @param message - Log message
  * @param context - Optional context object
  */
-export const log = (
-  level: LogLevel,
-  message: string,
-  context?: LogContext
-): void => {
+export const log = (level: LogLevel, message: string, context?: LogContext): void => {
   if (context) {
     logger[level](context, message);
   } else {
@@ -216,11 +276,7 @@ export const log = (
 /**
  * Convenience methods for common logging scenarios
  */
-export const logInfo = (message: string, context?: LogContext) =>
-  log("info", message, context);
-export const logError = (message: string, context?: LogContext) =>
-  log("error", message, context);
-export const logWarn = (message: string, context?: LogContext) =>
-  log("warn", message, context);
-export const logDebug = (message: string, context?: LogContext) =>
-  log("debug", message, context);
+export const logInfo = (message: string, context?: LogContext) => log("info", message, context);
+export const logError = (message: string, context?: LogContext) => log("error", message, context);
+export const logWarn = (message: string, context?: LogContext) => log("warn", message, context);
+export const logDebug = (message: string, context?: LogContext) => log("debug", message, context);

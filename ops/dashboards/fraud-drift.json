@@ -1,0 +1,173 @@
+{
+  "uid": "fraud-drift",
+  "title": "Fraud Score Drift Detection",
+  "tags": ["fraud", "drift", "tier-1"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "model_version",
+        "label": "Model version",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(fraud_drift_psi, model_version)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "selected": true, "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "PSI (live vs baseline)",
+      "description": "Population Stability Index between baseline training histogram and live fraud scores. Bands indicate ok (<0.1), warning (0.1–0.2), critical (>=0.2).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.1 },
+              { "color": "red", "value": 0.2 }
+            ]
+          },
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "expr": "fraud_drift_psi{model_version=~\"$model_version\"}",
+          "legendFormat": "{{model_version}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "KL divergence (live vs baseline)",
+      "description": "Kullback-Leibler divergence D(live || baseline). Bands indicate ok (<0.05), warning (0.05–0.1), critical (>=0.1).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.1 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "fraud_drift_kl{model_version=~\"$model_version\"}",
+          "legendFormat": "{{model_version}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Current drift status",
+      "description": "0=ok, 1=warning, 2=critical, 3=no_baseline. Color coded green/yellow/red/grey.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OK", "color": "green" } } },
+            { "type": "value", "options": { "1": { "text": "WARNING", "color": "yellow" } } },
+            { "type": "value", "options": { "2": { "text": "CRITICAL", "color": "red" } } },
+            { "type": "value", "options": { "3": { "text": "NO BASELINE", "color": "grey" } } }
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "fraud_drift_status{model_version=~\"$model_version\"}",
+          "legendFormat": "{{model_version}}",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Alarms emitted (last 24h)",
+      "description": "Total fraud drift alarms emitted in the last 24 hours split by severity and statistic.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 8 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (severity, statistic) (increase(fraud_drift_alerts_total{model_version=~\"$model_version\"}[24h]))",
+          "legendFormat": "{{severity}} / {{statistic}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Tracked model versions",
+      "description": "Number of model versions emitting drift metrics. If this exceeds 8 the model_version label is collapsing to __overflow__.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "count(count by (model_version) (fraud_drift_psi{model_version=~\"$model_version\"}))",
+          "legendFormat": "versions",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Cardinality overflow rate",
+      "description": "Rate of fraud_drift_* observations collapsed to __overflow__ (model_version budget exhausted).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(metric_cardinality_overflow_total{metric=~\"fraud_drift_.+\"}[15m]))",
+          "legendFormat": "overflow/s",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Alarm rate by severity / statistic",
+      "description": "Number of fraud drift alarms emitted per minute, grouped by severity (warning/critical) and statistic (psi/kl).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+      "targets": [
+        {
+          "expr": "sum by (severity, statistic) (rate(fraud_drift_alerts_total{model_version=~\"$model_version\"}[5m]))",
+          "legendFormat": "{{severity}} / {{statistic}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

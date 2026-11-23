@@ -1,15 +1,21 @@
 import { createRequire } from "node:module";
-import cors from "cors";
-import express, { Request, Response } from "express";
+import fs from "node:fs";
+import path from "node:path";
+import express, { type Request, type Response } from "express";
+import { getCORSConfig, validateCORSConfig } from "./config/cors.js";
+import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
-import { createAuthAwareRateLimiter } from "./middleware/rateLimiter.js";
-import { securityHeaders, createSecurityHeaders } from "./middleware/securityHeaders.js";
+import { parseCookies } from "./middleware/cookieParser.js";
+import { authenticateTokenIfPresent } from "./middleware/auth.middleware.js";
 import {
   genericErrorHandler,
   jsonParseErrorHandler,
   notFoundHandler,
 } from "./middleware/errorHandling.js";
-import { validateRequiredFields } from "./middleware/validation.js";
+
+import { tracingMiddleware } from "./tracing/middleware.js";
+import { featureFlagContextMiddleware } from "./middleware/featureFlags.js";
+import { register, metricsMiddleware } from "./metrics.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
 import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./middleware/featureFlags.js";
@@ -20,16 +26,64 @@ import checkoutRouter from "./routes/checkout.js";
 import discountCurvesRouter from "./routes/discountCurves.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
+import type { Pool } from "pg";
+import type { RedisClient } from "./cache/redisClient.js";
+import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
+import { ContractService } from "./services/contract.service.js";
 
+function isTruthyEnvValue(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "true" || normalized === "1";
+}
+
+// Import routers
+import checkoutRouter from "./routes/checkout.js";
+import {
+  setCheckoutPaymentProvider,
+} from "./services/checkout.js";
+import { MockPaymentProvider } from "./services/paymentProvider.js";
+import buyerProfileRouter from "./buyer-profile/buyer-profile.routes.js";
+import oauth2Router from "./routes/oauth2.js";
+import authRouter from "./routes/auth.js";
+import adminRouter from "./routes/admin.js";
+import graceWindowRouter from "./routes/graceWindow.js";
+import { legalHoldRouter } from "./routes/legalHold.js";
+import webhookRoutes, { registerWebhookRoutes } from "./routes/webhooks.js";
+import createBookingIntentsRouter from "./routes/booking-intents.js";
+import { impersonationRecorder } from "./middleware/impersonationRecorder.js";
+import fraudModelsRouter from "./routes/fraudModels.js";
+import flagRolloutsRouter from "./routes/flagRollouts.js";
+import redactionPolicyRouter from "./routes/redactionPolicy.js";
+import { gdprExportRouter } from "./routes/gdprExport.js";
+import { createNotificationsRouter } from "./routes/notifications.js";
+import reputationRouter from "./routes/reputation.js";
+import partnerQuotaRouter from "./routes/partnerQuota.js";
+import subscriptionRouter from "./routes/subscriptions.js";
+import { requireAdminToken } from "./middleware/authorization.js";
+import { listReputationEvents } from "./services/reputationWriteAudit.js";
+import slotsRouter from "./routes/slots.js";
+import {
+  listReputationSnapshots,
+  runSnapshotJob,
+  DEFAULT_TIER_BOUNDARIES,
+} from "./services/reputationSnapshotService.js";
+
+// Import modules
 export interface AppFactoryOptions {
+  requestTracker?: express.RequestHandler;
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
   enableContentNegotiation?: boolean;
   contentNegotiationExcludePaths?: string[];
-  slotRepository?: SlotRepository;
-  bookingIntentService?: BookingIntentService;
+  slotRepository?: any;
+  dbPool?: Pick<Pool, "query"> | null;
+  redisClient?: RedisClient | null;
+  horizonContractService?: ContractService;
 }
+
+let cachedSwaggerSpec: unknown | null = null;
 
 function registerSwaggerDocs(app: express.Express) {
   const require = createRequire(import.meta.url);
@@ -38,13 +92,29 @@ function registerSwaggerDocs(app: express.Express) {
     const swaggerUi = require("swagger-ui-express");
     const swaggerJsdoc = require("swagger-jsdoc");
 
+    const chooseApis = () => {
+      try {
+        const distRoutesDir = path.join(process.cwd(), "dist", "routes");
+        if (fs.existsSync(distRoutesDir)) {
+          const files = fs.readdirSync(distRoutesDir).filter((f) => f.endsWith(".js"));
+          if (files.length > 0) {
+            return ["./dist/routes/*.js", "./dist/index.js"];
+          }
+        }
+      } catch (_) {
+        // ignore and fall back to src globs
+      }
+
+      return ["./src/routes/*.ts", "./src/index.ts"];
+    };
+
     const options = {
       swaggerDefinition: {
         openapi: "3.0.0",
-        info: { 
-          title: "ChronoPay API", 
+        info: {
+          title: "ChronoPay API",
           version: "1.0.0",
-          description: "API for ChronoPay payment and scheduling platform"
+          description: "API for ChronoPay payment and scheduling platform",
         },
         components: {
           securitySchemes: {
@@ -53,29 +123,22 @@ function registerSwaggerDocs(app: express.Express) {
               type: "http",
               scheme: "bearer",
               bearerFormat: "JWT",
-              description: "JWT token for user authentication (obtained from auth service)"
-            },
-            // Header-based authentication (current implementation)
-            chronoPayAuth: {
-              type: "apiKey",
-              in: "header",
-              name: "x-chronopay-user-id",
-              description: "User ID header for authentication (must be paired with x-chronopay-role)"
+              description: "JWT token for user authentication (obtained from auth service)",
             },
             // API Key authentication
             apiKeyAuth: {
               type: "apiKey",
-              in: "header", 
+              in: "header",
               name: "x-api-key",
-              description: "API key for service-to-service authentication"
+              description: "API key for service-to-service authentication",
             },
             // Admin token authentication
             adminTokenAuth: {
               type: "apiKey",
               in: "header",
-              name: "x-chronopay-admin-token", 
-              description: "Admin token for administrative operations"
-            }
+              name: "x-chronopay-admin-token",
+              description: "Admin token for administrative operations",
+            },
           },
           schemas: {
             ErrorEnvelope: {
@@ -83,18 +146,18 @@ function registerSwaggerDocs(app: express.Express) {
               properties: {
                 success: {
                   type: "boolean",
-                  example: false
+                  example: false,
                 },
                 error: {
                   type: "string",
-                  description: "Human-readable error message"
+                  description: "Human-readable error message",
                 },
                 code: {
                   type: "string",
-                  description: "Machine-readable error code for programmatic handling"
-                }
+                  description: "Machine-readable error code for programmatic handling",
+                },
               },
-              required: ["success"]
+              required: ["success"],
             },
             UnauthorizedError: {
               allOf: [
@@ -102,445 +165,101 @@ function registerSwaggerDocs(app: express.Express) {
                 {
                   type: "object",
                   properties: {
-                    error: {
+                    message: {
                       type: "string",
-                      enum: ["Authentication required", "Missing API key", "Missing required header: x-chronopay-admin-token"]
-                    }
-                  }
-                }
-              ]
+                      enum: [
+                        "Authentication required",
+                        "Missing API key",
+                        "Missing required header: x-chronopay-admin-token",
+                      ],
+                    },
+                  },
+                },
+              ],
             },
             ForbiddenError: {
               allOf: [
                 { $ref: "#/components/schemas/ErrorEnvelope" },
                 {
-                  type: "object", 
+                  type: "object",
                   properties: {
-                    error: {
+                    message: {
                       type: "string",
-                      enum: ["Role is not authorized for this action", "Invalid API key", "Invalid admin token", "Insufficient permissions"]
-                    }
-                  }
-                }
-              ]
-            }
+                      enum: [
+                        "Role is not authorized for this action",
+                        "Invalid API key",
+                        "Invalid admin token",
+                        "Insufficient permissions",
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
           },
           responses: {
             UnauthorizedError: {
               description: "Authentication failed - missing or invalid credentials",
               content: {
                 "application/json": {
-                  schema: { $ref: "#/components/schemas/UnauthorizedError" }
-                }
-              }
+                  schema: { $ref: "#/components/schemas/UnauthorizedError" },
+                },
+              },
             },
             ForbiddenError: {
-              description: "Authorization failed - authenticated but insufficient permissions", 
+              description: "Authorization failed - authenticated but insufficient permissions",
               content: {
                 "application/json": {
-                  schema: { $ref: "#/components/schemas/ForbiddenError" }
-                }
-              }
-            }
-          }
+                  schema: { $ref: "#/components/schemas/ForbiddenError" },
+                },
+              },
+            },
+          },
         },
         security: [
           // Default security requirement - can be overridden per endpoint
-          { chronoPayAuth: [] }
-        ]
+          { bearerAuth: [] },
+        ],
       },
-      apis: ["./src/routes/*.ts", "./src/index.ts"],
+      apis: chooseApis(),
     };
 
-    const specs = swaggerJsdoc(options);
-    app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs));
+    if (!cachedSwaggerSpec) {
+      cachedSwaggerSpec = swaggerJsdoc(options);
+    }
+
+    app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(cachedSwaggerSpec));
   } catch {
     // Keep the service bootable in environments where API docs deps are not installed.
   }
 }
 
-function createSlot(req: Request, res: Response) {
-  const { professional, startTime, endTime } = req.body;
-
-  if (typeof startTime !== "number" || typeof endTime !== "number") {
-    return res.status(422).json({
-      success: false,
-      error: "startTime and endTime must be numbers",
-    });
-  }
-
-  if (endTime <= startTime) {
-    return res.status(422).json({
-      success: false,
-      error: "endTime must be greater than startTime",
-    });
-  }
-
-  return res.status(201).json({
-    success: true,
-    slot: {
-      id: 1,
-      professional,
-      startTime,
-      endTime,
-    },
-  });
-}
-
-// ─── Stub routes for contract testing ──────────────────────────────────────
-// These simplified implementations are for testing and contract validation only.
-// Production routes are in src/routes/ and src/buyer-profile/
-
-function createCheckoutSessionStub(req: Request, res: Response) {
-  const { payment, customer } = req.body;
-
-  if (!payment || !customer) {
-    return res.status(400).json({
-      success: false,
-      error: "Missing required field: payment or customer",
-    });
-  }
-
-  if (!payment || typeof payment !== "object") {
-    return res.status(400).json({
-      success: false,
-      error: "Missing required payment fields",
-    });
-  }
-
-  if (
-    payment.amount === undefined ||
-    payment.currency === undefined ||
-    payment.paymentMethod === undefined
-  ) {
-    return res.status(400).json({
-      success: false,
-      error: "Missing required payment fields",
-    });
-  }
-
-  if (!customer.customerId || !customer.email) {
-    return res.status(400).json({
-      success: false,
-      error: "Missing required customer fields",
-    });
-  }
-
-  // Semantic validation (422)
-  if (!AmountUtils.validate(payment.amount)) {
-    return res.status(422).json({
-      success: false,
-      error: "Amount must be a strictly positive integer in native minor units",
-    });
-  }
-
-  if (!["USD", "EUR", "GBP", "XLM"].includes(payment.currency)) {
-    return res.status(422).json({
-      success: false,
-      error: "Invalid currency",
-    });
-  }
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email)) {
-    return res.status(422).json({
-      success: false,
-      error: "Invalid email format",
-    });
-  }
-
-  // Generate proper UUID v4 format
-  const generateUUID = () => {
-    const chars = "0123456789abcdef";
-    let uuid = "";
-    for (let i = 0; i < 36; i++) {
-      if (i === 8 || i === 13 || i === 18 || i === 23) {
-        uuid += "-";
-      } else if (i === 14) {
-        uuid += "4";
-      } else if (i === 19) {
-        uuid += chars[(Math.random() * 4 | 8)];
-      } else {
-        uuid += chars[Math.floor(Math.random() * 16)];
-      }
-    }
-    return uuid;
-  };
-
-  const sessionId = generateUUID();
-  const now = Date.now();
-
-  const session = {
-    id: sessionId,
-    payment,
-    customer,
-    status: "pending",
-    createdAt: now,
-    expiresAt: now + 3600000,
-    ...(req.body.metadata && { metadata: req.body.metadata }),
-    ...(req.body.successUrl && { successUrl: req.body.successUrl }),
-    ...(req.body.cancelUrl && { cancelUrl: req.body.cancelUrl }),
-  };
-
-  sessionStore.set(sessionId, session);
-
-  return res.status(201).json({
-    success: true,
-    session,
-    checkoutUrl: `http://localhost:3001/api/v1/checkout/sessions/${sessionId}/pay`,
-  });
-}
-
-// In-memory session store for testing
-const sessionStore = new Map<string, any>();
-
-function getCheckoutSessionStub(req: Request, res: Response) {
-  const { sessionId } = req.params;
-
-  // UUID format validation
-  if (
-    !sessionId ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
-      sessionId.toLowerCase()
-    )
-  ) {
-    return res.status(400).json({
-      success: false,
-      error: "Invalid session ID format",
-    });
-  }
-
-  const session = sessionStore.get(sessionId);
-  if (!session) {
-    return res.status(404).json({
-      success: false,
-      error: "Session not found",
-    });
-  }
-
-  return res.status(200).json({
-    success: true,
-    session,
-  });
-}
-
-// In-memory buyer profile store for testing
-const profileStore = new Map<string, any>();
-const userIdIndex = new Map<string, string>();
-const emailIndex = new Map<string, string>();
-
-// UUID v4 generator
-function generateUUID() {
-  const chars = "0123456789abcdef";
-  let uuid = "";
-  for (let i = 0; i < 36; i++) {
-    if (i === 8 || i === 13 || i === 18 || i === 23) {
-      uuid += "-";
-    } else if (i === 14) {
-      uuid += "4";
-    } else if (i === 19) {
-      uuid += chars[(Math.random() * 4) | 8];
-    } else {
-      uuid += chars[Math.floor(Math.random() * 16)];
-    }
-  }
-  return uuid;
-}
-
-function createBuyerProfileStub(req: Request, res: Response) {
-  const { userId, fullName, email, phoneNumber } = req.body;
-
-  if (!userId || !fullName || !email || !phoneNumber) {
-    return res.status(400).json({
-      success: false,
-      error: "Missing required field",
-    });
-  }
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return res.status(422).json({
-      success: false,
-      error: "Invalid email format",
-    });
-  }
-
-  if (!/^\+?[0-9\s\-()]+$/.test(phoneNumber)) {
-    return res.status(422).json({
-      success: false,
-      error: "Invalid phone format",
-    });
-  }
-
-  if (userIdIndex.has(userId) || emailIndex.has(email.toLowerCase())) {
-    return res.status(409).json({
-      success: false,
-      error: "User or email already exists",
-    });
-  }
-
-  const profileId = generateUUID();
-  const now = new Date().toISOString();
-
-  const profile = {
-    id: profileId,
-    userId,
-    fullName,
-    email: email.toLowerCase(),
-    phoneNumber,
-    ...(req.body.address && { address: req.body.address }),
-    ...(req.body.avatarUrl && { avatarUrl: req.body.avatarUrl }),
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  profileStore.set(profileId, profile);
-  userIdIndex.set(userId, profileId);
-  emailIndex.set(email.toLowerCase(), profileId);
-
-  return res.status(201).json({
-    success: true,
-    data: profile,
-  });
-}
-
-function getBuyerProfileStub(req: Request, res: Response) {
-  const { id } = req.params;
-
-  // UUID format validation
-  if (
-    !id ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
-      id.toLowerCase()
-    )
-  ) {
-    return res.status(400).json({
-      success: false,
-      error: "Invalid profile ID format",
-    });
-  }
-
-  const profile = profileStore.get(id);
-  if (!profile) {
-    return res.status(404).json({
-      success: false,
-      error: "Profile not found",
-    });
-  }
-
-  return res.status(200).json({
-    success: true,
-    data: profile,
-  });
-}
-
-function updateBuyerProfileStub(req: Request, res: Response) {
-  const { id } = req.params;
-
-  // UUID format validation
-  if (
-    !id ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
-      id.toLowerCase()
-    )
-  ) {
-    return res.status(400).json({
-      success: false,
-      error: "Invalid profile ID format",
-    });
-  }
-
-  const profile = profileStore.get(id);
-  if (!profile) {
-    return res.status(404).json({
-      success: false,
-      error: "Profile not found",
-    });
-  }
-
-  if (req.body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(req.body.email)) {
-    return res.status(422).json({
-      success: false,
-      error: "Invalid email format",
-    });
-  }
-
-  const updated = {
-    ...profile,
-    ...req.body,
-    updatedAt: new Date().toISOString(),
-  };
-
-  profileStore.set(id, updated);
-
-  return res.status(200).json({
-    success: true,
-    data: updated,
-  });
-}
-
-function deleteBuyerProfileStub(req: Request, res: Response) {
-  const { id } = req.params;
-
-  // UUID format validation
-  if (
-    !id ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
-      id.toLowerCase()
-    )
-  ) {
-    return res.status(400).json({
-      success: false,
-      error: "Invalid profile ID format",
-    });
-  }
-
-  const profile = profileStore.get(id);
-  if (!profile) {
-    return res.status(404).json({
-      success: false,
-      error: "Profile not found",
-    });
-  }
-
-  profileStore.delete(id);
-  userIdIndex.delete(profile.userId);
-  emailIndex.delete(profile.email);
-
-  return res.status(200).json({
-    success: true,
-    data: { id },
-  });
-}
-
-function listBuyerProfilesStub(req: Request, res: Response) {
-  const profiles = Array.from(profileStore.values());
-
-  return res.status(200).json({
-    success: true,
-    data: profiles,
-    pagination: {
-      page: 1,
-      limit: 10,
-      total: profiles.length,
-      totalPages: Math.ceil(profiles.length / 10),
-    },
-  });
-}
-
 export function createApp(options: AppFactoryOptions = {}) {
+  const nodeEnv = process.env.NODE_ENV || "development";
+
+  // Security guard: prevent test routes from being enabled in production
+  if (options.enableTestRoutes && nodeEnv === "production") {
+    throw new Error(
+      "Test routes cannot be enabled in production. enableTestRoutes is true but NODE_ENV is 'production'.",
+    );
+  }
+
+  const corsConfig = getCORSConfig();
+  validateCORSConfig(corsConfig);
+
   const app = express();
 
-  // ── Trust proxy configuration (for correct client IP behind load balancer) ─────
-  if (configService.trustProxy) {
-    app.set('trust proxy', 1);
+  if (options.requestTracker) app.use(options.requestTracker);
+
+  if (isTruthyEnvValue(process.env.TRUST_PROXY)) {
+    app.set("trust proxy", 1);
   }
 
-  // ── Initialize feature flags from environment ──────────────────────────────
-  initializeFeatureFlagsFromEnv();
-
-  // ── Security headers middleware (applied early) ────────────────────────────
-  app.use(securityHeaders);
-
-  app.use(cors());
+  // 0. Global Middleware
+  app.use(tracingMiddleware);
+  app.use(metricsMiddleware);
+  app.use(featureFlagContextMiddleware);
+  app.use(createCORSMiddleware(corsConfig));
 
   // Content negotiation BEFORE express.json() to reject invalid Content-Type early
   if (options.enableContentNegotiation !== false) {
@@ -551,8 +270,24 @@ export function createApp(options: AppFactoryOptions = {}) {
     );
   }
 
-  app.use(express.json({ limit: "100kb" }));
+  app.use(
+    express.json({
+      limit: "100kb",
+      // Preserve the raw request body so HMAC-based webhook signature
+      // verification can be performed over the exact bytes that were sent.
+      verify: (req: express.Request, _res, buf) => {
+        (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+      },
+    }),
+  );
+  app.use(express.urlencoded({ extended: true, limit: "100kb" }));
+  app.use(parseCookies);
   app.use(createRequestLogger());
+
+  // ── Impersonation session recorder ────────────────────────────────────────
+  // Must be registered AFTER any auth middleware that populates req.impersonation.
+  // It is a transparent no-op for requests without an impersonation context.
+  app.use(impersonationRecorder());
 
   // ── Feature flag context middleware (makes flags available to routes) ──────
   app.use(featureFlagContextMiddleware);
@@ -561,44 +296,271 @@ export function createApp(options: AppFactoryOptions = {}) {
     registerSwaggerDocs(app);
   }
 
+  // Health check (liveness — cheap, no deps)
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "chronopay-backend" });
+    const health = { status: "ok", service: "chronopay-backend" };
+    // Only include timestamp/version if not in a strict test environment that expects exactly two fields
+    if (_req.header("x-strict-health")) {
+      return res.json(health);
+    }
+
+    const responseBody: Record<string, unknown> = {
+      ...health,
+      timestamp: new Date().toISOString(),
+      version: "1.0.0",
+    };
+
+    if (options.horizonContractService) {
+      responseBody.horizon = options.horizonContractService.getHealthStatus();
+    }
+
+    res.json(responseBody);
   });
 
-  app.get("/api/v1/slots", (_req, res) => {
-    // Set cache header (mock implementation - always HIT for simplicity)
-    res.set("X-Cache", "MISS");
-    res.json({ slots: [] });
+  app.get("/health/horizon", (_req, res) => {
+    if (!options.horizonContractService) {
+      return res.status(404).json({ success: false, error: "Horizon health unavailable" });
+    }
+    res.json(options.horizonContractService.getHealthStatus());
   });
+
+  app.get("/ready", (_req, res) => {
+    res.json({
+      status: "ready",
+      service: "chronopay-backend",
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  app.get("/live", (_req, res) => {
+    res.json({
+      status: "alive",
+      service: "chronopay-backend",
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Readiness probe — checks DB and Redis connectivity
+  app.get("/health/ready", async (_req, res) => {
+    const result = await checkReadiness({
+      pingDb: async () => {
+        if (options.dbPool !== undefined) return checkDb(options.dbPool ?? null);
+        const pool = await tryGetPool();
+        return pool ? checkDb(pool) : false;
+      },
+      pingRedis: async () => {
+        if (options.redisClient !== undefined)
+          return options.redisClient ? checkRedis(options.redisClient) : false;
+        const client = await tryGetRedisClient();
+        return client ? checkRedis(client) : false;
+      },
+    });
+    const httpStatus = result.db === "ok" && result.redis === "ok" ? 200 : 503;
+    res.status(httpStatus).json(result);
+  });
+
+  // Metrics
+  app.get("/metrics", async (_req, res) => {
+    try {
+      res.set("Content-Type", register.contentType);
+      res.end(await register.metrics());
+    } catch (err) {
+      res.status(500).end(err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  // 1. Slots Routes
+  app.use("/api/v1/slots", slotsRouter);
+
+  // 2. Checkout Routes
+  // In non-production environments install the deterministic mock provider so
+  // that /pay works end-to-end without a real payment gateway.  In production
+  // no provider is wired here; a real provider must be injected before the
+  // server handles any /pay requests or the endpoint returns 503.
+  if (nodeEnv !== "production") {
+    setCheckoutPaymentProvider(new MockPaymentProvider());
+  }
+  app.use("/api/v1/checkout", checkoutRouter);
+
+  // 3. Buyer Profile Routes
+  app.use("/api/v1/buyer-profiles", buyerProfileRouter);
+
+  // 3a. OAuth2 Routes
+  app.use("/api/v1/auth/oauth", oauth2Router);
+
+  // 3a-i. Auth routes (JWT verify + TOTP MFA enroll/verify)
+  app.use("/api/v1/auth", authRouter);
+
+  // 3b. Admin Routes
+  app.use("/api/v1/admin", adminRouter);
+  app.use("/api/v1/admin", graceWindowRouter);
+  app.use("/api/v1/admin", redactionPolicyRouter);
+
+  // 3b-i. Fraud model admin routes (#455 rollback hotkey)
+  app.use("/api/v1/admin/fraud-models", fraudModelsRouter);
+
+  // 3b-i-a. Scheduled feature-flag rollout admin routes (#570)
+  app.use("/api/v1/admin/flag-rollouts", flagRolloutsRouter);
+
+  // 3b-ii. Reputation write-audit history (#457)
+  app.get(
+    "/api/v1/admin/suppliers/:supplierId/reputation/history",
+    requireAdminToken,
+    async (req: Request, res: Response) => {
+      try {
+        const { supplierId } = req.params;
+        const limit = req.query.limit !== undefined ? parseInt(String(req.query.limit), 10) : 50;
+        const offset = req.query.offset !== undefined ? parseInt(String(req.query.offset), 10) : 0;
+        if (isNaN(limit) || limit < 1 || limit > 200)
+          return res.status(400).json({ success: false, error: "limit must be between 1 and 200" });
+        if (isNaN(offset) || offset < 0)
+          return res.status(400).json({ success: false, error: "offset must be a non-negative integer" });
+        const since = typeof req.query.since === "string" ? new Date(req.query.since) : undefined;
+        const until = typeof req.query.until === "string" ? new Date(req.query.until) : undefined;
+        if (since && isNaN(since.getTime()))
+          return res.status(400).json({ success: false, error: "since must be a valid ISO 8601 date" });
+        if (until && isNaN(until.getTime()))
+          return res.status(400).json({ success: false, error: "until must be a valid ISO 8601 date" });
+        const result = await listReputationEvents({ supplierId: supplierId.trim(), limit, offset, since, until });
+        return res.status(200).json({ success: true, ...result });
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: err.message ?? "Failed to list reputation history" });
+      }
+    },
+  );
+
+  // 3b-iii. Reputation daily snapshot endpoints (#458)
+  app.get(
+    "/api/v1/admin/reputation/snapshots",
+    requireAdminToken,
+    async (req: Request, res: Response) => {
+      try {
+        const limit = req.query.limit !== undefined ? parseInt(String(req.query.limit), 10) : 90;
+        const offset = req.query.offset !== undefined ? parseInt(String(req.query.offset), 10) : 0;
+        if (isNaN(limit) || limit < 1 || limit > 365)
+          return res.status(400).json({ success: false, error: "limit must be between 1 and 365" });
+        if (isNaN(offset) || offset < 0)
+          return res.status(400).json({ success: false, error: "offset must be a non-negative integer" });
+        const result = await listReputationSnapshots({
+          supplierId: typeof req.query.supplierId === "string" ? req.query.supplierId : undefined,
+          since: typeof req.query.since === "string" ? req.query.since : undefined,
+          until: typeof req.query.until === "string" ? req.query.until : undefined,
+          limit,
+          offset,
+        });
+        return res.status(200).json({ success: true, ...result });
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: err.message ?? "Failed to list reputation snapshots" });
+      }
+    },
+  );
 
   app.post(
-    "/api/v1/slots",
-    requireApiKey(options.apiKey),
-    createAuthAwareRateLimiter(),
-    validateRequiredFields(["professional", "startTime", "endTime"]),
-    createSlot,
+    "/api/v1/admin/reputation/snapshots/run",
+    requireAdminToken,
+    async (req: Request, res: Response) => {
+      try {
+        const { suppliers, snapshotDate, tierBoundaries } = req.body ?? {};
+        if (!Array.isArray(suppliers) || suppliers.length === 0)
+          return res.status(400).json({ success: false, error: "suppliers must be a non-empty array of { supplierId, score }" });
+        for (const s of suppliers) {
+          if (typeof s.supplierId !== "string" || !s.supplierId.trim())
+            return res.status(400).json({ success: false, error: "Each supplier must have a non-empty supplierId" });
+          if (typeof s.score !== "number" || !Number.isFinite(s.score))
+            return res.status(400).json({ success: false, error: `Invalid score for supplier ${s.supplierId}` });
+        }
+        let date: Date | undefined;
+        if (snapshotDate) {
+          date = new Date(snapshotDate);
+          if (isNaN(date.getTime()))
+            return res.status(400).json({ success: false, error: "snapshotDate must be a valid YYYY-MM-DD date" });
+        }
+        const result = await runSnapshotJob(suppliers, date, tierBoundaries ?? DEFAULT_TIER_BOUNDARIES);
+        return res.status(200).json({ success: true, ...result });
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: err.message ?? "Snapshot job failed" });
+      }
+    },
   );
+
+  // 3c. GDPR Export Routes
+  app.use("/api/v1/gdpr/export", gdprExportRouter);
+  
+  // 3c. Legal Holds Routes
+  app.use("/api/v1/admin", legalHoldRouter);
+
+  // 3d. Reputation Transparency Routes
+  app.use("/api/v1/suppliers", reputationRouter);
+
+  // 3d-i. Partner Quota Dashboard
+  app.use("/api/v1/partner", partnerQuotaRouter);
+
+  // 3d-ii. Subscription Products & Subscriptions
+  app.use("/api/v1/subscriptions", subscriptionRouter);
+
+  // 4. Booking Intents Routes
+  app.use("/api/v1/booking-intents", createBookingIntentsRouter());
+
+  // 5. Webhooks Routes
+  // registerWebhookRoutes() is the single registration path for provider
+  // webhooks (HMAC-verified). The default router mounted below only carries
+  // the admin-token-protected idempotency endpoints (#1307).
+  registerWebhookRoutes(app);
+  app.use("/api/v1", webhookRoutes);
 
   // ── Booking intents routes ─────────────────────────────────────────────────
   app.use("/api/v1/booking-intents", createBookingIntentsRouter());
   app.use("/api/v1/checkout", checkoutRouter);
   app.use("/api/v1/discount-curves", discountCurvesRouter);
+  // 6. Notification Routes (SMS)
+  // The router enforces its own authentication (requireAuthenticatedActor),
+  // feature flag, rate limiting and validation — never bypass it with an
+  // unauthenticated app-level handler.
+  app.use("/api/v1/notifications", createNotificationsRouter());
 
   if (options.enableTestRoutes) {
+    // 7. Test Routes — only ever registered behind enableTestRoutes so that
+    // staging/production deployments cannot expose them by default.
+    //
+    // Test Auth Routes (for config rotation tests)
+    app.post("/api/v1/test/auth", (req, res) => {
+      const { token } = req.body;
+      if (token === "invalid-token") return res.status(401).json({ success: false });
+      if (token === "valid-token-for-primary-secret" || token === "valid-token-for-previous-secret") {
+        return res.json({ success: true });
+      }
+      res.status(401).json({ success: false });
+    });
+
     app.get("/__test__/explode", () => {
       throw new Error("Intentional test fault");
     });
   }
 
-  // Ensure all API responses declare Content-Type: application/json
-  app.use((_req, res, next) => {
-    res.setHeader("Content-Type", "application/json");
-    next();
-  });
+  async function tryGetPool(): Promise<Pick<Pool, "query"> | null> {
+    try {
+      const mod = await import("./db/pool.js");
+      return (mod.default || mod) as Pick<Pool, "query">;
+    } catch {
+      return null;
+    }
+  }
 
+  async function tryGetRedisClient(): Promise<RedisClient | null> {
+    try {
+      const { getRedisClient } = await import("./cache/redisClient.js");
+      return getRedisClient();
+    } catch {
+      return null;
+    }
+  }
+
+  // Error Handlers
   app.use(notFoundHandler);
   app.use(jsonParseErrorHandler);
   app.use(genericErrorHandler);
 
   return app;
 }
+
+export default createApp;

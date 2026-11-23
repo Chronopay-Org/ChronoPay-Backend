@@ -43,6 +43,18 @@ export class ContractProviderUnavailableError extends AppError {
   }
 }
 
+export class HorizonUnavailableError extends AppError {
+  constructor(message = "All Horizon hosts are unreachable or quarantined") {
+    super(message, 503, "HORIZON_UNAVAILABLE", true);
+  }
+}
+
+export class ContractSequenceCollisionError extends AppError {
+  constructor(message = "Horizon sequence-number collision detected") {
+    super(message, 409, "CONTRACT_SEQUENCE_COLLISION", true);
+  }
+}
+
 export class ContractExecutionError extends AppError {
   constructor(message = "Unexpected contract provider error") {
     super(message, 500, "CONTRACT_EXECUTION_FAILED", false);
@@ -56,6 +68,19 @@ export function shouldRetryContractError(error: unknown): boolean {
     return true;
   }
 
+  // A 5xx from the provider is retriable by definition. Reading the status off
+  // the error is more reliable than matching status digits in its message text
+  // (e.g. ContractProviderUnavailableError carries 503 but no "503" in text).
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    typeof (error as { statusCode: unknown }).statusCode === "number" &&
+    (error as { statusCode: number }).statusCode >= 500
+  ) {
+    return true;
+  }
+
   return (
     text.includes("rate limit") ||
     text.includes("timeout") ||
@@ -66,6 +91,8 @@ export function shouldRetryContractError(error: unknown): boolean {
     text.includes("connection reset") ||
     text.includes("econnreset") ||
     text.includes("etimedout") ||
+    text.includes("tx_bad_seq") ||
+    text.includes("bad sequence") ||
     text.includes("502") ||
     text.includes("503") ||
     text.includes("504") ||
@@ -86,6 +113,10 @@ export function mapContractError(error: unknown): AppError {
 
   if (text.includes("timeout") || text.includes("timed out") || text.includes("gateway timeout") || text.includes("service unavailable") || text.includes("connection reset") || text.includes("econnreset") || text.includes("etimedout") || isEthersErrorCode(error, "TIMEOUT") || isEthersErrorCode(error, "NETWORK_ERROR")) {
     return new ContractProviderUnavailableError();
+  }
+
+  if (text.includes("tx_bad_seq") || text.includes("bad sequence")) {
+    return new ContractSequenceCollisionError();
   }
 
   if (text.includes("invalid address") || text.includes("invalid argument") || text.includes("invalid function") || text.includes("function not found") || text.includes("bad function selector")) {

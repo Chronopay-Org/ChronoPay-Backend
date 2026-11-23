@@ -1,5 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
+import { logger } from "../utils/logger.js";
+
 import {
   createAuditEvent,
   encodeAuditEvent,
@@ -7,6 +9,13 @@ import {
   AuditEventV1,
   LegacyAuditLogEntry,
 } from "../utils/auditEventValidator.js";
+import type {
+  ImpersonationAuditContext,
+} from "../types/impersonation.types.js";
+import {
+  IMPERSONATION_AUDIT_ACTIONS,
+  ImpersonationAuditAction,
+} from "../types/auditEvent.js";
 
 /**
  * Legacy audit log entry (for backward compatibility)
@@ -126,10 +135,73 @@ export class AuditLogger {
       await fs.appendFile(this.logFilePath, logLine, "utf8");
     } catch (error) {
       // Failure mode handling: We log to console rather than breaking the application flow
-      console.error("Failed to write to audit log:", error);
+      logger.error({ error }, "Failed to write to audit log");
     }
+  }
+
+  public getLogFilePath(): string {
+    return this.logFilePath;
+  }
+
+  /**
+   * Convenience helper for emitting impersonation lifecycle events.
+   *
+   * Wraps the standard `log` method with a pre-built payload structure that
+   * includes the impersonation context in `data.context` so review tooling
+   * can filter events by session ID without knowing the internal envelope.
+   *
+   * @param action  - One of IMPERSONATION_AUDIT_ACTIONS
+   * @param context - Impersonation correlation fields
+   * @param extra   - Optional extra payload fields merged into `data`
+   * @param status  - HTTP status or logical status (default 200)
+   */
+  public async logImpersonationEvent(
+    action: ImpersonationAuditAction | string,
+    context: ImpersonationAuditContext,
+    extra?: Record<string, unknown>,
+    status: number | string = 200,
+  ): Promise<void> {
+    return this.log(
+      action,
+      {
+        context: {
+          impersonationSessionId: context.impersonationSessionId,
+          adminId: context.adminId,
+          targetUserId: context.targetUserId,
+          ...extra,
+        },
+      },
+      { status },
+    );
   }
 }
 
-// Export a default singleton instance for use across the application
-export const defaultAuditLogger = new AuditLogger();
+const GLOBAL_AUDIT_LOGGER_KEY = "__CHRONOPAY_DEFAULT_AUDIT_LOGGER__" as const;
+
+const globalAuditState = globalThis as typeof globalThis & {
+  [GLOBAL_AUDIT_LOGGER_KEY]?: AuditLogger;
+  defaultAuditLogger?: AuditLogger;
+};
+
+const sharedLogger =
+  globalAuditState[GLOBAL_AUDIT_LOGGER_KEY] ??
+  globalAuditState.defaultAuditLogger ??
+  new AuditLogger();
+
+Object.defineProperty(globalAuditState, GLOBAL_AUDIT_LOGGER_KEY, {
+  value: sharedLogger,
+  configurable: true,
+  writable: true,
+  enumerable: false,
+});
+Object.defineProperty(globalAuditState, "defaultAuditLogger", {
+  value: sharedLogger,
+  configurable: true,
+  writable: true,
+  enumerable: false,
+});
+
+// `defineProperty` above guarantees the global is set, but TypeScript only sees the
+// optional property type, so fall back to the shared singleton to keep this
+// non-nullable for every consumer that injects it as a required AuditLogger.
+export const defaultAuditLogger: AuditLogger = globalAuditState.defaultAuditLogger ?? sharedLogger;

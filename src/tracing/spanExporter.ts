@@ -34,3 +34,13 @@ export function emitSpan(span: Span): void {
     }
   }
 }
+
+/**
+ * Create a no-op exporter that discards spans.
+ * Useful for tests where you don't want to export spans.
+ */
+export function createNoOpExporter(): SpanExporter {
+  return (_span: Span): void => {
+    // intentionally do nothing
+  };
+}

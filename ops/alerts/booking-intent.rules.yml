@@ -1,0 +1,71 @@
+groups:
+  - name: booking_intent_slo
+    rules:
+      - record: slo:booking_intent_latency_errors:ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(http_request_duration_seconds_bucket{method="POST", route="/api/v1/booking-intents", le="0.5"}[5m]))
+            /
+            sum(rate(http_request_duration_seconds_count{method="POST", route="/api/v1/booking-intents"}[5m]))
+          )
+      - record: slo:booking_intent_latency_errors:ratio_rate30m
+        expr: |
+          1 - (
+            sum(rate(http_request_duration_seconds_bucket{method="POST", route="/api/v1/booking-intents", le="0.5"}[30m]))
+            /
+            sum(rate(http_request_duration_seconds_count{method="POST", route="/api/v1/booking-intents"}[30m]))
+          )
+      - record: slo:booking_intent_latency_errors:ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(http_request_duration_seconds_bucket{method="POST", route="/api/v1/booking-intents", le="0.5"}[1h]))
+            /
+            sum(rate(http_request_duration_seconds_count{method="POST", route="/api/v1/booking-intents"}[1h]))
+          )
+      - record: slo:booking_intent_latency_errors:ratio_rate6h
+        expr: |
+          1 - (
+            sum(rate(http_request_duration_seconds_bucket{method="POST", route="/api/v1/booking-intents", le="0.5"}[6h]))
+            /
+            sum(rate(http_request_duration_seconds_count{method="POST", route="/api/v1/booking-intents"}[6h]))
+          )
+      - record: slo:booking_intent_latency_errors:ratio_rate3d
+        expr: |
+          1 - (
+            sum(rate(http_request_duration_seconds_bucket{method="POST", route="/api/v1/booking-intents", le="0.5"}[3d]))
+            /
+            sum(rate(http_request_duration_seconds_count{method="POST", route="/api/v1/booking-intents"}[3d]))
+          )
+      
+      - alert: BookingIntentHighBurnRate
+        expr: |
+          slo:booking_intent_latency_errors:ratio_rate1h > (14.4 * 0.001)
+          and
+          slo:booking_intent_latency_errors:ratio_rate5m > (14.4 * 0.001)
+        labels:
+          severity: page
+        annotations:
+          summary: "High SLO burn rate for Booking Intent creation"
+          description: "Booking Intent creation latency is burning too much of its error budget (14.4x over 1h/5m)."
+
+      - alert: BookingIntentMediumBurnRate
+        expr: |
+          slo:booking_intent_latency_errors:ratio_rate6h > (6 * 0.001)
+          and
+          slo:booking_intent_latency_errors:ratio_rate30m > (6 * 0.001)
+        labels:
+          severity: page
+        annotations:
+          summary: "Medium SLO burn rate for Booking Intent creation"
+          description: "Booking Intent creation latency is burning too much of its error budget (6x over 6h/30m)."
+
+      - alert: BookingIntentLowBurnRate
+        expr: |
+          slo:booking_intent_latency_errors:ratio_rate3d > (1 * 0.001)
+          and
+          slo:booking_intent_latency_errors:ratio_rate6h > (1 * 0.001)
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Low SLO burn rate for Booking Intent creation"
+          description: "Booking Intent creation latency is burning too much of its error budget (1x over 3d/6h)."

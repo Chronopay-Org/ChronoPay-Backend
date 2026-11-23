@@ -5,6 +5,7 @@ export interface DeliveryMetrics {
 }
 
 const counters: DeliveryMetrics = { delivered: 0, skipped: 0, failed: 0 };
+let currentConcurrency = 1; // default start
 
 export const reminderMetrics = {
   increment(key: keyof DeliveryMetrics) {
@@ -18,5 +19,13 @@ export const reminderMetrics = {
     counters.delivered = 0;
     counters.skipped = 0;
     counters.failed = 0;
+    currentConcurrency = 1;
+  },
+  /** Set current concurrency for monitoring */
+  setConcurrency(value: number) {
+    currentConcurrency = value;
+  },
+  getConcurrency() {
+    return currentConcurrency;
   },
 };

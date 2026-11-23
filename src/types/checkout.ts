@@ -7,6 +7,8 @@
  * - Error types
  */
 
+import { AppError } from "../errors/AppError.js";
+
 /**
  * Supported payment methods for checkout
  */
@@ -149,14 +151,14 @@ export interface CheckoutErrorResponse {
 /**
  * Custom error class for checkout operations
  */
-export class CheckoutError extends Error {
+export class CheckoutError extends AppError {
   constructor(
     public code: string,
     message: string,
     public status: number = 400,
     public details?: Record<string, unknown>,
   ) {
-    super(message);
+    super(message, status, code, true, details);
     this.name = "CheckoutError";
   }
 }
@@ -171,10 +173,12 @@ export const CheckoutErrorCode = {
   INVALID_EMAIL: "INVALID_EMAIL",
   INVALID_PAYMENT_METHOD: "INVALID_PAYMENT_METHOD",
   INVALID_CUSTOMER_ID: "INVALID_CUSTOMER_ID",
+  INVALID_REDIRECT_URL: "INVALID_REDIRECT_URL",
   MISSING_REQUIRED_FIELD: "MISSING_REQUIRED_FIELD",
   SESSION_NOT_FOUND: "SESSION_NOT_FOUND",
   SESSION_EXPIRED: "SESSION_EXPIRED",
   INVALID_SESSION_STATE: "INVALID_SESSION_STATE",
+  PAYMENT_PROVIDER_UNAVAILABLE: "PAYMENT_PROVIDER_UNAVAILABLE",
   UNAUTHORIZED: "UNAUTHORIZED",
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;
