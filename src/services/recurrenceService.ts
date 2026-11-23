@@ -1,22 +1,18 @@
-// @ts-nocheck
 // rrule is a CJS module; import the default export and destructure for
 // compatibility with Jest's --experimental-vm-modules ESM test environment.
 // Actual interop varies by consumer, so resolve through `.default` when
 // present (`import * as` only exposes `default`/`rrule` under Node's
 // CJS-ESM bridge for rrule 2.8.x).
 import * as rruleLib from "rrule";
-import type { RRule as RRuleType } from "rrule";
+import type { Options, RRule as RRuleType } from "rrule";
 import { AuditLogger, defaultAuditLogger } from "./auditLogger.js";
 import { SupplierTimezoneContext } from "../modules/slots/slot-repository.js";
 import {
   TimezoneResolverService,
   createInMemoryTimezoneResolverDeps,
 } from "./timezoneResolverService.js";
-const rruleCjs = (rruleLib as any).default ?? rruleLib;
-const { RRule: _RRule, rrulestr } = rruleCjs as {
-  RRule: typeof RRuleType;
-  rrulestr: (rruleStr: string, options?: Record<string, unknown>) => RRuleType;
-};
+const rruleCjs = rruleLib.default ?? rruleLib;
+const { RRule: _RRule, rrulestr } = rruleCjs;
 
 export const MAX_OCCURRENCES = 200;
 
@@ -170,12 +166,12 @@ export function expandRRuleWithExdate(
 
   let rule: RRuleType;
   try {
-    rule = rrulestr(rruleOnly, { forceset: false }) as unknown as RRuleType;
+    rule = rrulestr(rruleOnly, { forceset: false });
   } catch {
     throw new RecurrenceError("Invalid RRULE format");
   }
 
-  const options = (rule as any).options;
+  const options: Partial<Options> = rule.options;
   if ((options.count ?? 0) <= 0 && !options.until) {
     throw new RecurrenceError("Unbounded RRULE is not allowed; include COUNT or UNTIL");
   }
@@ -183,7 +179,7 @@ export function expandRRuleWithExdate(
     throw new RecurrenceError("INTERVAL must be a positive integer");
   }
 
-  const rawOccurrences: Date[] = (rule as any).all(
+  const rawOccurrences: Date[] = rule.all(
     (_occ: Date, i: number) => i < MAX_OCCURRENCES + 1,
   );
   if (rawOccurrences.length > MAX_OCCURRENCES) {
@@ -225,11 +221,46 @@ export function expandRRuleWithExdate(
  * existing callers that do not need the detailed exclusion report can continue
  * to use this function unchanged.
  *
- * @param rruleText  iCalendar text (may include EXDATE lines).
- * @param _dtstartIso  Unused; retained for API compatibility.
+ * When `dtstartIso` is supplied and the text does not already contain a
+ * `DTSTART` line, the parsed instant is normalised to RFC 5545 UTC form
+ * (`YYYYMMDDTHHMMSSZ`) and prepended as `DTSTART:<stamp>`. This makes expansion
+ * deterministic instead of defaulting to the system clock. If the text already
+ * contains a `DTSTART` line it takes precedence and is left untouched.
+ *
+ * @param rruleText   iCalendar text (may include DTSTART and EXDATE lines).
+ * @param dtstartIso  Optional ISO-8601 instant used as DTSTART when absent.
+ * @throws RecurrenceError if `dtstartIso` is not a valid ISO-8601 date.
  */
-export function expandRRule(rruleText: string, _dtstartIso?: string): Date[] {
-  return expandRRuleWithExdate(rruleText).occurrences;
+export function expandRRule(rruleText: string, dtstartIso?: string): Date[] {
+  let effectiveText = rruleText;
+
+  if (dtstartIso !== undefined) {
+    const dtstart = new Date(dtstartIso);
+    if (
+      typeof dtstartIso !== "string" ||
+      dtstartIso.trim().length === 0 ||
+      Number.isNaN(dtstart.getTime())
+    ) {
+      throw new RecurrenceError(`Invalid dtstartIso: ${String(dtstartIso)}`);
+    }
+
+    // Respect an explicit DTSTART already present in the text.
+    if (!/^DTSTART(?:;[^:]*)?:/im.test(effectiveText)) {
+      effectiveText = `DTSTART:${formatUtcStamp(dtstart)}\n${effectiveText}`;
+    }
+  }
+
+  return expandRRuleWithExdate(effectiveText).occurrences;
+}
+
+/**
+ * Format a Date as an RFC 5545 UTC date-time stamp: `YYYYMMDDTHHMMSSZ`.
+ */
+function formatUtcStamp(date: Date): string {
+  return date
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}Z$/, "Z");
 }
 
 export interface RegionalHoliday {

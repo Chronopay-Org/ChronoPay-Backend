@@ -1,6 +1,7 @@
 import os from "os";
 
 export type NodeEnv = "development" | "test" | "production";
+export type QuotaFailMode = "open" | "closed";
 
 export interface EncryptionKey {
   id: string;
@@ -27,6 +28,7 @@ export interface EnvConfig {
   redisUrl: string;
   rateLimitWindowMs: number;
   rateLimitMax: number;
+  quotaFailMode: QuotaFailMode;
   trustProxy: boolean;
   /**
    * Explicit opt-in for test-only routes (e.g. /__test__/explode, /api/v1/test/auth).
@@ -37,7 +39,7 @@ export interface EnvConfig {
   webhookSecret?: string;
   jwtIssuer?: string;
   jwtAudience?: string;
-  corsAllowedOrigins?: string[];
+  corsAllowedOrigins: readonly string[];
   /** Stellar Horizon base URLs (comma-separated, first is primary) */
   horizonUrls?: string[];
   /** Stellar network passphrase used to identify the target network */
@@ -92,6 +94,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
   const rateLimitMax = parsePositiveInteger(env.RATE_LIMIT_MAX, "RATE_LIMIT_MAX", 100, issues);
+  const quotaFailMode = parseQuotaFailMode(env.QUOTA_FAIL_MODE, issues);
   const trustProxy = parseBoolean(env.TRUST_PROXY, "TRUST_PROXY", false, issues);
   const enableTestRoutes = parseBoolean(
     env.ENABLE_TEST_ROUTES,
@@ -170,6 +173,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     redisUrl,
     rateLimitWindowMs,
     rateLimitMax,
+    quotaFailMode,
     trustProxy,
     enableTestRoutes,
     timeoutMs,
@@ -190,6 +194,16 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     mfaChallengeTtlSec,
     mfaRequiredForRefunds,
   };
+}
+
+function parseQuotaFailMode(rawValue: string | undefined, issues: string[]): QuotaFailMode {
+  if (rawValue === undefined) return "open";
+
+  const value = rawValue.trim();
+  if (value === "open" || value === "closed") return value;
+
+  issues.push("QUOTA_FAIL_MODE must be one of: open, closed.");
+  return "open";
 }
 
 function parseNodeEnv(rawValue: string | undefined, issues: string[]): NodeEnv {

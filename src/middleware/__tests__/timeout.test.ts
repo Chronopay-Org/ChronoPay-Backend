@@ -8,6 +8,9 @@
  *  - it must use the configured default when no `timeoutMs` is supplied
  *  - it must never touch a response that already finished/closed/aborted, or
  *    whose headers were already sent
+ *  - it must echo the incoming `x-request-id` and log the timeout
+ *  - it must mark `res.locals.timedOut`, abort `req.abortSignal`, and ignore
+ *    late writes without throwing
  *  - it must echo the validated request id and log the timeout
  *  - it must never echo or log an unvalidated `x-request-id` value
  *
@@ -30,6 +33,7 @@ jest.unstable_mockModule("../../utils/logger.js", () => ({
 let timeoutMiddleware: typeof import("../timeout.js").timeoutMiddleware;
 let timeoutConfig: typeof import("../../config/timeouts.js").timeoutConfig;
 let loggerWarn: jest.Mock;
+let loggerDebug: jest.Mock;
 
 beforeAll(async () => {
   const mod = await import("../timeout.js");
@@ -38,6 +42,7 @@ beforeAll(async () => {
   timeoutMiddleware = mod.timeoutMiddleware;
   timeoutConfig = cfg.timeoutConfig;
   loggerWarn = log.logger.warn as unknown as jest.Mock;
+  loggerDebug = log.logger.debug as unknown as jest.Mock;
 });
 
 // ─── Express doubles ─────────────────────────────────────────────────────────
@@ -70,9 +75,13 @@ function makeReq(
 function makeRes() {
   const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
   const res = {
+    locals: {} as Record<string, unknown>,
     headersSent: false,
+    writableEnded: false,
     statusCode: 200 as number,
     body: undefined as unknown,
+    sendCalls: 0,
+    endCalls: 0,
     header: {} as Record<string, unknown>,
     setHeader(key: string, value: unknown) {
       res.header[key] = value;
@@ -82,7 +91,29 @@ function makeRes() {
       return res;
     },
     json(body: unknown) {
+      if (res.headersSent) {
+        const err = new Error("Cannot set headers after they are sent to the client") as Error & { code?: string };
+        err.code = "ERR_HTTP_HEADERS_SENT";
+        throw err;
+      }
       res.body = body;
+      res.headersSent = true;
+      return res;
+    },
+    send(body: unknown) {
+      if (res.headersSent) {
+        const err = new Error("Cannot set headers after they are sent to the client") as Error & { code?: string };
+        err.code = "ERR_HTTP_HEADERS_SENT";
+        throw err;
+      }
+      res.sendCalls += 1;
+      res.body = body;
+      res.headersSent = true;
+      return res;
+    },
+    end() {
+      res.endCalls += 1;
+      res.writableEnded = true;
       return res;
     },
     on(event: string, cb: (...args: unknown[]) => void) {
@@ -99,6 +130,7 @@ function makeRes() {
 beforeEach(() => {
   jest.useFakeTimers();
   loggerWarn.mockClear();
+  loggerDebug.mockClear();
 });
 
 afterEach(() => {
@@ -108,7 +140,7 @@ afterEach(() => {
 // ─── Happy path ──────────────────────────────────────────────────────────────
 
 describe("timeoutMiddleware — request proceeds", () => {
-  it("calls next() immediately without responding", () => {
+  it("calls next() immediately without responding and attaches abortSignal", () => {
     const req = makeReq();
     const res = makeRes();
     const next = jest.fn() as unknown as NextFunction;
@@ -116,6 +148,9 @@ describe("timeoutMiddleware — request proceeds", () => {
     timeoutMiddleware({ timeoutMs: 100 })(req, res, next);
 
     expect(next).toHaveBeenCalledTimes(1);
+    expect(req.abortSignal).toBeDefined();
+    expect(req.abortSignal?.aborted).toBe(false);
+    expect(res.locals.timedOut).toBe(false);
     expect(res.statusCode).toBe(200);
     expect(res.body).toBeUndefined();
   });
@@ -168,11 +203,46 @@ describe("timeoutMiddleware — timeout", () => {
     expect(res.body).toBeUndefined();
 
     jest.advanceTimersByTime(1);
+    expect(res.locals.timedOut).toBe(true);
+    expect(req.abortSignal?.aborted).toBe(true);
     expect(res.statusCode).toBe(503);
     expect(res.body).toEqual({
       success: false,
       error: "Request timed out. Please try again later.",
     });
+  });
+
+  it("handles a handler resolving after timeout with one response, no error, and one debug log", async () => {
+    const req = makeReq({ "x-request-id": "req-late-1" }, "/api/v1/bookings");
+    const res = makeRes();
+
+    let resolveHandler!: () => void;
+    const handlerPromise = new Promise<void>((resolve) => {
+      resolveHandler = resolve;
+    }).then(() => {
+      res.status(200).json({ success: true, bookingId: "bk-1" });
+      res.send({ success: true });
+      res.end();
+    });
+
+    timeoutMiddleware({ timeoutMs: 100 })(req, res, jest.fn() as unknown as NextFunction);
+
+    jest.advanceTimersByTime(100);
+    expect(res.statusCode).toBe(503);
+    expect(res.locals.timedOut).toBe(true);
+    expect(req.abortSignal?.aborted).toBe(true);
+
+    resolveHandler();
+    await expect(handlerPromise).resolves.toBeUndefined();
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual({
+      success: false,
+      error: "Request timed out. Please try again later.",
+    });
+    expect(res.sendCalls).toBe(0);
+    expect(res.endCalls).toBe(0);
+    expect(loggerDebug).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the configured default timeout when none is supplied", () => {
