@@ -7,6 +7,10 @@ import express, { Request, Response, NextFunction } from "express";
 const mockQuery = jest.fn<(...args: any[]) => Promise<any>>();
 const mockPool: any = {
   query: mockQuery,
+  connect: jest.fn().mockImplementation(async () => ({
+    query: mockQuery,
+    release: jest.fn(),
+  })),
   on: jest.fn(),
 };
 
@@ -220,7 +224,54 @@ describe("queryBudgetMiddleware", () => {
       await request(app).get("/timed");
 
       // Should have recorded SQL time on the histogram
-      expect(mockQueryBudgetSqlTimeMs.labels).toHaveBeenCalled();
+      expect(mockQueryBudgetSqlTimeMs.labels).toHaveBeenCalledWith("/timed", "ok");
+    });
+
+    it("bounds route metric label to the matched route pattern across different IDs", async () => {
+      const observeMock = jest.fn();
+      mockQueryBudgetSqlTimeMs.labels.mockReturnValue({ observe: observeMock });
+
+      const app = createTestApp(60000);
+      app.get("/api/v1/slots/:id", (_req, res) => {
+        res.json({ ok: true });
+      });
+
+      await request(app).get("/api/v1/slots/8f3a1b2c");
+      await request(app).get("/api/v1/slots/9d4e5f6a");
+
+      expect(mockQueryBudgetSqlTimeMs.labels).toHaveBeenCalledTimes(2);
+      expect(mockQueryBudgetSqlTimeMs.labels).toHaveBeenNthCalledWith(1, "/api/v1/slots/:id", "ok");
+      expect(mockQueryBudgetSqlTimeMs.labels).toHaveBeenNthCalledWith(2, "/api/v1/slots/:id", "ok");
+    });
+
+    it("combines req.baseUrl and req.route.path for mounted routers across different IDs", async () => {
+      const observeMock = jest.fn();
+      mockQueryBudgetSqlTimeMs.labels.mockReturnValue({ observe: observeMock });
+
+      const app = createTestApp(60000);
+      const router = express.Router();
+      router.get("/:id", (_req, res) => {
+        res.json({ ok: true });
+      });
+      app.use("/api/v1/slots", router);
+
+      await request(app).get("/api/v1/slots/alpha-123");
+      await request(app).get("/api/v1/slots/beta-456");
+
+      expect(mockQueryBudgetSqlTimeMs.labels).toHaveBeenCalledTimes(2);
+      expect(mockQueryBudgetSqlTimeMs.labels).toHaveBeenNthCalledWith(1, "/api/v1/slots/:id", "ok");
+      expect(mockQueryBudgetSqlTimeMs.labels).toHaveBeenNthCalledWith(2, "/api/v1/slots/:id", "ok");
+    });
+
+    it("falls back to 'unmatched' when no Express route matches", async () => {
+      const observeMock = jest.fn();
+      mockQueryBudgetSqlTimeMs.labels.mockReturnValue({ observe: observeMock });
+
+      const app = createTestApp(60000);
+
+      const response = await request(app).get("/api/v1/does-not-exist/12345");
+      expect(response.status).toBe(404);
+      expect(mockQueryBudgetSqlTimeMs.labels).toHaveBeenCalledWith("unmatched", "ok");
     });
   });
 
