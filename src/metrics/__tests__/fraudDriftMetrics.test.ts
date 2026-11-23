@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import {
   recordFraudScore,
   setFraudScoreBaseline,
@@ -8,11 +9,20 @@ import {
   FRAUD_DRIFT_LIMITS,
   type FraudDriftSnapshot,
 } from "../fraudDriftMetrics.js";
-import { SCORE_BINS, type HistogramCounts, type ScoreBin } from "../../services/fraudDriftMath.js";
+import {
+  SCORE_BINS,
+  type HistogramInput,
+  type ScoreBin,
+} from "../../services/fraudDriftMath.js";
+import { logger } from "../../utils/logger.js";
 
 describe("src/metrics/fraudDriftMetrics", () => {
   beforeEach(() => {
     resetFraudDriftState();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   // =========================================================================
@@ -140,13 +150,46 @@ describe("src/metrics/fraudDriftMetrics", () => {
       expect(snap.liveTotals["v1"]).toBe(3);
     });
 
-    it("clamps non-finite scores (NaN, Infinity, -Infinity) to bin 0", () => {
+    it("ignores NaN without mutating counts or totals", () => {
+      recordFraudScore("v1", 4);
+      const before = getFraudDriftSnapshot();
+
       recordFraudScore("v1", Number.NaN);
+
+      const after = getFraudDriftSnapshot();
+      expect(after.live["v1"]).toEqual(before.live["v1"]);
+      expect(after.liveTotals["v1"]).toBe(before.liveTotals["v1"]);
+    });
+
+    it("ignores non-finite scores (Infinity, -Infinity) without mutating counts", () => {
+      recordFraudScore("v1", 4);
+      const before = getFraudDriftSnapshot();
+
       recordFraudScore("v1", Number.POSITIVE_INFINITY);
       recordFraudScore("v1", Number.NEGATIVE_INFINITY);
 
+      const after = getFraudDriftSnapshot();
+      expect(after.live["v1"]).toEqual(before.live["v1"]);
+      expect(after.liveTotals["v1"]).toBe(before.liveTotals["v1"]);
+    });
+
+    it("does not create a version when only NaN is recorded", () => {
+      recordFraudScore("nan-only", Number.NaN);
+
       const snap = getFraudDriftSnapshot();
-      expect(snap.live["v1"]["0"]).toBe(3);
+      expect(snap.versions).toEqual([]);
+      expect(snap.live["nan-only"]).toBeUndefined();
+    });
+
+    it("clamps scores outside the bucket domain before binning", () => {
+      recordFraudScore("v1", -0.5);
+      recordFraudScore("v1", 1.5);
+      recordFraudScore("v1", 100);
+
+      const snap = getFraudDriftSnapshot();
+      expect(snap.live["v1"]["0"]).toBe(1);
+      expect(snap.live["v1"]["1"]).toBe(1);
+      expect(snap.live["v1"]["9+"]).toBe(1);
       expect(snap.liveTotals["v1"]).toBe(3);
     });
 
@@ -181,7 +224,7 @@ describe("src/metrics/fraudDriftMetrics", () => {
   // =========================================================================
   describe("setFraudScoreBaseline - success paths and canonicalization", () => {
     it("sets baseline histogram with canonical bins and computes baselineTotals", () => {
-      const inputBaseline: HistogramCounts = {
+      const inputBaseline: HistogramInput = {
         "0": 100,
         "1": 200,
         "5": 50,
@@ -317,7 +360,8 @@ describe("src/metrics/fraudDriftMetrics", () => {
       expect(snap.live[FRAUD_DRIFT_LIMITS.OVERFLOW_VERSION_KEY]).toBeUndefined();
     });
 
-    it("routes 9th distinct version and beyond into __overflow__ key and marks overflowed=true", () => {
+    it("drops the 9th distinct version and beyond, keeping tracked versions capped", () => {
+      const warnSpy = jest.spyOn(logger, "warn");
       const max = FRAUD_DRIFT_LIMITS.MAX_MODEL_VERSIONS;
       for (let i = 0; i < max; i++) {
         recordFraudScore(`model-${i}`, 0);
@@ -325,21 +369,55 @@ describe("src/metrics/fraudDriftMetrics", () => {
 
       expect(getFraudDriftSnapshot().overflowed).toBe(false);
 
-      // 9th distinct version
+      // 9th and 10th distinct versions are rejected by the cardinality cap.
       recordFraudScore("overflow-model-a", 3);
-      let snap = getFraudDriftSnapshot();
-      expect(snap.overflowed).toBe(true);
-      expect(snap.live["overflow-model-a"]).toBeUndefined();
-      expect(snap.live[FRAUD_DRIFT_LIMITS.OVERFLOW_VERSION_KEY]).toBeDefined();
-      expect(snap.live[FRAUD_DRIFT_LIMITS.OVERFLOW_VERSION_KEY]["3"]).toBe(1);
-      expect(snap.liveTotals[FRAUD_DRIFT_LIMITS.OVERFLOW_VERSION_KEY]).toBe(1);
-
-      // 10th distinct version also accumulates under __overflow__
       recordFraudScore("overflow-model-b", 7);
-      snap = getFraudDriftSnapshot();
-      expect(snap.live[FRAUD_DRIFT_LIMITS.OVERFLOW_VERSION_KEY]["3"]).toBe(1);
-      expect(snap.live[FRAUD_DRIFT_LIMITS.OVERFLOW_VERSION_KEY]["7"]).toBe(1);
-      expect(snap.liveTotals[FRAUD_DRIFT_LIMITS.OVERFLOW_VERSION_KEY]).toBe(2);
+
+      const snap = getFraudDriftSnapshot();
+      expect(snap.versions).toHaveLength(max);
+      expect(snap.versions).not.toContain("overflow-model-a");
+      expect(snap.versions).not.toContain("overflow-model-b");
+      expect(snap.live["overflow-model-a"]).toBeUndefined();
+      expect(snap.live["overflow-model-b"]).toBeUndefined();
+      expect(snap.live[FRAUD_DRIFT_LIMITS.OVERFLOW_VERSION_KEY]).toBeUndefined();
+      expect(snap.overflowed).toBe(true);
+      expect(warnSpy).toHaveBeenCalled();
+
+      const warnPayload = warnSpy.mock.calls[0]?.[0] as { code?: string };
+      expect(warnPayload.code).toBe("FRAUD_DRIFT_MODEL_VERSION_LIMIT");
+    });
+
+    it("bounds baseline-only versions across both live and baseline maps", () => {
+      const warnSpy = jest.spyOn(logger, "warn");
+      const max = FRAUD_DRIFT_LIMITS.MAX_MODEL_VERSIONS;
+      for (let i = 0; i < max; i++) {
+        setFraudScoreBaseline(`base-${i}`, { "0": 1 });
+      }
+
+      setFraudScoreBaseline("base-extra", { "0": 1 });
+
+      const snap = getFraudDriftSnapshot();
+      expect(snap.versions).toHaveLength(max);
+      expect(snap.baseline["base-extra"]).toBeUndefined();
+      expect(snap.baselineTotals["base-extra"]).toBeUndefined();
+      expect(snap.overflowed).toBe(true);
+      expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it("counts live and baseline versions together against the same limit", () => {
+      const max = FRAUD_DRIFT_LIMITS.MAX_MODEL_VERSIONS;
+      for (let i = 0; i < max - 1; i++) {
+        recordFraudScore(`live-${i}`, 0);
+      }
+      setFraudScoreBaseline("baseline-only", { "0": 1 });
+      expect(getFraudDriftSnapshot().versions).toHaveLength(max);
+
+      recordFraudScore("live-extra", 1);
+
+      const snap = getFraudDriftSnapshot();
+      expect(snap.versions).toHaveLength(max);
+      expect(snap.live["live-extra"]).toBeUndefined();
+      expect(snap.overflowed).toBe(true);
     });
 
     it("allows already-known versions to continue recording after overflow occurred", () => {
