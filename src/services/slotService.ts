@@ -1,31 +1,12 @@
-// @ts-nocheck
-// @ts-expect-error - Auto-fixed by script
-import { PaginatedSlots, Slot } from "../types.js";
-// @ts-expect-error - Auto-fixed by script
-export type { Slot };
-import { getSlotsCount, getSlotsPage } from "../repositories/slotRepository.js";
-
-// @ts-expect-error - Auto-fixed by script
-export type { SlotRecord } from "../repositories/slotRepository.js";
-// @ts-expect-error - Auto-fixed by script
-export type { SlotRecord as Slot } from "../repositories/slotRepository.js";
-
-// ─── Re-export SlotInput so callers don't need to import from two places ──────
-// @ts-expect-error - Auto-fixed by script
-export type { SlotInput } from "../repositories/slotRepository.js";
-
-// ─── Internal Slot type (kept for backward compat with app.ts stub) ───────────
-export interface Slot {
-  id: string;
-  professional: string;
-  startTime: number;
-  endTime: number;
-  createdAt?: string;
-  _internalNote?: string;
-}
-
-// eslint-disable-next-line unused-imports/no-unused-vars
-const MAX_LIMIT = 100;
+import type { PaginatedSlots } from "../types.js";
+import {
+  getSlotsCount,
+  getSlotsPage,
+  type Slot,
+  type SlotInput,
+  type SlotRecord,
+} from "../repositories/slotRepository.js";
+export type { Slot, SlotInput, SlotRecord };
 const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 10;
 
@@ -59,8 +40,7 @@ export interface PaginationOptions {
 
 export interface SlotRepositoryInterface {
   getSlotsCount: () => Promise<number>;
-  // @ts-expect-error - Auto-fixed by script
-  getSlotsPage: (offset: number, limit: number) => Promise<PaginatedSlot[]>;
+  getSlotsPage: (offset: number, limit: number) => Promise<SlotRecord[]>;
 }
 
 // ─── Hold / reservation types ─────────────────────────────────────────────────
