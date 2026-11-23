@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Horizon rate-limit and request-queue metrics.
  *
@@ -19,7 +18,8 @@
  *   cardinality overflow tracking.
  */
 
-import { createBudgetedGauge } from "../metrics.js";
+import type { Gauge } from "prom-client";
+import { createBudgetedGauge, type BudgetedLabelMetric } from "../metrics.js";
 
 /**
  * Current remaining request quota reported by the Horizon host.
@@ -31,10 +31,10 @@ import { createBudgetedGauge } from "../metrics.js";
  * Label: `host` — the base URL of the Horizon node, e.g.
  *   `"https://horizon-testnet.stellar.org"`
  */
-export const horizonRateLimitRemaining = createBudgetedGauge({
+export const horizonRateLimitRemaining: BudgetedLabelMetric<Gauge> = createBudgetedGauge({
   name: "horizon_rate_limit_remaining",
   help: "Remaining requests in the current Horizon rate-limit window (from X-RateLimit-Remaining header)",
-  labels: ["host"],
+  labels: ["host"] as ["host"],
   budget: 32,
 });
 
@@ -48,10 +48,10 @@ export const horizonRateLimitRemaining = createBudgetedGauge({
  *
  * Label: `host` — same as horizonRateLimitRemaining.
  */
-export const horizonRequestQueueDepth = createBudgetedGauge({
+export const horizonRequestQueueDepth: BudgetedLabelMetric<Gauge> = createBudgetedGauge({
   name: "horizon_request_queue_depth",
   help: "Number of requests currently queued waiting for the Horizon token-bucket to refill",
-  labels: ["host"],
+  labels: ["host"] as ["host"],
   budget: 32,
 });
 
@@ -82,6 +82,7 @@ export function recordQueueDepth(host: string, depth: number): void {
  * Intended for test isolation — do not call in production code.
  */
 export function resetHorizonMetricsForHost(host: string): void {
-  horizonRateLimitRemaining.labels(host).set(0);
-  horizonRequestQueueDepth.labels(host).set(0);
+  if (!host) return;
+  horizonRateLimitRemaining.remove(host);
+  horizonRequestQueueDepth.remove(host);
 }

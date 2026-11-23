@@ -14,7 +14,7 @@ function makeEvent(
   id: string,
   eventType?: string,
   aggregateId?: string,
-  createdAt?: Date,
+  createdAt?: Date | number,
 ): OutboxEvent {
   return {
     id,
@@ -277,9 +277,9 @@ describe("outbox relay worker", () => {
 
   it("processes events in FIFO order based on created_at", async () => {
     // Out of insertion order but with explicit timestamps to verify FIFO
-    store.upsert(makeEvent("e-late", "test.event", "agg-3", new Date(BASE_TIME + 200)));
+    store.upsert(makeEvent("e-late", "test.event", "agg-3", BASE_TIME + 200));
     store.upsert(makeEvent("e-early", "test.event", "agg-1", new Date(BASE_TIME)));
-    store.upsert(makeEvent("e-mid", "test.event", "agg-2", new Date(BASE_TIME + 100)));
+    store.upsert(makeEvent("e-mid", "test.event", "agg-2", BASE_TIME + 100));
 
     await relayOutboxOnce(store, publishMock, { batchSize: 10 });
 

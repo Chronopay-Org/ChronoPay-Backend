@@ -4,9 +4,9 @@ import { ERROR_CODES } from "../errors/errorCodes.js";
 import { logger } from "../utils/logger.js";
 
 function withRequestContext(envelope: AppErrorEnvelope, req: Request): AppErrorEnvelope {
-  const requestId = req.requestId ?? req.id;
+  const requestId =
+    req.requestId ?? (typeof req.id === "string" ? req.id : undefined);
   if (requestId !== undefined) {
-    // @ts-expect-error - Auto-fixed by script
     envelope.requestId = requestId;
   }
   return envelope;

@@ -1,6 +1,13 @@
-import { WINDOWS_MS, RouteMetrics, recordRouteTraffic, resetSloMetrics, SLO_OBJECTIVES, RouteName, WindowName } from '../sloMetrics.js';
-import { WINDOWS_MS, RouteMetrics, recordRouteTraffic, resetSloMetrics, SLO_OBJECTIVES } from '../sloMetrics.js';
-import { RouteName, WindowName } from '../sloMetrics.js';
+import {
+  WINDOWS_MS,
+  RouteMetrics,
+  recordRouteTraffic,
+  resetSloMetrics,
+  SLO_OBJECTIVES,
+  sloBurnRateGauge,
+  type RouteName,
+  type WindowName,
+} from '../sloMetrics.js';
 
 describe('sloMetrics', () => {
   beforeEach(() => {
@@ -79,7 +86,7 @@ describe('sloMetrics', () => {
       const metrics = new RouteMetrics('slots_list');
       metrics.record(false, now);
       metrics.record(true, now + 10000); // +10s
-      metrics.record(false, now + 30000); // +30s
+      metrics.record(false, now + 19999); // +19.999s
       
       const buckets = metrics._getBuckets();
       expect(buckets.length).toBe(1); // Same 1-min bucket
@@ -137,6 +144,31 @@ describe('sloMetrics', () => {
       // burn rate = 0.5 / 0.001 = 500
       expect(metrics.getBurnRate('1h', now)).toBeCloseTo(500, 2);
     });
+
+    it('calculates error ratios consistently for a burst across windows', () => {
+      const metrics = new RouteMetrics('booking_intent');
+      const now = 1000000000000;
+
+      for (let i = 0; i < 80; i++) metrics.record(false, now);
+      for (let i = 0; i < 20; i++) metrics.record(true, now);
+
+      expect(metrics.getBurnRate('5m', now)).toBeCloseTo(200);
+      expect(metrics.getBurnRate('1h', now)).toBeCloseTo(200);
+      expect(metrics.getBurnRate('6h', now)).toBeCloseTo(200);
+    });
+  });
+
+  it('resetSloMetrics clears global state', async () => {
+    const now = 1000000000000;
+    recordRouteTraffic('checkout', true, now);
+
+    let metric = await sloBurnRateGauge.get();
+    expect(metric.values.some((value) => value.labels.route === 'checkout' && value.labels.window === '5m' && value.value > 0)).toBe(true);
+
+    resetSloMetrics();
+
+    metric = await sloBurnRateGauge.get();
+    expect(metric.values.every((value) => value.labels.route !== 'checkout' || value.labels.window !== '5m' || value.value === 0)).toBe(true);
   });
 
   describe('recordRouteTraffic boundary and error behavior', () => {

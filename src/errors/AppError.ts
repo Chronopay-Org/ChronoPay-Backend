@@ -27,6 +27,7 @@ export interface AppErrorEnvelope {
   error?: string;
   timestamp: string;
   requestId?: string;
+  stack?: string;
   details?: unknown;
 }
 

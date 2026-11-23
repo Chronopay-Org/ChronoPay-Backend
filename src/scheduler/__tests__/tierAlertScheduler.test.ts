@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals";
-import { TierAlertScheduler } from "../tierAlertScheduler.js";
 import { logger } from "../../utils/logger.js";
 import type {
   AlertEvaluationResult,
   SupplierTierAlert,
   SupplierTierAlertService,
 } from "../../services/supplierTierAlertService.js";
+import { TierAlertScheduler, createTierAlertScheduler } from "../tierAlertScheduler.js";
 
 function makeAlert(id: string): SupplierTierAlert {
   return {
@@ -54,6 +54,10 @@ describe("TierAlertScheduler", () => {
     jest.restoreAllMocks();
   });
 
+  it("creates a scheduler instance", () => {
+    expect(createTierAlertScheduler()).toBeInstanceOf(TierAlertScheduler);
+  });
+
   it("runOnce returns [] and does not evaluate when the service is disabled", async () => {
     const evaluateAllSuppliers = jest.fn<() => Promise<AlertEvaluationResult[]>>();
     const onBatchComplete = jest.fn();
@@ -65,6 +69,19 @@ describe("TierAlertScheduler", () => {
     await expect(scheduler.runOnce()).resolves.toEqual([]);
     expect(evaluateAllSuppliers).not.toHaveBeenCalled();
     expect(onBatchComplete).not.toHaveBeenCalled();
+  });
+
+  it("runs once with the service and reports alerts and batch results", async () => {
+    const alert = makeAlert("alert-1");
+    const result = makeResult([alert]);
+    const service = stubService(true, jest.fn(async () => [result]));
+    const onAlert = jest.fn();
+    const onBatchComplete = jest.fn();
+    const scheduler = createTierAlertScheduler({ service, onAlert, onBatchComplete });
+
+    await expect(scheduler.runOnce()).resolves.toEqual([result]);
+    expect(onAlert).toHaveBeenCalledWith(alert);
+    expect(onBatchComplete).toHaveBeenCalledWith([result]);
   });
 
   it("runOnce invokes onAlert once per alert and onBatchComplete once", async () => {

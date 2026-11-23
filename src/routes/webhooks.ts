@@ -22,6 +22,11 @@ const allowedEventTypes = new Set([
 
 const CLOCK_SKEW_MS = 60 * 1000; // 1 minute
 
+const TRANSACTION_ID_MAX_LENGTH = 128;
+const TRANSACTION_ID_PATTERN = /^[A-Za-z0-9_\-:.]+$/;
+const TENANT_ID_MAX_LENGTH = 128;
+const TENANT_ID_PATTERN = /^[A-Za-z0-9_\-:.]+$/;
+
 export interface WebhookRouteOptions {
   signingSecret?: string;
   kycSigningSecret?: string;
@@ -29,9 +34,7 @@ export interface WebhookRouteOptions {
 }
 
 const handleSettlementWebhook = async (req: Request, res: Response) => {
-  const { eventType, amount, timestamp } = req.body;
-  const idempotencyKey = String(req.body.transactionId);
-  const tenantId = req.headers["x-tenant-id"] ? String(req.headers["x-tenant-id"]) : "default";
+  const { eventType, amount, timestamp, transactionId } = req.body;
 
   if (!allowedEventTypes.has(eventType)) {
     return res.status(400).json({
@@ -40,6 +43,36 @@ const handleSettlementWebhook = async (req: Request, res: Response) => {
         "Invalid eventType. Allowed values are settlement_completed, settlement_initiated, settlement_failed.",
     });
   }
+
+  if (
+    typeof transactionId !== "string" ||
+    transactionId.length < 1 ||
+    transactionId.length > TRANSACTION_ID_MAX_LENGTH ||
+    !TRANSACTION_ID_PATTERN.test(transactionId)
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: `Invalid transactionId. transactionId must be a string of 1-${TRANSACTION_ID_MAX_LENGTH} characters from [A-Za-z0-9_-:.].`,
+    });
+  }
+
+  const rawTenantHeader = req.headers["x-tenant-id"];
+  if (rawTenantHeader !== undefined) {
+    const tenantHeader = String(rawTenantHeader);
+    if (
+      tenantHeader.length < 1 ||
+      tenantHeader.length > TENANT_ID_MAX_LENGTH ||
+      !TENANT_ID_PATTERN.test(tenantHeader)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid x-tenant-id. Header must be 1-${TENANT_ID_MAX_LENGTH} characters from [A-Za-z0-9_-:.].`,
+      });
+    }
+  }
+
+  const idempotencyKey = transactionId;
+  const tenantId = rawTenantHeader !== undefined ? String(rawTenantHeader) : "default";
 
   if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json({
