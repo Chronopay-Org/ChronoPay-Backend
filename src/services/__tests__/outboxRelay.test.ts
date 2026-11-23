@@ -7,6 +7,7 @@ import {
   relayOutboxOnce,
   SqlOutboxStore,
 } from "../outboxRelay.js";
+import { InMemoryOutboxStore as CompactionOutboxStore } from "../../scheduler/outboxCompactionWorker.js";
 
 function makeEvent(id: string, createdAt: number): OutboxEvent {
   return {
@@ -22,9 +23,9 @@ function makeEvent(id: string, createdAt: number): OutboxEvent {
 describe("outbox event claims", () => {
   it("claims SQL rows with one atomic UPDATE containing the locking selection", async () => {
     const query = jest.fn<Pool["query"]>().mockResolvedValue({
-      rows: [],
+      rows: [makeEvent("later", 200), makeEvent("earlier", 100)],
       command: "UPDATE",
-      rowCount: 0,
+      rowCount: 2,
       oid: 0,
       fields: [],
     });
@@ -32,9 +33,10 @@ describe("outbox event claims", () => {
       query,
     } as unknown as Pick<Pool, "query">);
 
-    await store.fetchUnacked(12);
+    const events = await store.fetchUnacked(12);
 
     expect(query).toHaveBeenCalledTimes(1);
+    expect(events.map((event) => event.id)).toEqual(["earlier", "later"]);
     const [statement, values] = query.mock.calls[0];
     expect(statement).toContain("UPDATE outbox_events AS events");
     expect(statement).toContain("FOR UPDATE SKIP LOCKED");
@@ -67,10 +69,13 @@ describe("outbox event claims", () => {
     ]);
   });
 
-  it("makes a claim available again after its lease expires", async () => {
+  it.each([
+    ["relay", InMemoryOutboxStore],
+    ["compaction", CompactionOutboxStore],
+  ])("makes a %s store claim available again after its lease expires", async (_store, Store) => {
     jest.useFakeTimers().setSystemTime(1_700_000_000_000);
     try {
-      const store = new InMemoryOutboxStore(1_000);
+      const store = new Store(1_000);
       store.upsert(makeEvent("recoverable", Date.now()));
 
       expect(await store.fetchUnacked(1)).toHaveLength(1);
