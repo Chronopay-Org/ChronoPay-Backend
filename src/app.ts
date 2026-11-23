@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { constantTimeEquals } from "./utils/constantTimeEquals.js";
 import fs from "node:fs";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
@@ -352,7 +353,23 @@ export function createApp(options: AppFactoryOptions = {}) {
   });
 
   // Metrics
-  app.get("/metrics", async (_req, res) => {
+  const metricsAuthToken = process.env.METRICS_AUTH_TOKEN;
+  const metricsPublic = isTruthyEnvValue(process.env.METRICS_PUBLIC);
+  if (nodeEnv === "production" && !metricsAuthToken && !metricsPublic) {
+    throw new Error(
+      "METRICS_AUTH_TOKEN must be set in production unless METRICS_PUBLIC=true is set explicitly.",
+    );
+  }
+
+  app.get("/metrics", async (req, res) => {
+    if (metricsAuthToken) {
+      const header = req.header("authorization") ?? "";
+      const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
+      if (!presented || !constantTimeEquals(presented, metricsAuthToken)) {
+        res.set("WWW-Authenticate", "Bearer");
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+    }
     try {
       res.set("Content-Type", register.contentType);
       res.end(await register.metrics());
