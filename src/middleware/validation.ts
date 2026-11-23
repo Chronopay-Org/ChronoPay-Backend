@@ -10,6 +10,32 @@ import { sendErrorResponse } from "../errors/sendError.js";
 type ValidationTarget = "body" | "query" | "params";
 
 /**
+ * Bounded identifier rules used for values that become storage keys
+ * (e.g. idempotency keys). Accepts 1-128 chars from a safe charset.
+ */
+const SAFE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * Returns a validation detail when `value` is not a safe identifier,
+ * or null when it is acceptable. Never echoes the raw value.
+ */
+export function checkSafeIdentifier(
+  field: string,
+  value: unknown,
+): ValidationDetail | null {
+  if (typeof value !== "string") {
+    return { path: field, rule: "invalid_type", message: `${field} must be a string` };
+  }
+  if (value.length === 0 || value.length > 128) {
+    return { path: field, rule: "invalid_length", message: `${field} must be 1-128 characters` };
+  }
+  if (!SAFE_ID_PATTERN.test(value)) {
+    return { path: field, rule: "invalid_format", message: `${field} contains disallowed characters` };
+  }
+  return null;
+}
+
+/**
  * A single validation failure.
  *
  * - `path`    field name exactly as supplied (e.g. "startTime")
