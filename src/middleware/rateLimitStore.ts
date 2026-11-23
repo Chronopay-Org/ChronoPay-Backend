@@ -8,9 +8,9 @@
  * Key namespace: "rl:" prefix to avoid collisions with other Redis usage.
  */
 
-import { Redis } from 'ioredis';
+import type { Options, Store } from "express-rate-limit";
+import { Redis } from "ioredis";
 import { logger } from "../utils/logger.js";
-
 
 /** @internal - Exposed for testing only. */
 export let _isTestMock = false;
@@ -19,26 +19,18 @@ export function _setTestMock(val: boolean) { _isTestMock = val; }
 /**
  * Dummy store for test mode (rate limiting is skipped anyway).
  */
-function createNoopStore() {
+function createNoopStore(): RateLimitStore {
+  let windowMs = 60_000;
+
   return {
-    async incr(_key: string, _expiryTime?: number, _callback?: (err: Error | null, count?: number) => void) {
-      _callback?.(null, 1);
-      return 1;
-    },
-    async decrease(_key: string, _callback?: (err: Error | null, count?: number) => void) {
-      _callback?.(null, 0);
-      return 0;
-    },
-    async resetKey(_key: string, _callback?: (err: Error | null) => void) {
-      // @ts-expect-error - Auto-fixed by script
-      _callback?.();
+    init(options: Options) {
+      windowMs = options.windowMs;
     },
     async increment(_key: string) {
-      return { totalHits: 1, resetTime: undefined };
+      return { totalHits: 1, resetTime: new Date(Date.now() + windowMs) };
     },
-    async decrement(_key: string) {
-      return;
-    },
+    async decrement(_key: string) {},
+    async resetKey(_key: string) {},
   };
 }
 
@@ -66,21 +58,14 @@ function createRedisClient(): Redis {
 
 /**
  * Store implementation using ioredis.
- *
- * The Store interface requires:
- *   - incr(key, expiryTime?, callback?) -> number
- *   - decrease(key, callback?) -> number
- *   - resetKey(key, callback?) -> void
- *
- * `expiryTime` is an absolute Unix timestamp in milliseconds.
  */
-// @ts-expect-error - Auto-fixed by script
-export interface RateLimitStore extends ReturnType<typeof createRedisStore> {
+export interface RateLimitStore extends Store {
   close?: () => Promise<void>;
 }
 
-function createRedisStore() {
+function createRedisStore(): RateLimitStore {
   const client = createRedisClient();
+  let windowMs = 60_000;
 
   // Handle errors to prevent process crashes and hanging tests
   client.on('error', (err) => {
@@ -89,56 +74,48 @@ function createRedisStore() {
     }
   });
 
+  const close = async (): Promise<void> => {
+    await client.quit();
+  };
+
   return {
-    async incr(key: string, expiryTime?: number, callback?: (err: Error | null, count?: number) => void): Promise<number> {
-      try {
-        const multi = client.multi();
-        multi.incr(key);
-        if (expiryTime) {
-          const ttlSec = Math.ceil((expiryTime - Date.now()) / 1000);
-          if (ttlSec > 0) {
-            multi.expire(key, ttlSec);
-          }
-        }
-        const results = await multi.exec();
-        // results is an array of [error, result] pairs.
-        // The first command was INCR, so its result is at index 0, position 1.
-        const count = results?.[0]?.[1] as number;
-        callback?.(null, count);
-        return count;
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        callback?.(error);
-        return 0;
-      }
+    init(options: Options) {
+      windowMs = options.windowMs;
     },
 
-    async decrease(key: string, callback?: (err: Error | null, count?: number) => void): Promise<number> {
-      try {
-        const count = await client.decr(key);
-        callback?.(null, count);
-        return count;
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        callback?.(error);
-        return 0;
+    async increment(key: string) {
+      const results = await client
+        .multi()
+        .incr(key)
+        .pexpire(key, windowMs)
+        .pttl(key)
+        .exec();
+
+      if (!results) {
+        throw new Error('Redis rate limit increment returned no transaction results');
       }
+
+      const [incrementError, count] = results[0] ?? [];
+      const [ttlError, ttl] = results[2] ?? [];
+      if (incrementError) throw incrementError;
+      if (ttlError) throw ttlError;
+      if (typeof count !== 'number' || typeof ttl !== 'number' || ttl < 0) {
+        throw new Error('Redis rate limit increment returned invalid counter or TTL data');
+      }
+
+      return { totalHits: count, resetTime: new Date(Date.now() + ttl) };
     },
 
-    async resetKey(key: string, callback?: (err: Error | null) => void): Promise<void> {
-      try {
-        await client.del(key);
-        // @ts-expect-error - Auto-fixed by script
-        callback?.();
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        callback?.(error);
-      }
+    async decrement(key: string) {
+      await client.decr(key);
     },
 
-    async close(): Promise<void> {
-      await client.quit();
-    }
+    async resetKey(key: string) {
+      await client.del(key);
+    },
+
+    close,
+    shutdown: close,
   };
 }
 
@@ -168,5 +145,3 @@ export const rateLimitRedisStore = new Proxy({} as RateLimitStore, {
     return typeof val === 'function' ? val.bind(memoizedStore) : val;
   }
 });
-
-

@@ -71,7 +71,6 @@ export const idempotencyMiddleware = async (
     sendErrorResponse(
       res,
       new IdempotencyError(
-        // @ts-expect-error - Auto-fixed by script
         keyValidation.reason,
         ERROR_CODES.IDEMPOTENCY_KEY_INVALID.code,
       ),

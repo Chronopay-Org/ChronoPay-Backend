@@ -17,6 +17,10 @@ import {
   type HeaderValidationResult,
 } from "../headerValidation.js";
 
+function getFailureReason(result: HeaderValidationResult): string | undefined {
+  return result.valid ? undefined : result.reason;
+}
+
 describe("Header Validation Constants", () => {
   it("exposes expected maximum length limits", () => {
     expect(IDEMPOTENCY_KEY_MAX_LENGTH).toBe(255);
@@ -38,7 +42,7 @@ describe("validateIdempotencyKey", () => {
       for (const key of keys) {
         const result: HeaderValidationResult = validateIdempotencyKey(key);
         expect(result.valid).toBe(true);
-        expect(result.reason).toBeUndefined();
+        expect(getFailureReason(result)).toBeUndefined();
       }
     });
 
@@ -47,7 +51,7 @@ describe("validateIdempotencyKey", () => {
       expect(maxKey.length).toBe(255);
       const result = validateIdempotencyKey(maxKey);
       expect(result.valid).toBe(true);
-      expect(result.reason).toBeUndefined();
+      expect(getFailureReason(result)).toBeUndefined();
     });
   });
 
@@ -55,11 +59,11 @@ describe("validateIdempotencyKey", () => {
     it("rejects undefined or null values with missing reason", () => {
       const undefinedRes = validateIdempotencyKey(undefined);
       expect(undefinedRes.valid).toBe(false);
-      expect(undefinedRes.reason).toBe("Idempotency-Key header is missing");
+      expect(getFailureReason(undefinedRes)).toBe("Idempotency-Key header is missing");
 
       const nullRes = validateIdempotencyKey(null as any);
       expect(nullRes.valid).toBe(false);
-      expect(nullRes.reason).toBe("Idempotency-Key header is missing");
+      expect(getFailureReason(nullRes)).toBe("Idempotency-Key header is missing");
     });
 
     it("rejects non-string values passed as any", () => {
@@ -67,14 +71,14 @@ describe("validateIdempotencyKey", () => {
       for (const val of nonStrings) {
         const result = validateIdempotencyKey(val as any);
         expect(result.valid).toBe(false);
-        expect(result.reason).toBe("Idempotency-Key must be a string");
+        expect(getFailureReason(result)).toBe("Idempotency-Key must be a string");
       }
     });
 
     it("rejects empty string values", () => {
       const result = validateIdempotencyKey("");
       expect(result.valid).toBe(false);
-      expect(result.reason).toBe("Idempotency-Key must not be empty");
+      expect(getFailureReason(result)).toBe("Idempotency-Key must not be empty");
     });
 
     it("rejects keys exceeding IDEMPOTENCY_KEY_MAX_LENGTH (256 characters)", () => {
@@ -82,7 +86,7 @@ describe("validateIdempotencyKey", () => {
       expect(oversized.length).toBe(256);
       const result = validateIdempotencyKey(oversized);
       expect(result.valid).toBe(false);
-      expect(result.reason).toBe(
+      expect(getFailureReason(result)).toBe(
         `Idempotency-Key exceeds maximum length of ${IDEMPOTENCY_KEY_MAX_LENGTH} characters`,
       );
     });
@@ -104,10 +108,25 @@ describe("validateIdempotencyKey", () => {
       for (const key of invalidKeys) {
         const result = validateIdempotencyKey(key);
         expect(result.valid).toBe(false);
-        expect(result.reason).toBe(
+        expect(getFailureReason(result)).toBe(
           "Idempotency-Key contains invalid characters. " +
             "Allowed: alphanumerics, hyphens (-), underscores (_), and dots (.)",
         );
+      }
+    });
+
+    it("returns a non-empty reason for each invalid key class", () => {
+      const invalidKeys = [
+        "",
+        "k".repeat(IDEMPOTENCY_KEY_MAX_LENGTH + 1),
+        "key\r\ninjected",
+        "key$invalid",
+      ];
+
+      for (const key of invalidKeys) {
+        const result = validateIdempotencyKey(key);
+        expect(result.valid).toBe(false);
+        expect(getFailureReason(result)).toBeTruthy();
       }
     });
   });
@@ -125,7 +144,7 @@ describe("validateRequestId", () => {
       for (const id of ids) {
         const result: HeaderValidationResult = validateRequestId(id);
         expect(result.valid).toBe(true);
-        expect(result.reason).toBeUndefined();
+        expect(getFailureReason(result)).toBeUndefined();
       }
     });
 
@@ -134,17 +153,17 @@ describe("validateRequestId", () => {
       expect(maxId.length).toBe(128);
       const result = validateRequestId(maxId);
       expect(result.valid).toBe(true);
-      expect(result.reason).toBeUndefined();
+      expect(getFailureReason(result)).toBeUndefined();
     });
   });
 
   describe("failure paths and invalid inputs", () => {
     it("rejects undefined or null request ID", () => {
       expect(validateRequestId(undefined).valid).toBe(false);
-      expect(validateRequestId(undefined).reason).toBe("X-Request-Id header is missing");
+      expect(getFailureReason(validateRequestId(undefined))).toBe("X-Request-Id header is missing");
 
       expect(validateRequestId(null as any).valid).toBe(false);
-      expect(validateRequestId(null as any).reason).toBe("X-Request-Id header is missing");
+      expect(getFailureReason(validateRequestId(null as any))).toBe("X-Request-Id header is missing");
     });
 
     it("rejects non-string values", () => {
@@ -152,14 +171,14 @@ describe("validateRequestId", () => {
       for (const val of nonStrings) {
         const result = validateRequestId(val as any);
         expect(result.valid).toBe(false);
-        expect(result.reason).toBe("X-Request-Id must be a string");
+        expect(getFailureReason(result)).toBe("X-Request-Id must be a string");
       }
     });
 
     it("rejects empty string", () => {
       const result = validateRequestId("");
       expect(result.valid).toBe(false);
-      expect(result.reason).toBe("X-Request-Id must not be empty");
+      expect(getFailureReason(result)).toBe("X-Request-Id must not be empty");
     });
 
     it("rejects request IDs exceeding REQUEST_ID_MAX_LENGTH (129 characters)", () => {
@@ -167,7 +186,7 @@ describe("validateRequestId", () => {
       expect(oversized.length).toBe(129);
       const result = validateRequestId(oversized);
       expect(result.valid).toBe(false);
-      expect(result.reason).toBe(
+      expect(getFailureReason(result)).toBe(
         `X-Request-Id exceeds maximum length of ${REQUEST_ID_MAX_LENGTH} characters`,
       );
     });
@@ -185,7 +204,7 @@ describe("validateRequestId", () => {
       for (const id of invalidIds) {
         const result = validateRequestId(id);
         expect(result.valid).toBe(false);
-        expect(result.reason).toBe(
+        expect(getFailureReason(result)).toBe(
           "X-Request-Id contains invalid characters. " +
             "Allowed: alphanumerics, hyphens (-), underscores (_), colons (:), and dots (.)",
         );
@@ -210,19 +229,19 @@ describe("validateWebhookSignature", () => {
       expect(maxHex.length).toBe(512);
       const result = validateWebhookSignature(maxHex);
       expect(result.valid).toBe(true);
-      expect(result.reason).toBeUndefined();
+      expect(getFailureReason(result)).toBeUndefined();
     });
   });
 
   describe("failure paths and invalid inputs", () => {
     it("rejects undefined or null webhook signature", () => {
       expect(validateWebhookSignature(undefined).valid).toBe(false);
-      expect(validateWebhookSignature(undefined).reason).toBe(
+      expect(getFailureReason(validateWebhookSignature(undefined))).toBe(
         "Webhook signature header is missing",
       );
 
       expect(validateWebhookSignature(null as any).valid).toBe(false);
-      expect(validateWebhookSignature(null as any).reason).toBe(
+      expect(getFailureReason(validateWebhookSignature(null as any))).toBe(
         "Webhook signature header is missing",
       );
     });
@@ -232,14 +251,14 @@ describe("validateWebhookSignature", () => {
       for (const val of nonStrings) {
         const result = validateWebhookSignature(val as any);
         expect(result.valid).toBe(false);
-        expect(result.reason).toBe("Webhook signature must be a string");
+        expect(getFailureReason(result)).toBe("Webhook signature must be a string");
       }
     });
 
     it("rejects empty signature strings", () => {
       const result = validateWebhookSignature("");
       expect(result.valid).toBe(false);
-      expect(result.reason).toBe("Webhook signature must not be empty");
+      expect(getFailureReason(result)).toBe("Webhook signature must not be empty");
     });
 
     it("rejects signatures exceeding WEBHOOK_SIGNATURE_MAX_LENGTH (513 characters)", () => {
@@ -247,7 +266,7 @@ describe("validateWebhookSignature", () => {
       expect(oversized.length).toBe(513);
       const result = validateWebhookSignature(oversized);
       expect(result.valid).toBe(false);
-      expect(result.reason).toBe(
+      expect(getFailureReason(result)).toBe(
         `Webhook signature exceeds maximum length of ${WEBHOOK_SIGNATURE_MAX_LENGTH} characters`,
       );
     });
@@ -265,7 +284,7 @@ describe("validateWebhookSignature", () => {
       for (const sig of invalidSigs) {
         const result = validateWebhookSignature(sig);
         expect(result.valid).toBe(false);
-        expect(result.reason).toBe(
+        expect(getFailureReason(result)).toBe(
           "Webhook signature contains invalid characters. " +
             'Expected hex digits, optionally prefixed with "sha256="',
         );

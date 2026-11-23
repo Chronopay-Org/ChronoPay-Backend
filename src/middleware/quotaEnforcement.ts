@@ -17,6 +17,10 @@ import { Request, Response, NextFunction } from "express";
 import { checkAndConsume, SqlQuotaStore } from "../services/partnerQuotaService.js";
 import { getPool } from "../db/connection.js";
 import { logger } from "../utils/logger.js";
+import { configService } from "../config/config.service.js";
+import { partnerQuotaCheckFailures } from "../metrics.js";
+
+const QUOTA_RETRY_AFTER_SECONDS = 30;
 
 export async function enforceQuota(
   req: Request,
@@ -62,9 +66,19 @@ export async function enforceQuota(
 
     next();
   } catch (err) {
-    // If quota check itself fails, allow the request through (fail open)
-    // but log the error for observability.
+    const mode = configService.quotaFailMode;
+    partnerQuotaCheckFailures.labels(mode).inc();
     logger.error("[quota-enforcement] Failed to check quota:", err instanceof Error ? err.message : String(err));
+    if (mode === "closed") {
+      res.setHeader("Retry-After", String(QUOTA_RETRY_AFTER_SECONDS));
+      res.status(503).json({
+        success: false,
+        code: "DEPENDENCY_UNAVAILABLE",
+        error: "Partner quota service is currently unavailable",
+      });
+      return;
+    }
+
     next();
   }
 }
