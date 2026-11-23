@@ -1,5 +1,4 @@
-// @ts-nocheck
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { slotService, SlotNotFoundError, SlotValidationError } from "../services/slotService.js";
 import { ConflictPreviewService } from "../services/conflictPreviewService.js";
 import { RecurrenceError } from "../services/recurrenceService.js";
@@ -10,7 +9,11 @@ import { parseSlotIdParam } from "../middleware/slotIdParam.js";
 import { authorizeSlotDelete, assertSlotDeleteAllowed } from "../middleware/slotAuthorization.js";
 import { resolveBuyerTimezone } from "../middleware/timezone.js";
 import { normalizeSlots, normalizeSlotTimes } from "../services/timezoneService.js";
-import { ConflictPreviewBodySchema, CreateSlotBodySchema } from "../middleware/schemas.js";
+import {
+  ConflictPreviewBodySchema,
+  CreateSlotBodySchema,
+  UpdateSlotBodySchema,
+} from "../middleware/schemas.js";
 import { validateBody } from "../middleware/validation.js";
 import { isValidIANATimezone } from "../validation/reminderValidation.js";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
@@ -417,53 +420,68 @@ router.post(
 /**
  * PATCH /api/v1/slots/:id
  */
-router.patch("/:id", requireRole(["admin"]), async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const updatedSlot = slotService.updateSlot(id, req.body);
+router.patch(
+  "/:id",
+  parseSlotIdParam,
+  requireRole(["admin"]),
+  validateBody(UpdateSlotBodySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const updatedSlot = slotService.updateSlot(id, {
+        ...req.body,
+        ...(req.body.startTime !== undefined && { startTime: toEpochMs(req.body.startTime) }),
+        ...(req.body.endTime !== undefined && { endTime: toEpochMs(req.body.endTime) }),
+      });
 
-    res.json({
-      success: true,
-      slot: updatedSlot,
-      meta: {
-        invalidatedKeys: ["slots:list:all"],
-      },
-    });
-  } catch (error: any) {
-    if (error instanceof SlotNotFoundError) {
-      res.status(404).json({ success: false, error: error.message });
-    } else if (error instanceof SlotValidationError) {
-      res.status(422).json({ success: false, error: error.message });
-    } else {
-      res.status(500).json({ success: false, error: error.message });
+      res.json({
+        success: true,
+        slot: updatedSlot,
+        meta: {
+          invalidatedKeys: ["slots:list:all"],
+        },
+      });
+    } catch (error) {
+      if (error instanceof SlotNotFoundError) {
+        res.status(404).json({ success: false, error: error.message });
+      } else if (error instanceof SlotValidationError) {
+        res.status(422).json({ success: false, error: error.message });
+      } else {
+        next(error);
+      }
     }
-  }
-});
+  },
+);
 
 /**
  * DELETE /api/v1/slots/:id
  */
-router.delete("/:id", authorizeSlotDelete, async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
+router.delete(
+  "/:id",
+  parseSlotIdParam,
+  authorizeSlotDelete,
+  async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
 
-    if (req.slotDeleteAuth) {
-      const allowed = await assertSlotDeleteAllowed(req, res, id);
-      if (!allowed) {
-        return;
+      if (req.slotDeleteAuth) {
+        const allowed = await assertSlotDeleteAllowed(req, res, id);
+        if (!allowed) {
+          return;
+        }
+      }
+
+      const deletedSlotId = await slotService.deleteSlot(id);
+      res.json({ success: true, deletedSlotId });
+    } catch (error: any) {
+      if (error instanceof SlotNotFoundError) {
+        res.status(404).json({ success: false, error: SLOT_NOT_FOUND });
+      } else {
+        res.status(500).json({ success: false, error: error.message });
       }
     }
-
-    const deletedSlotId = await slotService.deleteSlot(id);
-    res.json({ success: true, deletedSlotId });
-  } catch (error: any) {
-    if (error instanceof SlotNotFoundError) {
-      res.status(404).json({ success: false, error: SLOT_NOT_FOUND });
-    } else {
-      res.status(500).json({ success: false, error: error.message });
-    }
-  }
-});
+  },
+);
 
 export { router };
 export default router;
