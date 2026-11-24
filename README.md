@@ -14,7 +14,7 @@ Node.js (ESM) + TypeScript + Express 4. Entry point `src/index.ts` builds the ap
 | Routers (HTTP surface)                                               | `src/routes/`, `src/buyer-profile/`                                                  |
 | Business logic                                                       | `src/services/`, `src/modules/`, `src/scheduler/`                                    |
 | Persistence                                                          | `src/db/` (pg pool, migration runner, drift detector), `src/repositories/`           |
-| Redis (idempotency, caching, rate limits; three client entry points) | `src/cache/redisClient.ts`, `src/utils/redis.ts`, `src/middleware/rateLimitStore.ts` |
+| Redis (caching, dedup, escrow state, rate limits; two client entry points) | `src/cache/redisClient.ts`, `src/middleware/rateLimitStore.ts` |
 | Stellar / escrow clients                                             | `src/clients/`, `src/stellar/`, `src/lib/`                                           |
 | Cross-cutting middleware                                             | `src/middleware/` (auth, RBAC, CORS, rate limit, validation, error envelope)         |
 | Observability                                                        | `src/metrics/`, `src/tracing/`, pino logging, `ops/` (alert rules, dashboards)       |

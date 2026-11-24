@@ -35,6 +35,9 @@ export interface RedisClient {
   keys(pattern: string): Promise<string[]>;
   ping(): Promise<string>;
   quit(): Promise<unknown>;
+  incr?(key: string): Promise<number>;
+  hset?(key: string, field: string, value: string): Promise<number>;
+  expire?(key: string, seconds: number): Promise<number>;
 }
 
 let _client: RedisClient | null = null;

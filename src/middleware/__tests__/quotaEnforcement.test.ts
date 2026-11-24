@@ -29,12 +29,14 @@ let mockQuotaFailMode: "open" | "closed" = "open";
 
 // SqlQuotaStore constructor — we capture the args to verify pool is passed in
 let lastStoreArg: unknown = undefined;
+let storeConstructorCount = 0;
 
 // ─── Module mocks ─────────────────────────────────────────────────────────────
 
 jest.unstable_mockModule("../../services/partnerQuotaService.js", () => ({
   checkAndConsume: mockCheckAndConsume,
   SqlQuotaStore: function (pool: unknown) {
+    storeConstructorCount += 1;
     lastStoreArg = pool;
     return {}; // return a plain object as the store
   },
@@ -68,7 +70,8 @@ jest.unstable_mockModule("../../metrics.js", () => ({
 }));
 
 // Dynamic import so the mocks are resolved first
-const { enforceQuota } = await import("../quotaEnforcement.js");
+const { enforceQuota, setQuotaStoreFactory } = await import("../quotaEnforcement.js");
+const { SqlQuotaStore } = await import("../../services/partnerQuotaService.js");
 
 // ─── Shared fixture builders ──────────────────────────────────────────────────
 
@@ -127,6 +130,8 @@ describe("enforceQuota middleware", () => {
   beforeEach(() => {
     next = jest.fn();
     lastStoreArg = undefined;
+    storeConstructorCount = 0;
+    setQuotaStoreFactory(() => new SqlQuotaStore(mockGetPool()));
     mockGetPool.mockReturnValue(fakePool);
     mockCheckAndConsume.mockResolvedValue(makeAllowedResult());
     mockLoggerError.mockReset();
@@ -275,6 +280,14 @@ describe("enforceQuota middleware", () => {
 
       expect(mockGetPool).toHaveBeenCalled();
       expect(lastStoreArg).toBe(fakePool);
+    });
+
+    it("constructs the store once and reuses it across requests", async () => {
+      await enforceQuota(makeReq("tok_a") as Request, makeRes() as Response, next);
+      await enforceQuota(makeReq("tok_b") as Request, makeRes() as Response, next);
+
+      expect(storeConstructorCount).toBe(1);
+      expect(mockGetPool).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -467,8 +480,9 @@ describe("enforceQuota middleware", () => {
       });
     });
 
-    it("calls logger.error once with a quota-related context string", async () => {
-      mockCheckAndConsume.mockRejectedValue(new Error("timeout"));
+    it("calls logger.error once with an object first argument and a message", async () => {
+      const err = new Error("timeout");
+      mockCheckAndConsume.mockRejectedValue(err);
       const req = makeReq("tok_abc");
       const res = makeRes();
 
@@ -476,18 +490,23 @@ describe("enforceQuota middleware", () => {
 
       expect(mockLoggerError).toHaveBeenCalledTimes(1);
       const firstArg = mockLoggerError.mock.calls[0][0];
-      expect(firstArg).toMatch(/quota/i);
+      expect(typeof firstArg).toBe("object");
+      expect(firstArg).toEqual(expect.objectContaining({ err }));
+      expect(mockLoggerError.mock.calls[0][1]).toBe("quota check failed; allowing request");
     });
 
-    it("logs the Error message as the second argument to logger.error", async () => {
-      mockCheckAndConsume.mockRejectedValue(new Error("ECONNREFUSED"));
+    it("logs the Error object as the first argument to logger.error", async () => {
+      const err = new Error("ECONNREFUSED");
+      mockCheckAndConsume.mockRejectedValue(err);
       const req = makeReq("tok_abc");
       const res = makeRes();
 
       await enforceQuota(req as Request, res as Response, next);
 
-      const secondArg = mockLoggerError.mock.calls[0][1];
-      expect(secondArg).toContain("ECONNREFUSED");
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        { err },
+        "quota check failed; allowing request",
+      );
     });
 
     it("handles non-Error throws (string) gracefully — still fails open", async () => {
@@ -501,15 +520,17 @@ describe("enforceQuota middleware", () => {
       expect(mockLoggerError).toHaveBeenCalled();
     });
 
-    it("logs the stringified value when a non-Error is thrown", async () => {
+    it("logs a non-Error throw as the err field of the first argument", async () => {
       mockCheckAndConsume.mockRejectedValue("quota store unavailable");
       const req = makeReq("tok_abc");
       const res = makeRes();
 
       await enforceQuota(req as Request, res as Response, next);
 
-      const secondArg = mockLoggerError.mock.calls[0][1];
-      expect(secondArg).toBe("quota store unavailable");
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        { err: "quota store unavailable" },
+        "quota check failed; allowing request",
+      );
     });
   });
 
