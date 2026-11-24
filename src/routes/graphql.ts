@@ -1,5 +1,5 @@
-// @ts-nocheck
-import { Router, type Request, type Response, NextFunction } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
+import type { Counter, Histogram } from "prom-client";
 import { graphqlAllowlistService } from "../services/graphqlAllowlist.service.js";
 import crypto from "crypto";
 import { createLoaders } from "../graphql/loaders.js";
@@ -10,24 +10,41 @@ import {
   estimateQueryCost,
   type CostBudget,
 } from "../middleware/graphqlCostEstimator.js";
-import { register } from "prom-client";
+import {
+  register,
+  createBudgetedCounter,
+  createBudgetedHistogram,
+  type BudgetedLabelMetric,
+} from "../metrics.js";
 
 const router = Router();
 
 // Prometheus counter for cost-based rejections
-const costRejectionsCounter = new register.Counter({
-  name: "graphql_cost_rejection_total",
-  help: "Total number of GraphQL queries rejected due to cost exceeding budget",
-  labelNames: ["operation_type"] as const,
-});
+const costRejectionsCounter =
+  (register.getSingleMetric("graphql_cost_rejection_total") as
+    | BudgetedLabelMetric<Counter>
+    | undefined) ??
+  createBudgetedCounter({
+    name: "graphql_cost_rejection_total",
+    help: "Total number of GraphQL queries rejected due to cost exceeding budget",
+    labels: ["operation_type"],
+    budget: 8,
+    registers: [register],
+  });
 
 // Prometheus histogram for query cost distribution
-const queryCostHistogram = new register.Histogram({
-  name: "graphql_query_cost",
-  help: "Distribution of estimated GraphQL query costs",
-  labelNames: ["operation_type"] as const,
-  buckets: [1, 5, 10, 25, 50, 100, 200, 500, 1000],
-});
+const queryCostHistogram =
+  (register.getSingleMetric("graphql_query_cost") as
+    | BudgetedLabelMetric<Histogram>
+    | undefined) ??
+  createBudgetedHistogram({
+    name: "graphql_query_cost",
+    help: "Distribution of estimated GraphQL query costs",
+    labels: ["operation_type"],
+    budget: 8,
+    buckets: [1, 5, 10, 25, 50, 100, 200, 500, 1000],
+    registers: [register],
+  });
 
 /**
  * Middleware: estimate and validate query cost before processing.
