@@ -2,7 +2,7 @@ import express from "express";
 import request from "supertest";
 import { AppError } from "../errors/AppError.js";
 import { requestIdMiddleware } from "../middleware/requestId.js";
-import { genericErrorHandler } from "../middleware/errorHandling.js";
+import { genericErrorHandler } from "../middleware/errorHandler.js";
 
 describe("request id propagation", () => {
   it("reuses a valid x-request-id header and returns it in the response", async () => {
