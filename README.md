@@ -84,6 +84,11 @@ Copy `.env.example` to `.env`. Variables listed there:
 
 `src/config/env.ts` additionally reads (not all in `.env.example`): `NODE_ENV`, `HORIZON_URL`/`HORIZON_URLS`, `STELLAR_NETWORK_PASSPHRASE`, `ESCROW_CONTRACT_HASH`, `JWT_ISSUER`, `JWT_AUDIENCE`, `WEBHOOK_SECRET`, `INTERNAL_OVERRIDE_SECRET(_PREV)`, `INTERNAL_BYPASS_TOLERANCE_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, `REQUEST_TIMEOUT_MS`, `TRUST_PROXY`. See [docs/environment-validation.md](docs/environment-validation.md) for validation rules. A database connection is configured in `src/db/` (see [docs/database/migrations.md](docs/database/migrations.md)).
 
+The recurrence occurrence materializer runs hourly by default. Set
+`OCCURRENCE_MATERIALIZER_INTERVAL_MS` to change the interval, or set
+`OCCURRENCE_MATERIALIZER_DISABLED=true` to disable it. Shutdown clears the
+interval and waits for an active materialization pass to finish.
+
 ### Checkout redirect destinations (#1325)
 
 Optional `successUrl` and `cancelUrl` are checked by the checkout request
