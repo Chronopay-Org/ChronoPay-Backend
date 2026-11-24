@@ -3,9 +3,11 @@ import { Request, Response, NextFunction } from "express";
 import {
   createResidencyGuard,
   InMemoryWaiverStore,
+  SqlWaiverStore,
   detectRequestRegion,
   detectDataRegion,
   deriveWaiverScope,
+  WaiverDbRow,
   WaiverRow,
   WaiverStore,
 } from "../services/residencyGuard.js";
@@ -84,6 +86,182 @@ async function metricValue(metricName: string): Promise<number> {
   const parts = line.trim().split(/\s+/);
   return Number(parts[parts.length - 1]);
 }
+
+// ─── Shared waiver store conformance ─────────────────────────────────────────
+
+type TimestampRepresentation = "date" | "iso";
+
+interface WaiverStoreHarness {
+  store: WaiverStore;
+  add(waiver: WaiverRow, representation?: TimestampRepresentation): void;
+  reset(): void;
+}
+
+const FIXED_NOW = new Date("2030-01-01T00:00:00.000Z");
+
+function waiverAt(
+  id: string,
+  scope: string,
+  targetRegion: string,
+  expiresAt: Date,
+  createdAt: Date = new Date(FIXED_NOW.getTime() - 60_000),
+): WaiverRow {
+  return {
+    id,
+    target_region: targetRegion,
+    scope,
+    expires_at: expiresAt,
+    created_at: createdAt,
+    created_by: "conformance",
+  };
+}
+
+function toDbRow(waiver: WaiverRow, representation: TimestampRepresentation): WaiverDbRow {
+  return {
+    ...waiver,
+    expires_at:
+      representation === "iso"
+        ? waiver.expires_at.toISOString()
+        : new Date(waiver.expires_at.getTime()),
+    created_at:
+      representation === "iso"
+        ? waiver.created_at.toISOString()
+        : new Date(waiver.created_at.getTime()),
+  };
+}
+
+/**
+ * Minimal in-memory stand-in for a SQL result set. It deliberately applies
+ * only the scope/region predicate so the store itself is responsible for the
+ * expiry boundary (including `expires_at == now`).
+ */
+class FakeWaiverDb {
+  private rows: WaiverDbRow[] = [];
+
+  add(waiver: WaiverRow, representation: TimestampRepresentation = "date"): void {
+    this.rows.push(toDbRow(waiver, representation));
+  }
+
+  reset(): void {
+    this.rows = [];
+  }
+
+  async query(_text: string, values?: unknown[]): Promise<{ rows: WaiverDbRow[] }> {
+    const [scope, targetRegion] = (values ?? []) as [string | undefined, string | undefined];
+    return {
+      rows: this.rows
+        .filter((row) => row.scope === scope && row.target_region === targetRegion)
+        .map((row) => ({ ...row })),
+    };
+  }
+}
+
+function createInMemoryHarness(): WaiverStoreHarness {
+  const store = new InMemoryWaiverStore();
+  return {
+    store,
+    add(waiver) {
+      store.add(waiver);
+    },
+    reset() {
+      store.clear();
+    },
+  };
+}
+
+function createSqlHarness(): WaiverStoreHarness {
+  const db = new FakeWaiverDb();
+  const store = new SqlWaiverStore(db);
+  return {
+    store,
+    add(waiver, representation = "date") {
+      db.add(waiver, representation);
+    },
+    reset() {
+      db.reset();
+    },
+  };
+}
+
+function runWaiverStoreConformanceTests(
+  name: string,
+  createHarness: () => WaiverStoreHarness,
+): void {
+  describe(`${name} conformance`, () => {
+    let harness: WaiverStoreHarness;
+
+    const offset = (ms: number): Date => new Date(FIXED_NOW.getTime() + ms);
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.setSystemTime(FIXED_NOW);
+      harness = createHarness();
+      harness.reset();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("grants access when a matching waiver is active", async () => {
+      harness.add(waiverAt("active", "apiKey:key1", "eu-west-1", offset(60_000)), "iso");
+
+      const result = await harness.store.findActiveWaivers("apiKey:key1", "eu-west-1");
+
+      expect(result.map((row) => row.id)).toEqual(["active"]);
+    });
+
+    it("rejects waivers that expired before now", async () => {
+      harness.add(waiverAt("expired", "apiKey:key1", "eu-west-1", offset(-1)), "date");
+
+      const result = await harness.store.findActiveWaivers("apiKey:key1", "eu-west-1");
+
+      expect(result).toEqual([]);
+    });
+
+    it("treats expires_at == now as expired and never allows access", async () => {
+      harness.add(waiverAt("boundary", "apiKey:key1", "eu-west-1", offset(0)), "iso");
+
+      const result = await harness.store.findActiveWaivers("apiKey:key1", "eu-west-1");
+
+      expect(result).toEqual([]);
+    });
+
+    it("filters by scope and target region", async () => {
+      harness.add(waiverAt("match", "apiKey:key1", "eu-west-1", offset(60_000)));
+      harness.add(waiverAt("other-scope", "apiKey:key2", "eu-west-1", offset(60_000)));
+      harness.add(waiverAt("other-region", "apiKey:key1", "us-east-1", offset(60_000)));
+
+      const result = await harness.store.findActiveWaivers("apiKey:key1", "eu-west-1");
+
+      expect(result.map((row) => row.id)).toEqual(["match"]);
+    });
+
+    it("normalizes Date and ISO-string timestamps to Date instances", async () => {
+      harness.add(waiverAt("date-row", "apiKey:key1", "eu-west-1", offset(60_000)), "date");
+      harness.add(waiverAt("iso-row", "apiKey:key1", "eu-west-1", offset(120_000)), "iso");
+
+      const result = await harness.store.findActiveWaivers("apiKey:key1", "eu-west-1");
+
+      expect(result.map((row) => row.id)).toEqual(["date-row", "iso-row"]);
+      for (const row of result) {
+        expect(row.expires_at).toBeInstanceOf(Date);
+        expect(row.created_at).toBeInstanceOf(Date);
+        expect(Number.isNaN(row.expires_at.getTime())).toBe(false);
+        expect(Number.isNaN(row.created_at.getTime())).toBe(false);
+      }
+    });
+
+    it("returns an empty array when nothing matches", async () => {
+      await expect(
+        harness.store.findActiveWaivers("apiKey:key1", "eu-west-1"),
+      ).resolves.toEqual([]);
+    });
+  });
+}
+
+runWaiverStoreConformanceTests("InMemoryWaiverStore", createInMemoryHarness);
+runWaiverStoreConformanceTests("SqlWaiverStore", createSqlHarness);
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -312,5 +490,69 @@ describe("residency guard", () => {
       const result = await store.findActiveWaivers("apiKey:key1", "eu-west-1");
       expect(result).toEqual([]);
     });
+  });
+});
+
+// ─── Cross-store row shape parity ────────────────────────────────────────────
+
+describe("waiver store row shape parity", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(FIXED_NOW);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("returns identical normalized shapes from SqlWaiverStore and InMemoryWaiverStore", async () => {
+    const waiver = waiverAt(
+      "parity",
+      "apiKey:parity",
+      "eu-west-1",
+      new Date(FIXED_NOW.getTime() + 60_000),
+      new Date(FIXED_NOW.getTime() - 60_000),
+    );
+
+    const memoryStore = new InMemoryWaiverStore();
+    memoryStore.add(waiver);
+
+    const sqlHarness = createSqlHarness();
+    sqlHarness.add(waiver, "iso");
+
+    const [memoryRow] = await memoryStore.findActiveWaivers("apiKey:parity", "eu-west-1");
+    const [sqlRow] = await sqlHarness.store.findActiveWaivers("apiKey:parity", "eu-west-1");
+
+    expect(sqlRow).toEqual(memoryRow);
+    expect(Object.keys(sqlRow).sort()).toEqual(Object.keys(memoryRow).sort());
+    expect(sqlRow.expires_at).toBeInstanceOf(Date);
+    expect(sqlRow.created_at).toBeInstanceOf(Date);
+  });
+
+  it("returns identical normalized shapes regardless of Date or ISO-string storage", async () => {
+    const waiver = waiverAt(
+      "representation",
+      "apiKey:representation",
+      "eu-west-1",
+      new Date(FIXED_NOW.getTime() + 60_000),
+    );
+
+    const dateHarness = createSqlHarness();
+    dateHarness.add(waiver, "date");
+    const isoHarness = createSqlHarness();
+    isoHarness.add(waiver, "iso");
+
+    const [dateRow] = await dateHarness.store.findActiveWaivers(
+      "apiKey:representation",
+      "eu-west-1",
+    );
+    const [isoRow] = await isoHarness.store.findActiveWaivers(
+      "apiKey:representation",
+      "eu-west-1",
+    );
+
+    expect(isoRow).toEqual(dateRow);
+    expect(isoRow.expires_at).toBeInstanceOf(Date);
+    expect(isoRow.created_at).toBeInstanceOf(Date);
   });
 });
