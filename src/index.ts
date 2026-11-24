@@ -8,6 +8,9 @@ import { closePool } from "./db/connection.js";
 import { closePool as closeLegacyPool } from "./db/pool.js";
 import { closeRedisClient } from "./cache/redisClient.js";
 import { stopScheduler } from "./scheduler/reminderScheduler.js";
+import { runRefundableHoldSweeper } from "./scheduler/refundableHoldSweeper.js";
+import { sharedHoldRepository } from "./scheduler/refundableHoldContainer.js";
+import { sharedSchedulingService } from "./services/schedulingContainer.js";
 
 const config = loadEnvConfig();
 const lifecycle = new ApplicationLifecycle(
@@ -199,6 +202,32 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
 
   logger.info("settlement-reconciler started");
 })();
+
+// ─── Refundable Hold Sweeper (#1426) ─────────────────────────────────────────
+// Periodically scans for expired refundable holds and releases slot capacity
+// back to the marketplace.  Emits hold_released events that invalidate the
+// search cache.  Set REFUNDABLE_HOLD_SWEEPER_DISABLED=true to skip.
+if (process.env.REFUNDABLE_HOLD_SWEEPER_DISABLED === "true") {
+  logger.info("refundable-hold-sweeper disabled via REFUNDABLE_HOLD_SWEEPER_DISABLED");
+} else {
+  const sweepIntervalMs = Number(process.env.REFUNDABLE_HOLD_SWEEPER_INTERVAL_MS) || undefined;
+  const sweepController = new AbortController();
+  const sweepWorker = runRefundableHoldSweeper(
+    sweepController.signal,
+    { holdRepository: sharedHoldRepository, schedulingService: sharedSchedulingService },
+    { intervalMs: sweepIntervalMs },
+  ).catch((err: Error) => {
+    logger.error({ err }, "refundable-hold-sweeper exited unexpectedly");
+  });
+  lifecycle.registerStop("refundable-hold-sweeper", async () => {
+    sweepController.abort();
+    await sweepWorker;
+  });
+  logger.info(
+    { intervalMs: sweepIntervalMs ?? 5_000 },
+    "refundable-hold-sweeper started",
+  );
+}
 
 const PORT = config.port || 3001;
 
