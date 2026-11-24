@@ -164,6 +164,45 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   logger.info("outbox-relay worker started");
 })();
 
+// ─── Expiry Cleanup Worker (#1425) ──────────────────────────────────────────
+// Expires stale pending booking intents and soft-expires / deletes checkout
+// sessions whose TTL has passed.  Set EXPIRY_CLEANUP_DISABLED=true to skip.
+(async () => {
+  if (process.env.EXPIRY_CLEANUP_DISABLED === "true") {
+    logger.info("expiry-cleanup-worker disabled via EXPIRY_CLEANUP_DISABLED");
+    return;
+  }
+
+  const { runExpiryCleanupWorker } = await import("./scheduler/expiryCleanupWorker.js");
+  const { InMemoryBookingIntentRepository } = await import(
+    "./modules/booking-intents/booking-intent-repository.js"
+  );
+  const { InMemorySlotRepository } = await import("./modules/slots/slot-repository.js");
+  const { BookingIntentService } = await import(
+    "./modules/booking-intents/booking-intent-service.js"
+  );
+
+  if (lifecycle.isShuttingDown) return;
+
+  const bookingIntentRepository = new InMemoryBookingIntentRepository();
+  const slotRepository = new InMemorySlotRepository();
+  const bookingIntentService = new BookingIntentService(bookingIntentRepository, slotRepository);
+
+  const controller = new AbortController();
+  const worker = runExpiryCleanupWorker(controller.signal, {
+    bookingIntentService,
+    bookingIntentRepository,
+  }).catch((err: Error) => {
+    logger.error({ err }, "expiry-cleanup-worker exited unexpectedly");
+  });
+
+  lifecycle.registerStop("expiry-cleanup", async () => {
+    controller.abort();
+    await worker;
+  });
+  logger.info("expiry-cleanup-worker started");
+})();
+
 // ─── Settlement Finality Reconciler (#804) ─────────────────────────────────
 // Polls Horizon to verify on-chain finality for provider settlements before
 // any payout is marked ready, and flags forks/reorgs. Enabled when Horizon
