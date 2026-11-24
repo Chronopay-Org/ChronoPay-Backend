@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../test/auth.js";
 import express from "express";
 import request from "supertest";
 import { BadRequestError } from "../errors/AppError.js";
@@ -107,8 +108,7 @@ describe("Route adapters using shared AppError envelope", () => {
 
     const response = await request(app)
       .post("/api/v1/booking-intents")
-      .set("x-chronopay-user-id", "customer-1")
-      .set("x-chronopay-role", "customer")
+      .set("Authorization", createTestAuthorization("customer-1", "customer"))
       .send({ slotId: "slot-00000000-0000-4000-8000-000000000000" });
 
     expect(response.status).toBe(404);

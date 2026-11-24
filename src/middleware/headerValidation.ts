@@ -63,12 +63,9 @@ export const WEBHOOK_SIGNATURE_PATTERN = /^(?:sha256=)?[a-fA-F0-9]{1,512}$/;
 // Core validation result type
 // ---------------------------------------------------------------------------
 
-export interface HeaderValidationResult {
-  /** true when the value passes all checks */
-  valid: boolean;
-  /** human-readable reason when valid === false */
-  reason?: string;
-}
+export type HeaderValidationResult =
+  | { valid: true }
+  | { valid: false; reason: string };
 
 // ---------------------------------------------------------------------------
 // Pure validator functions

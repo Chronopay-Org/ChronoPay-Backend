@@ -1,9 +1,11 @@
-/**
+/*
  * Amount utility class enforcing deterministic rounding rules and minor-unit limits.
  * Protects against floating-point precision exploits and enforces integer boundaries natively.
  */
 
 export type SupportedCurrencies = "USD" | "EUR" | "GBP" | "XLM";
+
+export const SUPPORTED_CURRENCIES: readonly SupportedCurrencies[] = ["USD", "EUR", "GBP", "XLM"] as const;
 
 export const CURRENCY_DECIMALS: Record<SupportedCurrencies, number> = {
   USD: 2,
@@ -16,6 +18,10 @@ export const CURRENCY_DECIMALS: Record<SupportedCurrencies, number> = {
 // Max supported minor-unit: 100 Trillion (1e14)
 export const MAX_MINOR_AMOUNT = 1e14;
 
+export function isSupportedCurrency(value: unknown): value is SupportedCurrencies {
+  return typeof value === "string" && (SUPPORTED_CURRENCIES as readonly string[]).includes(value);
+}
+
 export class AmountUtils {
   /**
    * Validates if a provided value is strictly a positive integer representing a native minor-unit.
@@ -27,6 +33,18 @@ export class AmountUtils {
     if (typeof value !== "number") return false;
     if (!Number.isInteger(value)) return false;
     if (value <= 0) return false;
+    if (value > MAX_MINOR_AMOUNT) return false;
+    return true;
+  }
+
+  /**
+   * Validates if a provided value is a non-negative integer minor-unit amount (0 allowed).
+   * Useful for price fields where free products are permitted.
+   */
+  static validateNonNegative(value: unknown): boolean {
+    if (typeof value !== "number") return false;
+    if (!Number.isInteger(value)) return false;
+    if (value < 0) return false;
     if (value > MAX_MINOR_AMOUNT) return false;
     return true;
   }

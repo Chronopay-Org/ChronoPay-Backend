@@ -213,7 +213,7 @@ describe("BookingIntentService scheduling integration", () => {
 
     it("allows another customer after cancel + release", async () => {
       const intent = await service.createIntent({ slotId: "slot-1" }, actor);
-      service.cancelIntent(intent.id, actor);
+      await service.cancelIntent(intent.id, actor);
       const other = { userId: "customer-2", role: "customer" as const, claims: {} as any };
       const second = await service.createIntent({ slotId: "slot-1" }, other);
       expect(second.slotId).toBe("slot-1");
@@ -223,7 +223,7 @@ describe("BookingIntentService scheduling integration", () => {
 
     it("allows another customer after expire + release", async () => {
       const intent = await service.createIntent({ slotId: "slot-1" }, actor);
-      service.expireIntent(intent.id);
+      await service.expireIntent(intent.id);
       const other = { userId: "customer-2", role: "customer" as const, claims: {} as any };
       const second = await service.createIntent({ slotId: "slot-1" }, other);
       expect(second.slotId).toBe("slot-1");
@@ -233,62 +233,62 @@ describe("BookingIntentService scheduling integration", () => {
   describe("cancelIntent", () => {
     it("releases the slot back to bookable", async () => {
       const intent = await service.createIntent({ slotId: "slot-1" }, actor);
-      service.cancelIntent(intent.id, actor);
+      await service.cancelIntent(intent.id, actor);
       const slot = slotRepo.findById("slot-1")!;
       expect(slot.bookable).toBe(true);
     });
 
     it("updates intent status to cancelled", async () => {
       const intent = await service.createIntent({ slotId: "slot-1" }, actor);
-      const cancelled = service.cancelIntent(intent.id, actor);
+      const cancelled = await service.cancelIntent(intent.id, actor);
       expect(cancelled.status).toBe("cancelled");
     });
 
     it("rejects cancellation by non-owner non-admin", async () => {
       const intent = await service.createIntent({ slotId: "slot-1" }, actor);
       const other = { userId: "customer-2", role: "customer" as const, claims: {} as any };
-      expect(() => service.cancelIntent(intent.id, other)).toThrow(/not authorized/);
+      await expect(service.cancelIntent(intent.id, other)).rejects.toThrow(/not authorized/);
     });
 
     it("allows admin to cancel any intent", async () => {
       const intent = await service.createIntent({ slotId: "slot-1" }, actor);
-      const cancelled = service.cancelIntent(intent.id, admin);
+      const cancelled = await service.cancelIntent(intent.id, admin);
       expect(cancelled.status).toBe("cancelled");
     });
 
     it("rejects cancellation of non-pending intent", async () => {
       const intent = await service.createIntent({ slotId: "slot-1" }, actor);
-      service.cancelIntent(intent.id, actor);
-      expect(() => service.cancelIntent(intent.id, actor)).toThrow(/Cannot cancel/);
+      await service.cancelIntent(intent.id, actor);
+      await expect(service.cancelIntent(intent.id, actor)).rejects.toThrow(/Cannot cancel/);
     });
 
     it("rejects cancellation of a non-existent intent", async () => {
-      expect(() => service.cancelIntent("intent-unknown", actor)).toThrow(/not found/);
+      await expect(service.cancelIntent("intent-unknown", actor)).rejects.toThrow(/not found/);
     });
   });
 
   describe("expireIntent", () => {
     it("releases the slot back to bookable", async () => {
       const intent = await service.createIntent({ slotId: "slot-1" }, actor);
-      service.expireIntent(intent.id);
+      await service.expireIntent(intent.id);
       const slot = slotRepo.findById("slot-1")!;
       expect(slot.bookable).toBe(true);
     });
 
     it("updates intent status to expired", async () => {
       const intent = await service.createIntent({ slotId: "slot-1" }, actor);
-      const expired = service.expireIntent(intent.id);
+      const expired = await service.expireIntent(intent.id);
       expect(expired.status).toBe("expired");
     });
 
     it("rejects expiry of non-pending intent", async () => {
       const intent = await service.createIntent({ slotId: "slot-1" }, actor);
-      service.cancelIntent(intent.id, actor);
-      expect(() => service.expireIntent(intent.id)).toThrow(/Cannot expire/);
+      await service.cancelIntent(intent.id, actor);
+      await expect(service.expireIntent(intent.id)).rejects.toThrow(/Cannot expire/);
     });
 
     it("rejects expiry of non-existent intent", async () => {
-      expect(() => service.expireIntent("intent-unknown")).toThrow(/not found/);
+      await expect(service.expireIntent("intent-unknown")).rejects.toThrow(/not found/);
     });
   });
 
@@ -306,7 +306,7 @@ describe("BookingIntentService scheduling integration", () => {
         { slotId: "slot-1" },
         { userId: "customer-1", role: "customer" as const, claims: {} as any },
       );
-      service.cancelIntent(intent.id, {
+      await service.cancelIntent(intent.id, {
         userId: "customer-1",
         role: "customer" as const,
         claims: {} as any,
@@ -390,7 +390,7 @@ describe("race-condition guard", () => {
     );
     expect(slotRepo.findById("slot-1")!.bookable).toBe(false);
 
-    service.cancelIntent(a1.id, { userId: "a", role: "customer" as const, claims: {} as any });
+    await service.cancelIntent(a1.id, { userId: "a", role: "customer" as const, claims: {} as any });
     expect(slotRepo.findById("slot-1")!.bookable).toBe(true);
 
     const a2 = await service.createIntent(

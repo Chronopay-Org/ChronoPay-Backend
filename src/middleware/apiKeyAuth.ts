@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { Request, Response, NextFunction } from "express";
-import { ForbiddenError, UnauthorizedError } from "../errors/AppError.js";
+import { ConfigurationError, ForbiddenError, UnauthorizedError } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { sendErrorResponse } from "../errors/sendError.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 import { partnerTierService } from "../services/partnerTierService.js";
+import { constantTimeEquals } from "../utils/constantTimeEquals.js";
 
 const API_KEY_HEADER = "x-api-key";
 const API_KEY_ID_PREFIX = "apiKey_";
@@ -23,13 +24,47 @@ export interface PartnerTiersConfig {
   tiers: Record<string, string[]>;
 }
 
-export function readPartnerTiersConfig(): PartnerTiersConfig {
+function validatePartnerTiersConfig(config: unknown): PartnerTiersConfig {
+  if (config === null || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("Partner tiers config must be a JSON object");
+  }
+
+  const tiers = (config as Record<string, unknown>).tiers;
+  if (tiers === null || typeof tiers !== "object" || Array.isArray(tiers)) {
+    throw new Error("Partner tiers config must contain a tiers object");
+  }
+
+  const validatedTiers: Record<string, string[]> = {};
+  for (const [tier, endpoints] of Object.entries(tiers)) {
+    if (!tier || !Array.isArray(endpoints) || !endpoints.every(endpoint => typeof endpoint === "string")) {
+      throw new Error(`Partner tier "${tier}" must have an array of endpoint strings`);
+    }
+    validatedTiers[tier] = endpoints;
+  }
+
+  return { tiers: validatedTiers };
+}
+
+function loadPartnerTiersConfig(): PartnerTiersConfig {
+  let parsed: unknown;
   try {
     const raw = fs.readFileSync(PARTNER_TIERS_CONFIG_URL, "utf8");
-    return JSON.parse(raw) as PartnerTiersConfig;
-  } catch {
-    return { tiers: {} };
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error("Unable to load partner tiers config", { cause: error });
   }
+  return validatePartnerTiersConfig(parsed);
+}
+
+let partnerTiersConfig = loadPartnerTiersConfig();
+
+export function readPartnerTiersConfig(): PartnerTiersConfig {
+  return partnerTiersConfig;
+}
+
+export function reloadPartnerTiersConfig(): PartnerTiersConfig {
+  partnerTiersConfig = loadPartnerTiersConfig();
+  return partnerTiersConfig;
 }
 
 
@@ -64,6 +99,13 @@ export function isEndpointAllowed(tier: string, method: string, path: string, co
 export function requireApiKey(expectedApiKey?: string) {
   return async (req: Request, res: Response, next: NextFunction) => {
     if (!expectedApiKey) {
+      if (process.env.NODE_ENV === "production") {
+        return sendErrorResponse(
+          res,
+          new ConfigurationError("API key authorization is not configured"),
+          req,
+        );
+      }
       return next();
     }
 
@@ -77,7 +119,7 @@ export function requireApiKey(expectedApiKey?: string) {
       );
     }
 
-    if (provided !== expectedApiKey) {
+    if (!constantTimeEquals(provided, expectedApiKey)) {
       return sendErrorResponse(
         res,
         new ForbiddenError("Invalid API key", ERROR_CODES.INVALID_API_KEY.code),
@@ -94,7 +136,7 @@ export function requireApiKey(expectedApiKey?: string) {
 
       const config = readPartnerTiersConfig();
       const method = req.method;
-      const path = req.originalUrl || req.path;
+      const path = `${req.baseUrl}${req.path}`;
 
       if (!isEndpointAllowed(tier, method, path, config)) {
         defaultAuditLogger.log({

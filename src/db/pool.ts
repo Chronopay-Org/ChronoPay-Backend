@@ -1,4 +1,4 @@
-import { Pool, QueryResult } from "pg";
+import { Pool, PoolClient, QueryResult } from "pg";
 import { getQueryBudgetContext } from "./queryBudgetContext.js";
 import { _recordBudgetBreach, isStatementTimeoutError } from "./connection.js";
 import { QueryBudgetExceededError } from "../errors/AppError.js";
@@ -65,8 +65,9 @@ export const initDB = async (): Promise<void> => {
  * When an active QueryBudgetContext exists (set by the query-budget
  * middleware), this wrapper:
  *
- * 1. Runs `SET LOCAL statement_timeout = '<budget>ms'` before the actual
- *    query so PostgreSQL cancels any statement that exceeds the budget.
+ * 1. Runs `SET LOCAL statement_timeout = '<budget>ms'` and the actual query
+ *    on the same client inside a transaction so PostgreSQL cancels any
+ *    statement that exceeds the budget.
  * 2. Accumulates wall-clock SQL time into the budget context.
  * 3. Detects PostgreSQL error code `57014` (query_canceled) and marks the
  *    budget as breached.
@@ -77,21 +78,29 @@ export const initDB = async (): Promise<void> => {
 export const query = async (text: string, params?: unknown[]): Promise<QueryResult> => {
   const ctx = getQueryBudgetContext();
   const start = Date.now();
+  let client: PoolClient | undefined;
+  let transactionStarted = false;
+  let transactionCommitted = false;
 
   try {
-    // Set LOCAL statement_timeout so PostgreSQL enforces the budget.
-    // SET LOCAL is scoped to the current transaction (or implicit single-statement
-    // transaction) and is automatically cleared on COMMIT/ROLLBACK — safe for
-    // sub-transactions and connection reuse.
+    let res: QueryResult;
+
     if (ctx && !ctx.breached) {
-      try {
-        await pool.query(`SET LOCAL statement_timeout = '${ctx.budgetMs}ms'`);
-      } catch {
-        // SET LOCAL may fail on older PG versions; proceed without budget.
+      if (!Number.isInteger(ctx.budgetMs) || ctx.budgetMs <= 0) {
+        throw new RangeError("Query budget must be a positive integer");
       }
+
+      client = await pool.connect();
+      await client.query("BEGIN");
+      transactionStarted = true;
+      await client.query(`SET LOCAL statement_timeout = '${ctx.budgetMs}ms'`);
+      res = await client.query(text, params);
+      await client.query("COMMIT");
+      transactionCommitted = true;
+    } else {
+      res = await pool.query(text, params);
     }
 
-    const res = await pool.query(text, params);
     const duration = Date.now() - start;
 
     if (process.env.NODE_ENV !== "test" && process.env.NODE_ENV !== "production") {
@@ -129,6 +138,19 @@ export const query = async (text: string, params?: unknown[]): Promise<QueryResu
       });
     }
     throw error;
+  } finally {
+    if (client) {
+      if (transactionStarted && !transactionCommitted) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (rollbackError) {
+          console.error("Database query rollback failed", {
+            message: rollbackError instanceof Error ? rollbackError.message : "Unknown error",
+          });
+        }
+      }
+      client.release();
+    }
   }
 };
 

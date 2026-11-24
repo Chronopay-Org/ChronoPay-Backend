@@ -2,8 +2,6 @@
 # This file is automatically loaded by docker-compose when running 'docker-compose up'
 # It overrides production settings for local development
 
-version: "3.8"
-
 services:
   api:
     build:

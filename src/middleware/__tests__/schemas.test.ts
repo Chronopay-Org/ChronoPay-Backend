@@ -97,6 +97,14 @@ describe("CreateBookingIntentBodySchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts a recurring intent with a CRLF explicit UTC DTSTART", () => {
+    const result = CreateBookingIntentBodySchema.safeParse({
+      rrule: "DTSTART:20260101T090000Z\r\nRRULE:FREQ=DAILY;COUNT=2",
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("sanitizes a provided note and accepts the 500-character boundary", () => {
     const result = CreateBookingIntentBodySchema.parse({
       slotId: validSlotId,
@@ -119,8 +127,24 @@ describe("CreateBookingIntentBodySchema", () => {
     ["empty sanitized note", { slotId: validSlotId, note: "\u0000  " }],
     ["note over 500 characters", { slotId: validSlotId, note: "x".repeat(501) }],
     ["non-number hold deadline", { slotId: validSlotId, holdDeadlineMs: "later" }],
+    ["negative hold deadline", { slotId: validSlotId, holdDeadlineMs: -1 }],
+    ["fractional hold deadline", { slotId: validSlotId, holdDeadlineMs: 1.5 }],
   ])("rejects %s", (_name, payload) => {
     expect(CreateBookingIntentBodySchema.safeParse(payload).success).toBe(false);
+  });
+
+  it("rejects a body with both slotId and rrule", () => {
+    const result = CreateBookingIntentBodySchema.safeParse({
+      slotId: validSlotId,
+      rrule: "DTSTART:20241208T100000Z\nRRULE:FREQ=WEEKLY;COUNT=2",
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(
+        result.error.issues.some((issue) => issue.message === "slotId and rrule are mutually exclusive"),
+      ).toBe(true);
+    }
   });
 
   it("accepts a recurring intent with an explicit TZID DTSTART", () => {

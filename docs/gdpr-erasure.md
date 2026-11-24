@@ -37,6 +37,12 @@ When a PII column is erased:
 2. The column is set to `NULL`.
 3. If `storeHash: true` is configured for that column, a sibling `hash_<col>` column receives the hash.
 
+### Pseudonymization markers
+
+Values written as pseudonyms by `pseudonymize()` are always emitted with the versioned prefix `ps1_` followed by 43 base64url characters (e.g. `ps1_<43 chars>`). `isPseudonymized()` only recognises values carrying this prefix. Plain values that merely happen to be 43 URL-safe characters are **never** treated as already pseudonymized and are always erased.
+
+Values stored before the prefix scheme was introduced are recognised only through an explicit migration allow-list, never by shape alone. Pseudonymizing an already-pseudonymized value is idempotent: `pseudonymize(pseudonymize(x)) === pseudonymize(x)`.
+
 Example — erasing `users.email`:
 
 ```sql
@@ -233,6 +239,7 @@ Tests cover:
 ## Security Notes
 
 - Table and column identifiers in SQL come from the internal `PII_TABLE_GRAPH` registry, never from user input.
+- Pseudonym detection requires the `ps1_` version prefix; format-shape heuristics are not used, so attacker-supplied 43-character strings cannot bypass erasure.
 - The `subjectId` is parameterised in all WHERE clauses.
 - Only `admin` and `auditor` roles can reach the endpoint.
 - Auditors are restricted to dry-run mode — they cannot commit mutations.

@@ -1,8 +1,9 @@
-import express from "express";
+import express, { type Request } from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it } from "@jest/globals";
 import { setRedisClient, type RedisClient } from "../../cache/redisClient.js";
 import { idempotencyMiddleware } from "../idempotency.js";
+import { buildIdempotencyStorageKey } from "../idempotencyStorageKey.js";
 import {
   IdempotencyPayloadDecryptError,
   createIdempotencyPayloadCodec,
@@ -77,11 +78,62 @@ class InMemoryRedisMock implements RedisClient {
   }
 }
 
-function createTestApp(handler: (req: express.Request, res: express.Response) => Promise<void> | void) {
+interface TestAppOptions {
+  /**
+   * Attach a verified principal from the `x-test-actor` header BEFORE
+   * idempotencyMiddleware, mirroring the production ordering requirement
+   * (auth middleware runs first, idempotency namespaces by req.auth.userId).
+   */
+  actors?: boolean;
+  /** Additional routes mounted with the same idempotency middleware. */
+  routes?: string[];
+}
+
+function createTestApp(
+  handler: (req: express.Request, res: express.Response) => Promise<void> | void,
+  options: TestAppOptions = {},
+) {
   const app = express();
   app.use(express.json());
+  if (options.actors) {
+    app.use((req, _res, next) => {
+      const userId = req.header("x-test-actor");
+      if (userId) {
+        req.auth = { userId, role: "customer", claims: {} } as unknown as NonNullable<
+          typeof req.auth
+        >;
+      }
+      next();
+    });
+  }
   app.post("/payments", idempotencyMiddleware, handler);
+  for (const route of options.routes ?? []) {
+    app.post(route, idempotencyMiddleware, handler);
+  }
   return app;
+}
+
+/**
+ * Deterministically build the storage key the middleware derives for a call,
+ * without depending on connection-level details such as the client IP.
+ */
+function storageKeyFor(parts: {
+  key: string;
+  userId?: string;
+  route?: string;
+  method?: string;
+}): string {
+  const route = parts.route ?? "/payments";
+  const syntheticReq = {
+    method: parts.method ?? "POST",
+    baseUrl: "",
+    route: { path: route },
+    originalUrl: route,
+    auth: parts.userId
+      ? { userId: parts.userId, role: "customer", claims: {} }
+      : undefined,
+  } as unknown as Request;
+  return buildIdempotencyStorageKey(syntheticReq, parts.key);
 }
 
 describe("idempotencyMiddleware", () => {
@@ -176,12 +228,13 @@ describe("idempotencyMiddleware", () => {
     const app = createTestApp((_req, res) => {
       handlerExecutions += 1;
       res.status(201).json({ ok: true, run: handlerExecutions });
-    });
+    }, { actors: true });
 
     const key = "pay-expired-key-1";
-    const storageKey = `idempotency:req:${key}`;
+    const storageKey = storageKeyFor({ key, userId: "user-exp" });
     const first = await request(app)
       .post("/payments")
+      .set("x-test-actor", "user-exp")
       .set("Idempotency-Key", key)
       .send({ amount: 700 });
 
@@ -189,6 +242,7 @@ describe("idempotencyMiddleware", () => {
 
     const second = await request(app)
       .post("/payments")
+      .set("x-test-actor", "user-exp")
       .set("Idempotency-Key", key)
       .send({ amount: 700 });
 
@@ -220,10 +274,10 @@ describe("idempotencyMiddleware", () => {
     const app = createTestApp((_req, res) => {
       handlerExecutions += 1;
       res.status(201).json({ ok: true, source: "handler" });
-    });
+    }, { actors: true });
 
     const key = "pay-collision-assumption-1";
-    const storageKey = `idempotency:req:${key}`;
+    const storageKey = storageKeyFor({ key, userId: "user-seed" });
     const payload = { amount: 8080, note: "from-request" };
     const requestHash = generateRequestHash("POST", "/payments", payload);
     const codec = createIdempotencyPayloadCodec({
@@ -247,12 +301,95 @@ describe("idempotencyMiddleware", () => {
 
     const response = await request(app)
       .post("/payments")
+      .set("x-test-actor", "user-seed")
       .set("Idempotency-Key", key)
       .send(payload);
 
     expect(response.status).toBe(201);
     expect(response.body).toEqual({ ok: true, source: "cached" });
     expect(handlerExecutions).toBe(0);
+  });
+
+  it("does not replay one caller's cached response to another caller reusing the same key (cross-user regression #1306)", async () => {
+    const app = createTestApp((req, res) => {
+      handlerExecutions += 1;
+      res.status(201).json({ ok: true, owner: req.auth?.userId, run: handlerExecutions });
+    }, { actors: true });
+
+    const payload = { amount: 4200, currency: "USD" };
+
+    const first = await request(app)
+      .post("/payments")
+      .set("x-test-actor", "user-a")
+      .set("Idempotency-Key", "shared-key-1306")
+      .send(payload);
+    const second = await request(app)
+      .post("/payments")
+      .set("x-test-actor", "user-b")
+      .set("Idempotency-Key", "shared-key-1306")
+      .send(payload);
+
+    // Both callers get their own fresh response — never another caller's body.
+    expect(first.status).toBe(201);
+    expect(first.body.owner).toBe("user-a");
+    expect(second.status).toBe(201);
+    expect(second.body.owner).toBe("user-b");
+    expect(second.body).not.toEqual(first.body);
+    expect(handlerExecutions).toBe(2);
+
+    // The two callers' states live under distinct namespaced storage keys.
+    const storedKeys = await redis.keys("idempotency:req:*");
+    expect(storedKeys).toHaveLength(2);
+  });
+
+  it("replays the cached response when the same caller reuses key and payload", async () => {
+    const app = createTestApp((req, res) => {
+      handlerExecutions += 1;
+      res.status(201).json({ ok: true, owner: req.auth?.userId, run: handlerExecutions });
+    }, { actors: true });
+
+    const send = () =>
+      request(app)
+        .post("/payments")
+        .set("x-test-actor", "user-a")
+        .set("Idempotency-Key", "user-a-key-1")
+        .send({ amount: 999 });
+
+    const first = await send();
+    const second = await send();
+
+    expect(first.status).toBe(201);
+    expect(first.body.owner).toBe("user-a");
+    expect(second.status).toBe(201);
+    expect(second.body).toEqual(first.body);
+    expect(handlerExecutions).toBe(1);
+  });
+
+  it("does not collide when the same key value is used on two different routes", async () => {
+    const app = createTestApp((req, res) => {
+      handlerExecutions += 1;
+      res.status(201).json({ ok: true, path: req.path, run: handlerExecutions });
+    }, { routes: ["/refunds"] });
+
+    const key = "route-collision-key-1";
+    const payload = { amount: 1234 };
+
+    const payments = await request(app)
+      .post("/payments")
+      .set("Idempotency-Key", key)
+      .send(payload);
+    const refunds = await request(app)
+      .post("/refunds")
+      .set("Idempotency-Key", key)
+      .send(payload);
+
+    // The second route must not replay or conflict with the first route's entry.
+    expect(payments.status).toBe(201);
+    expect(payments.body.path).toBe("/payments");
+    expect(refunds.status).toBe(201);
+    expect(refunds.body.path).toBe("/refunds");
+    expect(refunds.body).not.toEqual(payments.body);
+    expect(handlerExecutions).toBe(2);
   });
 });
 

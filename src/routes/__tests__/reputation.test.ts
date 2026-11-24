@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, jest } from "@jest/globals";
 import request from "supertest";
 import express from "express";
 import { createApp } from "../../app.js";
-import reputationRouter from "../reputation.js";
+import reputationRouter, { parseValidTenantId } from "../reputation.js";
 import { reputationTransparencyService } from "../../services/reputationTransparencyService.js";
 
 describe("Reputation Transparency API - GET /api/v1/suppliers/:supplierId/reputation/signals", () => {
@@ -60,10 +60,16 @@ describe("Reputation Transparency API - GET /api/v1/suppliers/:supplierId/reputa
   });
 
   it("should allow admin role access to view any supplier's reputation signals", async () => {
-    const res = await request(app)
+    const adminApp = express();
+    adminApp.use((req: any, _res: any, next: any) => {
+      req.user = { sub: "admin-user", role: "admin" };
+      next();
+    });
+    adminApp.use("/api/v1/suppliers", reputationRouter);
+
+    const res = await request(adminApp)
       .get("/api/v1/suppliers/supplier-101/reputation/signals")
-      .set("x-chronopay-user-id", "admin-user")
-      .set("x-chronopay-role", "admin");
+      .set("x-tenant-id", "tenant-eu-west");
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -78,6 +84,37 @@ describe("Reputation Transparency API - GET /api/v1/suppliers/:supplierId/reputa
 
     expect(res.status).toBe(403);
     expect(res.body.success).toBe(false);
+  });
+
+  it("should reject requests with no req.auth, req.user, or identity headers", async () => {
+    const bareApp = express();
+    bareApp.use("/api/v1/suppliers", reputationRouter);
+
+    const res = await request(bareApp)
+      .get("/api/v1/suppliers/supplier-101/reputation/signals")
+      .set("x-tenant-id", "tenant-us-east");
+
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain("Authentication required");
+  });
+
+  it.each([
+    ["oversized", "t".repeat(129)],
+    ["empty", "   "],
+    ["whitespace", "tenant us east"],
+    ["unsafe charset", "tenant-us/east;drop"],
+  ])("should ignore a malformed x-tenant-id header (%s)", async (_label, tenantId) => {
+    const res = await request(app)
+      .get("/api/v1/suppliers/supplier-101/reputation/signals")
+      .set("x-supplier-owner-id", "owner-alice")
+      .set("x-tenant-id", tenantId);
+
+    // The supplier belongs to tenant-us-east; a malformed header is ignored so
+    // the legitimate owner is still authorized rather than treated cross-tenant.
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.supplierId).toBe("supplier-101");
   });
 
   it("should verify that raw buyer counterparty IDs are redacted from response payload", async () => {
@@ -151,5 +188,29 @@ describe("Reputation Transparency API - GET /api/v1/suppliers/:supplierId/reputa
     expect(res.body.error).toBe("Unexpected database connection failure");
 
     spy.mockRestore();
+  });
+});
+
+describe("parseValidTenantId", () => {
+  it.each(["tenant-us-east", "tenant_eu.west_2", "a", "T".repeat(128)])(
+    "accepts safe tenant id %p",
+    (tenantId) => {
+      expect(parseValidTenantId(tenantId)).toBe(tenantId);
+    },
+  );
+
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["empty", ""],
+    ["whitespace-only", "   "],
+    ["oversized", "t".repeat(129)],
+    ["internal space", "tenant us east"],
+    ["CRLF injection", "tenant-us-east\r\nx-evil: 1"],
+    ["path traversal", "tenant/../other"],
+    ["special characters", "tenant@east!"],
+    ["array without a string", ["tenant-us-east"]],
+  ])("rejects %s", (_label, tenantId) => {
+    expect(parseValidTenantId(tenantId)).toBeUndefined();
   });
 });

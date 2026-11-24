@@ -47,7 +47,7 @@ function samplePayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function buildApp(secret?: string): express.Express {
+function buildApp(secret?: string, previousSecret?: string): express.Express {
   const app = express();
   app.use(
     express.json({
@@ -56,9 +56,13 @@ function buildApp(secret?: string): express.Express {
       },
     }),
   );
-  app.post(ROUTE, internalHmacAuth(secret), (_req: Request, res: Response) => {
-    res.status(200).json({ success: true });
-  });
+  app.post(
+    ROUTE,
+    internalHmacAuth({ current: secret, previous: previousSecret }),
+    (_req: Request, res: Response) => {
+      res.status(200).json({ success: true });
+    },
+  );
   return app;
 }
 
@@ -177,9 +181,8 @@ describe("internalHmacAuth middleware", () => {
   });
 
   describe("valid signature — previous secret (rotation window)", () => {
-    it("accepts a signature made with SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS", async () => {
-      process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS = PREV_SECRET;
-      const app = buildApp(SECRET);
+    it("accepts a signature made with the configured previous secret", async () => {
+      const app = buildApp(SECRET, PREV_SECRET);
       const body = samplePayload();
 
       const res = await request(app)
@@ -192,7 +195,6 @@ describe("internalHmacAuth middleware", () => {
     });
 
     it("rejects the previous secret once the rotation window has closed", async () => {
-      // No SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS set — overlap window closed.
       const app = buildApp(SECRET);
       const body = samplePayload();
 
@@ -201,6 +203,38 @@ describe("internalHmacAuth middleware", () => {
         .set("x-webhook-signature", sign(body, PREV_SECRET))
         .send(body)
         .expect(403);
+    });
+  });
+
+  describe("isolated secret pairs", () => {
+    it("accepts the KYC previous secret but rejects the settlements previous secret", async () => {
+      const kycPreviousSecret = "test-kyc-previous-secret";
+      const app = buildApp(SECRET, kycPreviousSecret);
+      const body = samplePayload();
+
+      await request(app)
+        .post(ROUTE)
+        .set("x-webhook-signature", sign(body, kycPreviousSecret))
+        .send(body)
+        .expect(200);
+
+      await request(app)
+        .post(ROUTE)
+        .set("x-webhook-signature", sign(body, PREV_SECRET))
+        .send(body)
+        .expect(403);
+    });
+
+    it("does not fall back to a configured settlements secret when current is unset", async () => {
+      process.env.SETTLEMENTS_WEBHOOK_SECRET = SECRET;
+      const app = buildApp(undefined, "kyc-previous-secret");
+      const body = samplePayload();
+
+      await request(app)
+        .post(ROUTE)
+        .set("x-webhook-signature", sign(body, SECRET))
+        .send(body)
+        .expect(500);
     });
   });
 

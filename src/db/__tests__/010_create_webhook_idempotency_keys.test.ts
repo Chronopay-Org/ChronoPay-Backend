@@ -16,7 +16,7 @@ describe('010_create_webhook_idempotency_keys migration', () => {
   describe('contract and metadata', () => {
     it('exposes the expected migration metadata', () => {
       expect(migration).toBeDefined();
-      expect(migration.id).toBe('012');
+      expect(migration.id).toBe('010');
       expect(migration.name).toBe('create_webhook_idempotency_keys');
       expect(typeof migration.up).toBe('function');
       expect(typeof migration.down).toBe('function');

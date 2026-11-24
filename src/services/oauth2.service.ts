@@ -131,6 +131,55 @@ export class OAuth2Service {
   }
 
   /**
+   * Whether this provider is an OpenID Connect provider (it returns a signed
+   * ID token and is requested with the `openid` scope). Google is; GitHub is
+   * plain OAuth2 and never returns an ID token.
+   */
+  public isOidcProvider(provider: string): boolean {
+    const config = this.providers.get(provider);
+    return config ? config.scopes.includes("openid") : false;
+  }
+
+  /**
+   * Build the application JWT subject for a provider login.
+   *
+   * Provider user ids are only unique within a provider, so they must be
+   * namespaced: GitHub user 12345 and Google user 12345 are different people.
+   */
+  public buildAppSubject(provider: string, providerUserId: string): string {
+    return `${provider}:${providerUserId}`;
+  }
+
+  /**
+   * Decode the claims of an ID token. The payload is JWT base64url, not plain
+   * base64 (it uses `-`/`_` instead of `+`/`/` and drops padding).
+   *
+   * This only decodes: callers still validate the nonce against the value they
+   * stored before the redirect. Any structural or encoding problem raises a
+   * 400 `malformed_id_token`, never a silent skip.
+   */
+  public decodeIdTokenPayload(idToken: string): Record<string, unknown> {
+    const parts = idToken.split(".");
+    if (parts.length !== 3 || parts.some((part) => part.length === 0)) {
+      throw new OAuth2Error("malformed_id_token", "ID token is not a well-formed JWT", 400);
+    }
+
+    let payload: unknown;
+    try {
+      // Buffer's "base64url" decoder also tolerates padded input.
+      payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+    } catch {
+      throw new OAuth2Error("malformed_id_token", "ID token payload cannot be decoded", 400);
+    }
+
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new OAuth2Error("malformed_id_token", "ID token payload is not an object", 400);
+    }
+
+    return payload as Record<string, unknown>;
+  }
+
+  /**
    * Generate PKCE challenge pair
    */
   public generatePKCEChallenge(): PKCEChallenge {
@@ -279,10 +328,16 @@ export class OAuth2Service {
    * Verify nonce matches (for ID token validation)
    */
   public verifyNonce(storedNonce: string, tokenNonce: string | undefined): boolean {
-    if (!tokenNonce) {
+    if (!storedNonce || !tokenNonce) {
       return false;
     }
-    return storedNonce === tokenNonce;
+
+    const expected = Buffer.from(storedNonce, "utf-8");
+    const actual = Buffer.from(tokenNonce, "utf-8");
+    if (expected.length !== actual.length) {
+      return false;
+    }
+    return crypto.timingSafeEqual(expected, actual);
   }
 }
 

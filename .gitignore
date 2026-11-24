@@ -19,3 +19,4 @@ test-full-suite.ipynb
 
 # Generated SBOM output (produced by `npm run sbom` / CI; not committed)
 sbom*.cyclonedx.json
+branch_structure.json

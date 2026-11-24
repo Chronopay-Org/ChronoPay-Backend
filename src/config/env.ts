@@ -1,6 +1,7 @@
 import os from "os";
 
 export type NodeEnv = "development" | "test" | "production";
+export type QuotaFailMode = "open" | "closed";
 
 export interface EncryptionKey {
   id: string;
@@ -27,18 +28,26 @@ export interface EnvConfig {
   redisUrl: string;
   rateLimitWindowMs: number;
   rateLimitMax: number;
+  quotaFailMode: QuotaFailMode;
   trustProxy: boolean;
+  /**
+   * Explicit opt-in for test-only routes (e.g. /__test__/explode, /api/v1/test/auth).
+   * Always false unless ENABLE_TEST_ROUTES is set to a truthy value.
+   */
+  enableTestRoutes: boolean;
   timeoutMs?: number;
   webhookSecret?: string;
   jwtIssuer?: string;
   jwtAudience?: string;
-  corsAllowedOrigins?: string[];
+  corsAllowedOrigins: readonly string[];
   /** Stellar Horizon base URLs (comma-separated, first is primary) */
   horizonUrls?: string[];
   /** Stellar network passphrase used to identify the target network */
   networkPassphrase?: string;
   /** Pinned hash for the current active escrow contract */
   escrowContractHash?: string;
+  /** Public base URL for generating download links (GDPR/audit exports). */
+  appUrl?: string;
   /** Secret used to verify the internal fair-queue rate-limit bypass HMAC signature. */
   internalOverrideSecret?: string;
   /** Previous secret for zero-downtime rotation of the bypass signing key. */
@@ -47,12 +56,27 @@ export interface EnvConfig {
   internalBypassToleranceMs: number;
   /** Issuer label embedded in TOTP otpauth URIs and QR code labels. */
   mfaIssuer?: string;
-  /** Max age (ms) of an MFA challenge before `requireFreshMfa` rejects it. Default 15 min. */
+  /** Max age (ms) of an MFA Challenge before `requireFreshMfa` rejects it. Default 15 min. */
   mfaFreshnessMs: number;
   /** Clock-skew windows accepted around the current TOTP step on verification. Default 1. */
   mfaWindowPeriods: number;
   /** Lifetime (seconds) of an issued MFA challenge token. Default 300. */
   mfaChallengeTtlSec: number;
+  /**
+   * Require a fresh MFA challenge on customer booking refunds.
+   * Default: enabled when NODE_ENV=production, disabled otherwise.
+   */
+  mfaRequiredForRefunds: boolean;
+  /**
+   * Static bearer token required to scrape /metrics. When unset, /metrics is
+   * unauthenticated outside production.
+   */
+  metricsAuthToken?: string;
+  /**
+   * Explicit opt-out allowing an unauthenticated /metrics endpoint in production.
+   * Must be set to true when METRICS_AUTH_TOKEN is not configured in production.
+   */
+  metricsPublic: boolean;
 }
 
 export class EnvValidationError extends Error {
@@ -80,7 +104,14 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
   const rateLimitMax = parsePositiveInteger(env.RATE_LIMIT_MAX, "RATE_LIMIT_MAX", 100, issues);
+  const quotaFailMode = parseQuotaFailMode(env.QUOTA_FAIL_MODE, issues);
   const trustProxy = parseBoolean(env.TRUST_PROXY, "TRUST_PROXY", false, issues);
+  const enableTestRoutes = parseBoolean(
+    env.ENABLE_TEST_ROUTES,
+    "ENABLE_TEST_ROUTES",
+    false,
+    issues,
+  );
 
   const webhookSecret = parseOptionalString(env.WEBHOOK_SECRET);
   const jwtIssuer = parseOptionalString(env.JWT_ISSUER);
@@ -99,6 +130,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
 
   const networkPassphrase = parseOptionalString(env.STELLAR_NETWORK_PASSPHRASE);
   const escrowContractHash = parseOptionalString(env.ESCROW_CONTRACT_HASH);
+  const appUrl = parseOptionalString(env.APP_URL);
 
   const internalOverrideSecret = parseOptionalString(env.INTERNAL_OVERRIDE_SECRET);
   const internalOverrideSecretPrev = parseOptionalString(env.INTERNAL_OVERRIDE_SECRET_PREV);
@@ -128,6 +160,26 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     300,
     issues,
   );
+  const mfaRequiredForRefunds = parseBoolean(
+    env.MFA_REQUIRED_FOR_REFUNDS,
+    "MFA_REQUIRED_FOR_REFUNDS",
+    nodeEnv === "production",
+    issues,
+  );
+
+  const metricsAuthToken = parseOptionalString(env.METRICS_AUTH_TOKEN);
+  const metricsPublic = parseBoolean(env.METRICS_PUBLIC, "METRICS_PUBLIC", false, issues);
+  if (nodeEnv === "production" && metricsAuthToken === undefined && !metricsPublic) {
+    issues.push(
+      "METRICS_AUTH_TOKEN must be set in production. Set METRICS_PUBLIC=true to explicitly allow an unauthenticated /metrics endpoint.",
+    );
+  }
+
+  const idempotencyProcessingLockTtlSeconds = parseOptionalPositiveInteger(
+    env.IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS,
+    "IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS",
+    issues,
+  );
 
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
@@ -139,7 +191,9 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     redisUrl,
     rateLimitWindowMs,
     rateLimitMax,
+    quotaFailMode,
     trustProxy,
+    enableTestRoutes,
     timeoutMs,
     webhookSecret,
     jwtIssuer,
@@ -148,6 +202,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     horizonUrls,
     networkPassphrase,
     escrowContractHash,
+    appUrl,
     internalOverrideSecret,
     internalOverrideSecretPrev,
     internalBypassToleranceMs,
@@ -155,7 +210,20 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     mfaFreshnessMs,
     mfaWindowPeriods,
     mfaChallengeTtlSec,
+    mfaRequiredForRefunds,
+    metricsAuthToken,
+    metricsPublic,
   };
+}
+
+function parseQuotaFailMode(rawValue: string | undefined, issues: string[]): QuotaFailMode {
+  if (rawValue === undefined) return "open";
+
+  const value = rawValue.trim();
+  if (value === "open" || value === "closed") return value;
+
+  issues.push("QUOTA_FAIL_MODE must be one of: open, closed.");
+  return "open";
 }
 
 function parseNodeEnv(rawValue: string | undefined, issues: string[]): NodeEnv {
@@ -188,6 +256,33 @@ function parsePositiveInteger(
   issues: string[],
 ): number {
   return parseIntegerInRange(rawValue, key, defaultValue, 1, Number.MAX_SAFE_INTEGER, issues);
+}
+
+function parseOptionalPositiveInteger(
+  rawValue: string | undefined,
+  key: string,
+  issues: string[],
+): number | undefined {
+  if (rawValue === undefined) return undefined;
+
+  const value = rawValue.trim();
+  if (value.length === 0) {
+    issues.push(`${key} must be a non-empty integer when provided.`);
+    return undefined;
+  }
+
+  if (!/^\d+$/.test(value)) {
+    issues.push(`${key} must be a whole number between 1 and ${Number.MAX_SAFE_INTEGER}.`);
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > Number.MAX_SAFE_INTEGER) {
+    issues.push(`${key} must be a whole number between 1 and ${Number.MAX_SAFE_INTEGER}.`);
+    return undefined;
+  }
+
+  return parsed;
 }
 
 function parseIntegerInRange(
@@ -229,7 +324,7 @@ function parseRedisUrl(rawValue: string | undefined, issues: string[]): string {
   const value = rawValue.trim();
 
   if (value.length === 0) {
-    issues.push("REDIS_URL must be a non-empty value.");
+    issues.push("REDIS_ULL must be a non-empty value.");
     return "redis://localhost:6379";
   }
 
@@ -243,7 +338,7 @@ function parseRedisUrl(rawValue: string | undefined, issues: string[]): string {
     }
 
     if (!url.hostname) {
-      issues.push("REDIS_URL must include a host.");
+      issues.push("REDIS_ULL must include a host.");
       return "redis://localhost:6379";
     }
 
@@ -302,7 +397,7 @@ function parseOptionalUrl(rawValue: string | undefined, key: string, issues: str
   if (value.length === 0) return undefined;
   try {
     const url = new URL(value);
-    if (!["http:", "https:"].includes(url.protocol)) {
+    if (!["http:", "https::"].includes(url.protocol)) {
       issues.push(`${key} must use http or https scheme.`);
       return undefined;
     }

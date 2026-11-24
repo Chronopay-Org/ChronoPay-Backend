@@ -1262,6 +1262,98 @@ describe("HorizonContractClient.findPathPaymentQuote()", () => {
       }),
     ).rejects.toThrow("Slippage tolerance exceeded");
   });
+
+  it("accepts string source amount '50.0' and numeric stroops equivalently", async () => {
+    const client = makeClient();
+    mockOk({
+      _embedded: {
+        records: [
+          {
+            source_asset_type: "native",
+            source_amount: "50.0000000",
+            destination_asset_type: "credit_alphanum4",
+            destination_asset_code: "USDC",
+            destination_asset_issuer: usdcAsset.asset_issuer,
+            destination_amount: "10.0000000",
+            path: [],
+          },
+        ],
+      },
+    });
+
+    const quoteFromString = await client.findPathPaymentQuote({
+      sourceAsset: nativeAsset,
+      sourceAmount: "50.0",
+      destinationAsset: usdcAsset,
+      maxSlippageTolerancePercent: 0.5,
+    });
+
+    mockOk({
+      _embedded: {
+        records: [
+          {
+            source_asset_type: "native",
+            source_amount: "50.0000000",
+            destination_asset_type: "credit_alphanum4",
+            destination_asset_code: "USDC",
+            destination_asset_issuer: usdcAsset.asset_issuer,
+            destination_amount: "10.0000000",
+            path: [],
+          },
+        ],
+      },
+    });
+
+    const quoteFromNumber = await client.findPathPaymentQuote({
+      sourceAsset: nativeAsset,
+      sourceAmount: 500000000,
+      destinationAsset: usdcAsset,
+      maxSlippageTolerancePercent: 0.5,
+    });
+
+    expect(quoteFromString.sourceAmount).toBe(quoteFromNumber.sourceAmount);
+    expect(quoteFromString.minDestinationAmount).toBe(quoteFromNumber.minDestinationAmount);
+  });
+
+  it("rejects string source amount representing 50 stroops as dust", async () => {
+    const client = makeClient();
+    await expect(
+      client.findPathPaymentQuote({
+        sourceAsset: nativeAsset,
+        sourceAmount: "0.0000050",
+        destinationAsset: usdcAsset,
+      }),
+    ).rejects.toThrow("below minimum threshold");
+  });
+
+  it("computes minDestinationAmount with exact integer math for large values", async () => {
+    const client = makeClient();
+    const largeDestAmount = "922337203.6854775";
+    mockOk({
+      _embedded: {
+        records: [
+          {
+            source_asset_type: "native",
+            source_amount: "1000000.0000000",
+            destination_asset_type: "credit_alphanum4",
+            destination_asset_code: "USDC",
+            destination_asset_issuer: usdcAsset.asset_issuer,
+            destination_amount: largeDestAmount,
+            path: [],
+          },
+        ],
+      },
+    });
+
+    const quote = await client.findPathPaymentQuote({
+      sourceAsset: nativeAsset,
+      sourceAmount: 10000000000000,
+      destinationAsset: usdcAsset,
+      maxSlippageTolerancePercent: 0.5,
+    });
+
+    expect(quote.minDestinationAmount).toBe("917725517.6670501");
+  });
 });
 
 // ─── SettlementFinalityProbe contract (#804) ─────────────────────────────────

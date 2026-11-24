@@ -139,6 +139,9 @@ describe("RecurringBookingRulesEngine", () => {
         endTime: T0 + HOUR_MS,
         note: "every weekday",
       });
+      expect(first.bookingType).toBe("standard");
+      expect(first.holdPlacedAt).toBeUndefined();
+      expect(first.holdUntilMs).toBeUndefined();
       expect(first.id).toBeDefined();
 
       const repo = new InMemorySlotRepository(threeDailySlots());
@@ -157,6 +160,61 @@ describe("RecurringBookingRulesEngine", () => {
       expect(slotRepository.findById("slot-1")!.bookable).toBe(false);
       expect(slotRepository.findById("slot-2")!.bookable).toBe(false);
       expect(slotRepository.findById("slot-3")!.bookable).toBe(false);
+    });
+
+    it("materializes refundable holds and resolves a price snapshot for each priced occurrence", async () => {
+      const slotRepository = new InMemorySlotRepository([
+        slotAt("slot-1", "alice", T0, {
+          pricingStrategy: {
+            strategyId: "fixed",
+            basePrice: 1000,
+            config: { strategy: "fixed" },
+          },
+        }),
+        slotAt("slot-2", "alice", T0 + DAY_MS, {
+          pricingStrategy: {
+            strategyId: "fixed",
+            basePrice: 1500,
+            config: { strategy: "fixed" },
+          },
+        }),
+      ]);
+      const engine = makeEngine({
+        slotRepository,
+        nowMs: () => Date.UTC(2026, 0, 1),
+      });
+      const holdDeadlineMs = Date.UTC(2026, 0, 10);
+
+      const report = await engine.createRecurringBookings(RULE_DAILY_3, actor, {
+        bookingType: "refundable_hold",
+        holdDeadlineMs,
+      });
+
+      expect(report.successes).toHaveLength(2);
+      expect(report.successes[0]).toMatchObject({
+        bookingType: "refundable_hold",
+        status: "hold_placed",
+        holdPlacedAt: "2026-01-01T00:00:00.000Z",
+        holdUntilMs: holdDeadlineMs,
+        pricingSnapshot: {
+          resolvedPrice: 1000,
+          basePrice: 1000,
+          slotStartMs: T0,
+          nowMs: Date.UTC(2026, 0, 1),
+        },
+      });
+      expect(report.successes[1]).toMatchObject({
+        bookingType: "refundable_hold",
+        status: "hold_placed",
+        holdPlacedAt: "2026-01-01T00:00:00.000Z",
+        holdUntilMs: holdDeadlineMs,
+        pricingSnapshot: {
+          resolvedPrice: 1500,
+          basePrice: 1500,
+          slotStartMs: T0 + DAY_MS,
+          nowMs: Date.UTC(2026, 0, 1),
+        },
+      });
     });
   });
 

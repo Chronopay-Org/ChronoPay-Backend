@@ -55,6 +55,13 @@ export function generateRateLimitKey(req: Request | null | undefined): string {
   return `rl:ip:${ipHash}`;
 }
 
+export function getPrincipalType(req: Request | null | undefined): 'user' | 'apiKey' | 'ip' {
+  const key = generateRateLimitKey(req);
+  if (key.startsWith('rl:user:')) return 'user';
+  if (key.startsWith('rl:apiKey:')) return 'apiKey';
+  return 'ip';
+}
+
 function isNonEmptyValue(value: unknown): boolean {
   if (value === null || value === undefined) return false;
   if (typeof value === 'string') return value.trim().length > 0;
@@ -111,8 +118,7 @@ export function createRateLimiter(
 /**
  * Auth-aware rate limiter.
  *
- * Place AFTER authentication middleware so that req.auth, req.user, or req.apiKeyId
- * are populated. Falls back to IP-based key when no identity present.
+ * Place AFTER authentication middleware so that req.auth, req.user, or req.apiKeyId are populated. Falls back to IP-based key when no identity present.
  *
  * Uses shared Redis store to ensure counters are consistent across routes and instances.
  *
@@ -136,7 +142,6 @@ export function createAuthAwareRateLimiter(
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     keyGenerator: generateRateLimitKey,
-    // @ts-expect-error - Auto-fixed by script
     store: rateLimitRedisStore,
     // Skip rate limiting in test environment to avoid flaky tests.
     // Also skip when a valid internal fair-queue bypass has been granted
@@ -157,9 +162,16 @@ export function createAuthAwareRateLimiter(
   const limiter = rateLimit(options);
 
   return ((req: Request, res: Response, next: import("express").NextFunction) => {
-    const tenantId = generateRateLimitKey(req);
-    fairQueueBurnRateTotal.labels(tenantId).inc();
-    fairQueueWaitTimeSeconds.labels(tenantId).observe(0);
+    // Label by principal type (user/apiKey/ip), never by raw user id.
+    // This keeps the label budget bounded and avoids exporting user ids.
+    const principalType = getPrincipalType(req);
+    const start = process.hrtime();
+    fairQueueBurnRateTotal.labels(principalType).inc();
+    res.once('finish', () => {
+      const [sec, nsec] = process.hrtime(start);
+      const elapsedSeconds = sec + nsec / 1e9;
+      fairQueueWaitTimeSeconds.labels(principalType).observe(elapsedSeconds);
+    });
     return limiter(req, res, next);
   }) as RateLimitRequestHandler;
 }

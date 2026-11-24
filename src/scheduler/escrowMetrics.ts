@@ -38,9 +38,6 @@ export const escrowListenerLagSequences = createBudgetedGauge({
     "Difference between the latest network ledger (after finalityDepth) and the cursor's last applied ledger sequence",
   labels: ["instance_id"],
   budget: ESCROW_LISTENER_INSTANCE_LABEL_BUDGET,
-  // Gauges do not consume buckets, but the createBudgetedGauge signature
-  // currently aliases BudgetedHistogramOptions — pass an empty array.
-  buckets: [],
   registers: [register],
 });
 

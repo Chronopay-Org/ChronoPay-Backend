@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../test/auth.js";
 import request from "supertest";
 import app from "../index.js";
 import { requireRole } from "../middleware/rbac.js";
@@ -10,12 +11,12 @@ describe("RBAC and Validation Coverage", () => {
     });
 
     it("should cover 400 invalid role", async () => {
-      const res = await request(app).post("/api/v1/slots").set("x-user-role", "hacker").send({});
+      const res = await request(app).post("/api/v1/slots").set("Authorization", createTestAuthorization("test-user", "hacker")).send({});
       expect(res.status).toBe(400);
     });
 
     it("should cover 403 forbidden role", async () => {
-      const res = await request(app).post("/api/v1/slots").set("x-user-role", "customer").send({});
+      const res = await request(app).post("/api/v1/slots").set("Authorization", createTestAuthorization("test-user", "customer")).send({});
       expect(res.status).toBe(403);
     });
 

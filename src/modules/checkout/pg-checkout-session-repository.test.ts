@@ -162,17 +162,23 @@ describe("PgCheckoutSessionRepository", () => {
         metadata: { key: "new-value" },
       };
 
-      const result = await repository.updateSession("test-id-123", fields);
+      const result = await repository.updateSession(
+        "test-id-123",
+        fields,
+        CheckoutSessionStatus.PENDING,
+      );
 
       expect(mockDbQuery).toHaveBeenCalledTimes(1);
       const args = mockDbQuery.mock.calls[0];
       expect(args[0]).toContain("UPDATE checkout_sessions");
+      expect(args[0]).toContain("WHERE id = $1 AND status = $6");
       expect(args[1]).toEqual([
         "test-id-123",
         fields.status,
         fields.updatedAt,
         fields.paymentToken,
         JSON.stringify(fields.metadata),
+        CheckoutSessionStatus.PENDING,
       ]);
 
       expect(result).toEqual({
@@ -198,17 +204,23 @@ describe("PgCheckoutSessionRepository", () => {
         updatedAt: 1600002000,
       };
 
-      const result = await repository.updateSession("test-id-123", fields);
+      const result = await repository.updateSession(
+        "test-id-123",
+        fields,
+        CheckoutSessionStatus.PENDING,
+      );
 
       expect(mockDbQuery).toHaveBeenCalledTimes(1);
       const args = mockDbQuery.mock.calls[0];
       expect(args[0]).toContain("UPDATE checkout_sessions");
+      expect(args[0]).toContain("WHERE id = $1 AND status = $6");
       expect(args[1]).toEqual([
         "test-id-123",
         fields.status,
         fields.updatedAt,
         null,
         null,
+        CheckoutSessionStatus.PENDING,
       ]);
 
       expect(result).toEqual({

@@ -63,6 +63,7 @@ export type PublicErrorCode =
   // State / lifecycle (404 / 409 / 422)
   | "NOT_FOUND"
   | "CONFLICT"
+  | "HOLD_EXPIRED"
   | "UNPROCESSABLE_ENTITY"
   // Bundles (422)
   | "BUNDLE_EXPIRED"
@@ -294,6 +295,13 @@ export type PublicError =
   | {
       readonly scope: "public";
       readonly category: "state";
+      readonly code: "HOLD_EXPIRED";
+      readonly status: 409;
+      readonly messageKey: I18nMessageKey;
+    }
+  | {
+      readonly scope: "public";
+      readonly category: "state";
       readonly code: "UNPROCESSABLE_ENTITY";
       readonly status: 422;
       readonly messageKey: I18nMessageKey;
@@ -411,6 +419,7 @@ export const PUBLIC_ERROR_CODES: readonly PublicErrorCode[] = [
   "NOT_ACCEPTABLE",
   "NOT_FOUND",
   "CONFLICT",
+  "HOLD_EXPIRED",
   "UNPROCESSABLE_ENTITY",
   "BUNDLE_EXPIRED",
   "BUNDLE_NOT_TRANSFERABLE",
@@ -623,6 +632,13 @@ export const ERROR_TAXONOMY: Record<ErrorCode, ErrorType> = {
     code: "CONFLICT",
     status: 409,
     messageKey: createMessageKey("errors.resource.conflict"),
+  },
+  HOLD_EXPIRED: {
+    scope: "public",
+    category: "state",
+    code: "HOLD_EXPIRED",
+    status: 409,
+    messageKey: createMessageKey("errors.resource.hold_expired"),
   },
   UNPROCESSABLE_ENTITY: {
     scope: "public",

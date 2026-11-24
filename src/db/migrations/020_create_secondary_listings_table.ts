@@ -12,7 +12,7 @@ import { Migration } from "../migrationRunner.js";
  * - supplierConsent must be true before a secondary listing is accepted
  */
 export const migration: Migration = {
-  id: "020",
+  id: "033",
   name: "create_secondary_listings_table",
 
   async up(client: PoolClient): Promise<void> {

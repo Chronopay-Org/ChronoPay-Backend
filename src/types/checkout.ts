@@ -98,7 +98,7 @@ export interface CheckoutSession {
   status: CheckoutSessionStatus;
   /** Unix timestamp when session was created */
   createdAt: number;
-  /** Unix timestamp when session expires */
+  /** Unix timestamp in seconds when the session expires. */
   expiresAt: number;
   /** Optional metadata for tracking */
   metadata?: Record<string, string | number | boolean>;
@@ -173,10 +173,12 @@ export const CheckoutErrorCode = {
   INVALID_EMAIL: "INVALID_EMAIL",
   INVALID_PAYMENT_METHOD: "INVALID_PAYMENT_METHOD",
   INVALID_CUSTOMER_ID: "INVALID_CUSTOMER_ID",
+  INVALID_REDIRECT_URL: "INVALID_REDIRECT_URL",
   MISSING_REQUIRED_FIELD: "MISSING_REQUIRED_FIELD",
   SESSION_NOT_FOUND: "SESSION_NOT_FOUND",
   SESSION_EXPIRED: "SESSION_EXPIRED",
   INVALID_SESSION_STATE: "INVALID_SESSION_STATE",
+  PAYMENT_PROVIDER_UNAVAILABLE: "PAYMENT_PROVIDER_UNAVAILABLE",
   UNAUTHORIZED: "UNAUTHORIZED",
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;

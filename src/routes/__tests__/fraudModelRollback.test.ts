@@ -27,6 +27,7 @@ import {
   approveRollback,
   ROLLBACK_TTL_MS,
 } from "../../services/fraudModelRollback.js";
+import { createTestAuthorization } from "../../../test/auth.js";
 
 // ─── Test setup ──────────────────────────────────────────────────────────────
 
@@ -234,8 +235,7 @@ describe("approveRollback()", () => {
 
 describe("POST /api/v1/admin/fraud-models/rollback/initiate", () => {
   const headers = {
-    "x-chronopay-user-id": "admin-a",
-    "x-chronopay-role": "admin",
+    Authorization: createTestAuthorization("admin-a", "admin"),
   };
 
   it("returns 401 without auth headers", async () => {
@@ -309,8 +309,8 @@ describe("POST /api/v1/admin/fraud-models/rollback/initiate", () => {
 // ─── HTTP: /rollback/approve ──────────────────────────────────────────────────
 
 describe("POST /api/v1/admin/fraud-models/rollback/approve", () => {
-  const initiatorHeaders = { "x-chronopay-user-id": "admin-a", "x-chronopay-role": "admin" };
-  const approverHeaders = { "x-chronopay-user-id": "admin-b", "x-chronopay-role": "admin" };
+  const initiatorHeaders = { Authorization: createTestAuthorization("admin-a", "admin") };
+  const approverHeaders = { Authorization: createTestAuthorization("admin-b", "admin") };
 
   it("returns 404 for unknown rollbackId", async () => {
     const res = await request(makeApp())

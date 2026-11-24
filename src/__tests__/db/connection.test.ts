@@ -14,7 +14,10 @@ import {
   closePool,
   withTransaction,
   _setPoolFactory,
+  _resetPoolFactory,
 } from "../../db/connection.js";
+import { runWithQueryBudget } from "../../db/queryBudgetContext.js";
+import { logger } from "../../utils/logger.js";
 
 // ─── Mock pool client ─────────────────────────────────────────────────────────
 
@@ -40,13 +43,12 @@ beforeEach(async () => {
   // Tear down any existing singleton first
   await closePool();
   delete process.env.DATABASE_URL;
+  delete process.env.POSTGRESQL_URL;
+  delete process.env.DB_POOL_MAX;
 
   // Build fresh mock pool methods
-   
   mockConnectFn = jest.fn<any>().mockResolvedValue(mockClient);
-   
   mockEndFn = jest.fn<any>().mockResolvedValue(undefined);
-   
   mockOnFn = jest.fn<any>();
 
   mockPoolInstance = {
@@ -66,23 +68,44 @@ beforeEach(async () => {
 afterEach(async () => {
   await closePool();
   delete process.env.DATABASE_URL;
+  delete process.env.POSTGRESQL_URL;
+  delete process.env.DB_POOL_MAX;
   // Restore real pool factory after each test
-  _setPoolFactory((url) => new Pool({ connectionString: url }));
+  _resetPoolFactory();
 });
 
 // ─── getPool() ────────────────────────────────────────────────────────────────
 
 describe("getPool()", () => {
   it("throws a descriptive error when DATABASE_URL is not set", () => {
-    expect(() => getPool()).toThrow(/DATABASE_URL environment variable is not set/);
+    expect(() => getPool()).toThrow(/Database connection URL is not set/);
+  });
+
+  it("throws a descriptive error when neither DATABASE_URL nor POSTGRESQL_URL is set", () => {
+    expect(() => getPool()).toThrow(/Database connection URL is not set/);
   });
 
   it("creates a Pool using the factory with the DATABASE_URL", () => {
     process.env.DATABASE_URL = FAKE_URL;
-    const factoryFn = jest.fn<(...args: any[]) => Pool>().mockReturnValue(mockPoolInstance);
-    _setPoolFactory(factoryFn as unknown as (url: string) => Pool);
+    const factoryFn = jest.fn<any>().mockReturnValue(mockPoolInstance);
+    _setPoolFactory(factoryFn);
     getPool();
-    expect(factoryFn).toHaveBeenCalledWith(FAKE_URL);
+    expect(factoryFn).toHaveBeenCalledWith(FAKE_URL, undefined);
+  });
+
+  it("falls back to POSTGRESQL_URL as a deprecated alias and logs a warning", () => {
+    process.env.POSTGRESQL_URL = FAKE_URL;
+    const warnSpy = jest
+      .spyOn(logger, "warn")
+      .mockImplementation((() => logger) as unknown as typeof logger.warn);
+    const factoryFn = jest.fn<any>().mockReturnValue(mockPoolInstance);
+    _setPoolFactory(factoryFn);
+    getPool();
+    expect(factoryFn).toHaveBeenCalledWith(FAKE_URL, undefined);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "POSTGRESQL_URL is deprecated; use DATABASE_URL instead.",
+    );
+    warnSpy.mockRestore();
   });
 
   it("registers an error handler on the pool", () => {
@@ -129,6 +152,14 @@ describe("closePool()", () => {
     await closePool();
     await closePool(); // second call — should not call end again
     expect(mockEndFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a new pool after closePool even when the factory was reset", async () => {
+    process.env.DATABASE_URL = FAKE_URL;
+    getPool();
+    await closePool();
+    _resetPoolFactory();
+    expect(() => getPool()).not.toThrow();
   });
 });
 
@@ -201,5 +232,65 @@ describe("withTransaction()", () => {
     await expect(
       withTransaction(fn as unknown as (c: PoolClient) => Promise<never>),
     ).rejects.toThrow("original failure");
+  });
+
+  it("issues a parameterized set_config inside BEGIN for a valid budget", async () => {
+    const budgetMs = 1500;
+    const fn = jest.fn<(c: PoolClient) => Promise<string>>().mockResolvedValue("ok");
+
+    const result = await runWithQueryBudget(
+      { budgetMs, totalSqlTimeMs: 0, route: "/api/v1/test", breached: false },
+      () => withTransaction(fn as unknown as (c: PoolClient) => Promise<string>),
+    );
+
+    expect(result).toBe("ok");
+
+    const calls = mockQueryFn.mock.calls;
+    const beginIdx = calls.findIndex((c) => c[0] === "BEGIN");
+    const setConfigIdx = calls.findIndex(
+      (c) => c[0] === "SELECT set_config('statement_timeout', $1, true)",
+    );
+    const commitIdx = calls.findIndex((c) => c[0] === "COMMIT");
+
+    expect(beginIdx).toBe(0);
+    expect(setConfigIdx).toBeGreaterThan(beginIdx);
+    expect(setConfigIdx).toBeLessThan(commitIdx);
+    expect(calls[setConfigIdx]).toEqual([
+      "SELECT set_config('statement_timeout', $1, true)",
+      [String(Math.trunc(budgetMs))],
+    ]);
+
+    // The timeout must be configured after BEGIN but before the callback runs.
+    const beginOrder = mockQueryFn.mock.invocationCallOrder[beginIdx];
+    const setConfigOrder = mockQueryFn.mock.invocationCallOrder[setConfigIdx];
+    const commitOrder = mockQueryFn.mock.invocationCallOrder[commitIdx];
+    const callbackOrder = fn.mock.invocationCallOrder[0];
+
+    expect(beginOrder).toBeLessThan(setConfigOrder);
+    expect(setConfigOrder).toBeLessThan(callbackOrder);
+    expect(callbackOrder).toBeLessThan(commitOrder);
+  });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["zero", 0],
+    ["negative", -100],
+    ["non-integer", 12.5],
+    ["unsafe integer", Number.MAX_SAFE_INTEGER + 1],
+    ["Infinity", Number.POSITIVE_INFINITY],
+  ])("skips the timeout statement for a %s budget", async (_label, budgetMs) => {
+    const fn = jest.fn<(c: PoolClient) => Promise<string>>().mockResolvedValue("ok");
+
+    const result = await runWithQueryBudget(
+      { budgetMs, totalSqlTimeMs: 0, route: "/api/v1/test", breached: false },
+      () => withTransaction(fn as unknown as (c: PoolClient) => Promise<string>),
+    );
+
+    expect(result).toBe("ok");
+    expect(fn).toHaveBeenCalledWith(mockClient);
+    expect(mockQueryFn.mock.calls).toEqual([["BEGIN"], ["COMMIT"]]);
+    expect(
+      mockQueryFn.mock.calls.some((c) => String(c[0]).includes("statement_timeout")),
+    ).toBe(false);
   });
 });

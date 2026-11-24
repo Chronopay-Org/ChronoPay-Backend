@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import { PgBookingIntentRepository } from "../pg-booking-intent-repository.js";
 import { ConflictError } from "../../../errors/AppError.js";
 
