@@ -309,6 +309,13 @@ describe("residency guard", () => {
     it("logs a warning only once when untrusted region headers are ignored", () => {
       const warnSpy = jest.spyOn(logger, "warn").mockImplementation(() => logger);
       const req = mockRequest({ headers: { "x-region": "eu-west-1" } });
+      const req = mockRequest({ headers: { "x-region": "eu-west-1" } });
+      expect(detectRequestRegion(req)).toBe("us-east-1");
+    });
+
+    it("logs a warning only once when untrusted region headers are ignored", () => {
+      const warnSpy = jest.spyOn(logger, "warn").mockImplementation(() => logger);
+      const req = mockRequest({ headers: { "x-region": "eu-west-1" } });
 
       expect(detectRequestRegion(req)).toBe("us-east-1");
       expect(detectRequestRegion(req)).toBe("us-east-1");
