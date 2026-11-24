@@ -403,3 +403,178 @@ describe("STELLAR_NETWORK_PASSPHRASE", () => {
     expect(load({ STELLAR_NETWORK_PASSPHRASE: "   " }).networkPassphrase).toBeUndefined();
   });
 });
+
+// ─── IDEMPOTENCY_REDIS_ENCRYPTION_* ──────────────────────────────────────────
+
+describe("IDEMPOTENCY_REDIS_ENCRYPTION_*", () => {
+  const KEY_A = Buffer.alloc(32, 1).toString("base64");
+  const KEY_B = Buffer.alloc(32, 2).toString("base64");
+  const KEY_C = Buffer.alloc(32, 3).toString("base64");
+
+  const ENABLED = {
+    IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED: "true",
+    IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID: "primary",
+    IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY: KEY_A,
+  };
+
+  it("is disabled with no keys by default", () => {
+    const cfg = load().idempotencyRedisEncryption;
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.activeKey).toBeNull();
+    expect(cfg.decryptionKeys).toEqual([]);
+    expect(cfg.algorithm).toBe("aes-256-gcm");
+  });
+
+  it("treats the empty values from .env.example as disabled", () => {
+    const cfg = load({
+      IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED: "false",
+      IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID: "",
+      IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY: "",
+      IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS: "",
+    }).idempotencyRedisEncryption;
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.decryptionKeys).toEqual([]);
+  });
+
+  it("enables encryption with a valid active key", () => {
+    const cfg = load(ENABLED).idempotencyRedisEncryption;
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.activeKey?.id).toBe("primary");
+    expect(cfg.activeKey?.value.equals(Buffer.alloc(32, 1))).toBe(true);
+    expect(cfg.decryptionKeys.map((k) => k.id)).toEqual(["primary"]);
+  });
+
+  it("accepts 1 as a truthy ENABLED value", () => {
+    const cfg = load({ ...ENABLED, IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED: "1" }).idempotencyRedisEncryption;
+    expect(cfg.enabled).toBe(true);
+  });
+
+  it("rejects an invalid ENABLED value", () => {
+    expectIssue(
+      { ...VALID, IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED: "maybe" },
+      "IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED must be one of",
+    );
+  });
+
+  it("fails fast when enabled without an active key", () => {
+    expectIssue(
+      { ...VALID, IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED: "true", IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID: "primary" },
+      "IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY is required when IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED is true",
+    );
+  });
+
+  it("fails fast when enabled without an active key id", () => {
+    expectIssue(
+      { ...VALID, IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED: "true", IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY: KEY_A },
+      "IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID is required when IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED is true",
+    );
+  });
+
+  it("rejects an active key that is not 32 bytes", () => {
+    const short = Buffer.alloc(16, 1).toString("base64");
+    expectIssue(
+      { ...VALID, ...ENABLED, IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY: short },
+      "must decode to exactly 32 bytes (got 16)",
+    );
+  });
+
+  it("rejects an active key that is not valid base64", () => {
+    expectIssue(
+      { ...VALID, ...ENABLED, IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY: "not base64 !!!" },
+      "IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY must be valid base64",
+    );
+  });
+
+  it("never includes key material in validation errors", () => {
+    const short = Buffer.alloc(16, 9).toString("base64");
+    try {
+      loadEnvConfig({ ...VALID, ...ENABLED, IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY: short });
+      throw new Error("Expected EnvValidationError to be thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(EnvValidationError);
+      expect((err as EnvValidationError).message).not.toContain(short);
+    }
+  });
+
+  it("parses previous keys as id:base64 pairs and keeps the active key decryptable", () => {
+    const cfg = load({
+      ...ENABLED,
+      IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS: ` old-1:${KEY_B} , old-2:${KEY_C} `,
+    }).idempotencyRedisEncryption;
+
+    expect(cfg.decryptionKeys.map((k) => k.id)).toEqual(["primary", "old-1", "old-2"]);
+    expect(cfg.decryptionKeys[1].value.equals(Buffer.alloc(32, 2))).toBe(true);
+    expect(cfg.decryptionKeys[2].value.equals(Buffer.alloc(32, 3))).toBe(true);
+  });
+
+  it("rejects duplicate ids among previous keys", () => {
+    expectIssue(
+      { ...VALID, ...ENABLED, IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS: `old:${KEY_B},old:${KEY_C}` },
+      "duplicate key id 'old'",
+    );
+  });
+
+  it("rejects a previous key that reuses the active key id", () => {
+    expectIssue(
+      { ...VALID, ...ENABLED, IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS: `primary:${KEY_B}` },
+      "duplicate key id 'primary'",
+    );
+  });
+
+  it("rejects previous key entries without the id:key format", () => {
+    expectIssue(
+      { ...VALID, ...ENABLED, IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS: KEY_B },
+      "entries must use the format key-id:base64-key",
+    );
+    expectIssue(
+      { ...VALID, ...ENABLED, IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS: `:${KEY_B}` },
+      "entries must use the format key-id:base64-key",
+    );
+  });
+
+  it("rejects a previous key that is not 32 bytes", () => {
+    const short = Buffer.alloc(8, 1).toString("base64");
+    expectIssue(
+      { ...VALID, ...ENABLED, IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS: `old:${short}` },
+      "key 'old' must decode to exactly 32 bytes (got 8)",
+    );
+  });
+
+  it("keeps keys for decryption while disabled so existing envelopes stay readable", () => {
+    const cfg = load({
+      IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED: "false",
+      IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID: "primary",
+      IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY: KEY_A,
+    }).idempotencyRedisEncryption;
+
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.activeKey).toBeNull();
+    expect(cfg.decryptionKeys.map((k) => k.id)).toEqual(["primary"]);
+  });
+
+  it("validates provided keys even while disabled", () => {
+    expectIssue(
+      {
+        ...VALID,
+        IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED: "false",
+        IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID: "primary",
+        IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY: Buffer.alloc(5).toString("base64"),
+      },
+      "must decode to exactly 32 bytes (got 5)",
+    );
+  });
+
+  it("reports every problem in a single EnvValidationError", () => {
+    try {
+      loadEnvConfig({
+        ...VALID,
+        IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED: "true",
+        IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS: "broken",
+      });
+      throw new Error("Expected EnvValidationError to be thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(EnvValidationError);
+      expect((err as EnvValidationError).issues.length).toBeGreaterThanOrEqual(3);
+    }
+  });
+});
