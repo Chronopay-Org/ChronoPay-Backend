@@ -83,6 +83,16 @@ export interface EnvConfig {
    * IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED is truthy.
    */
   idempotencyRedisEncryption: IdempotencyRedisEncryptionConfig;
+   * When true, honour `x-region` and `x-data-region` headers if the request
+   * also supplies a valid `x-edge-secret` matching `RESIDENCY_EDGE_SECRET`.
+   * Default: false (both headers are ignored).
+   */
+  residencyTrustRegionHeaders: boolean;
+  /**
+   * Shared secret expected in `x-edge-secret` when `RESIDENCY_TRUST_REGION_HEADERS`
+   * is enabled. Compared using constant-time equality.
+   */
+  residencyEdgeSecret?: string;
 }
 
 export class EnvValidationError extends Error {
@@ -181,6 +191,14 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     );
   }
 
+  const residencyTrustRegionHeaders = parseBoolean(
+    env.RESIDENCY_TRUST_REGION_HEADERS,
+    "RESIDENCY_TRUST_REGION_HEADERS",
+    false,
+    issues,
+  );
+  const residencyEdgeSecret = parseOptionalString(env.RESIDENCY_EDGE_SECRET);
+
   const idempotencyProcessingLockTtlSeconds = parseOptionalPositiveInteger(
     env.IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS,
     "IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS",
@@ -222,6 +240,8 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     metricsAuthToken,
     metricsPublic,
     idempotencyRedisEncryption,
+    residencyTrustRegionHeaders,
+    residencyEdgeSecret,
   };
 }
 

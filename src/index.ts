@@ -235,6 +235,35 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   logger.info("outbox-relay worker started");
 })();
 
+// ─── Outbox Compaction Worker ────────────────────────────────────────────────
+// Periodically deletes acknowledged outbox_events rows older than the
+// configured retention window. Set OUTBOX_COMPACTION_DISABLED=true to skip.
+(async () => {
+  if (process.env.OUTBOX_COMPACTION_DISABLED === "true") {
+    logger.info("outbox-compaction disabled via OUTBOX_COMPACTION_DISABLED");
+    return;
+  }
+
+  const { runOutboxCompactionWorker, SqlOutboxCompactionStore } = await import(
+    "./scheduler/outboxCompactionWorker.js"
+  );
+  const { getPool } = await import("./db/connection.js");
+
+  if (lifecycle.isShuttingDown) return;
+  const pool = getPool();
+  const store = new SqlOutboxCompactionStore(pool);
+
+  const controller = new AbortController();
+  const worker = runOutboxCompactionWorker(controller.signal, store).catch((err: Error) => {
+    logger.error({ err }, "outbox compaction worker exited unexpectedly");
+  });
+  lifecycle.registerStop("outbox-compaction", async () => {
+    controller.abort();
+    await worker;
+  });
+  logger.info("outbox-compaction worker started");
+})();
+
 // ─── Hold Auto-Refund Worker (#1414) ─────────────────────────────────────────
 // Polls for refundable holds whose holdUntilMs has elapsed and issues automatic
 // refunds. Set HOLD_AUTO_REFUND_DISABLED=true to skip (e.g. for read-only
