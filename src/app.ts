@@ -66,6 +66,7 @@ import subscriptionRouter from "./routes/subscriptions.js";
 import { requireAdminToken } from "./middleware/authorization.js";
 import { listReputationEvents } from "./services/reputationWriteAudit.js";
 import slotsRouter from "./routes/slots.js";
+import graphqlRouter from "./routes/graphql.js";
 import {
   listReputationSnapshots,
   runSnapshotJob,
@@ -536,6 +537,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   app.use("/api/v1/booking-intents", createBookingIntentsRouter());
   app.use("/api/v1/checkout", checkoutRouter);
   app.use("/api/v1/discount-curves", discountCurvesRouter);
+  app.use("/api/v1/graphql", graphqlRouter);
   // 6. Notification Routes (SMS)
   // The router enforces its own authentication (requireAuthenticatedActor),
   // feature flag, rate limiting and validation — never bypass it with an
