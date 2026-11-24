@@ -248,11 +248,11 @@
 
   "src/middleware/errorHandler.ts": [
     "src/__tests__/unified-error-envelope.test.ts",
-    "src/__tests__/app.test.ts"
-  ],
-
-  "src/middleware/errorHandling.ts": [
-    "src/__tests__/unified-error-envelope.test.ts"
+    "src/__tests__/app.test.ts",
+    "src/__tests__/request-id.test.ts",
+    "src/middleware/__tests__/errorHandler.test.ts",
+    "src/middleware/__tests__/errorHandling.test.ts",
+    "src/middleware/__tests__/payloadLimit.test.ts"
   ],
 
   "src/middleware/cors.ts": [

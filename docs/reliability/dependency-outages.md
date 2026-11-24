@@ -51,7 +51,7 @@ Previously passed through (`next()`) when Redis was unavailable. Now **fails clo
 
 Rationale: without Redis, idempotency guarantees cannot be upheld. Allowing the request through would risk duplicate processing of financial operations.
 
-### `src/middleware/errorHandling.ts` (updated)
+### `src/middleware/errorHandler.ts` (updated)
 
 `genericErrorHandler` now emits the consistent `{ success, code, error }` envelope for **any** `AppError`-shaped error (i.e., any `Error` with `statusCode` and `code` properties). Previously only `415`/`406` errors were handled this way.
 
