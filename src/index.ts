@@ -382,6 +382,27 @@ if (process.env.REFUNDABLE_HOLD_SWEEPER_DISABLED === "true") {
 
   if (lifecycle.isShuttingDown) return;
   startTzDriftMonitor(lifecycle, slotRepository);
+// ─── Escrow Event Listener ───────────────────────────────────────────────────
+// Polls escrow contract events and projects them onto local booking state with
+// Redis-backed cursor and idempotency stores. Starts only when
+// ESCROW_LISTENER_ENABLED=true and ESCROW_CONTRACT_ADDRESSES is non-empty.
+(async () => {
+  if (process.env.ESCROW_LISTENER_ENABLED !== "true") {
+    logger.info("escrow-listener disabled (set ESCROW_LISTENER_ENABLED=true to enable)");
+    return;
+  }
+
+  const { startEscrowListener } = await import("./scheduler/escrowListenerBootstrap.js");
+  if (lifecycle.isShuttingDown) return;
+
+  const listener = startEscrowListener({
+    env: process.env,
+    shouldStop: () => lifecycle.isShuttingDown,
+  });
+  if (!listener) return;
+
+  lifecycle.registerStop("escrow-listener", () => listener.stop());
+  logger.info({ instanceId: listener.instanceId }, "escrow-listener started");
 })();
 
 const PORT = config.port || 3001;
