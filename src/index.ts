@@ -434,6 +434,56 @@ if (process.env.REFUNDABLE_HOLD_SWEEPER_DISABLED === "true") {
   logger.info({ instanceId: listener.instanceId }, "escrow-listener started");
 })();
 
+// ─── Treasury Balance Poller ─────────────────────────────────────────────────
+// Polls configured Stellar treasury accounts on Horizon and updates
+// treasury_balance_stroops, treasury_drain_severity, treasury_poll_failures_total,
+// and treasury_unknown_asset_total metrics. Starts only when TREASURY_ACCOUNTS
+// is configured.
+(async () => {
+  if (config.treasuryAccounts.length === 0) {
+    logger.info("treasury-balance-poller skipped: no TREASURY_ACCOUNTS configured");
+    return;
+  }
+
+  const horizonUrls =
+    config.horizonUrls && config.horizonUrls.length > 0
+      ? config.horizonUrls
+      : ["https://horizon.stellar.org"];
+
+  const { HorizonHostManager } = await import("./clients/horizon-host-manager.js");
+  const { createHorizonBalanceProvider } = await import(
+    "./services/horizonBalanceProvider.js"
+  );
+  const { TreasuryBalancePoller } = await import("./services/treasuryBalancePoller.js");
+
+  if (lifecycle.isShuttingDown) return;
+
+  const hostManager = new HorizonHostManager(horizonUrls);
+  const provider = createHorizonBalanceProvider(config.treasuryAccounts, hostManager);
+  const knownAssets =
+    config.treasuryFloors.length > 0
+      ? new Set(config.treasuryFloors.map((t) => t.asset))
+      : new Set(["XLM", "USDC"]);
+
+  const poller = new TreasuryBalancePoller(provider, {
+    pollIntervalMs: config.treasuryPollIntervalMs,
+    maxStalenessMs: config.treasuryMaxStalenessMs,
+    thresholds: [...config.treasuryFloors],
+    knownAssets,
+  });
+
+  lifecycle.registerStop("treasury-balance-poller", () => poller.stop());
+  poller.start();
+  logger.info(
+    {
+      accounts: config.treasuryAccounts.length,
+      pollIntervalMs: config.treasuryPollIntervalMs,
+      maxStalenessMs: config.treasuryMaxStalenessMs,
+    },
+    "treasury-balance-poller started",
+  );
+})();
+
 const PORT = config.port || 3001;
 
 /**

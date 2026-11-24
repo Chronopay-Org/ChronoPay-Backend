@@ -22,6 +22,12 @@ export type IdempotencyRedisEncryptionConfig =
       decryptionKeys: readonly EncryptionKey[];
     };
 
+export interface TreasuryFloorConfig {
+  asset: string;
+  floor: number;
+  hysteresis?: number;
+}
+
 export interface EnvConfig {
   nodeEnv: NodeEnv;
   port: number;
@@ -93,6 +99,14 @@ export interface EnvConfig {
    * is enabled. Compared using constant-time equality.
    */
   residencyEdgeSecret?: string;
+  /** Comma-separated Stellar treasury account IDs to poll on Horizon. */
+  treasuryAccounts: readonly string[];
+  /** Per-asset floor thresholds parsed from TREASURY_FLOORS_JSON. */
+  treasuryFloors: readonly TreasuryFloorConfig[];
+  /** Polling interval (ms) for the treasury balance poller. Default 30 000. */
+  treasuryPollIntervalMs: number;
+  /** Max age (ms) before treasury balance readings are considered stale. Default 120 000. */
+  treasuryMaxStalenessMs: number;
 }
 
 export class EnvValidationError extends Error {
@@ -207,6 +221,21 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
 
   const idempotencyRedisEncryption = parseIdempotencyRedisEncryption(env, issues);
 
+  const treasuryAccounts = parseStringList(env.TREASURY_ACCOUNTS);
+  const treasuryFloors = parseTreasuryFloorsJson(env.TREASURY_FLOORS_JSON, issues);
+  const treasuryPollIntervalMs = parsePositiveInteger(
+    env.TREASURY_POLL_INTERVAL_MS,
+    "TREASURY_POLL_INTERVAL_MS",
+    30_000,
+    issues,
+  );
+  const treasuryMaxStalenessMs = parsePositiveInteger(
+    env.TREASURY_MAX_STALENESS_MS,
+    "TREASURY_MAX_STALENESS_MS",
+    120_000,
+    issues,
+  );
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -242,6 +271,10 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     idempotencyRedisEncryption,
     residencyTrustRegionHeaders,
     residencyEdgeSecret,
+    treasuryAccounts,
+    treasuryFloors,
+    treasuryPollIntervalMs,
+    treasuryMaxStalenessMs,
   };
 }
 
@@ -563,4 +596,96 @@ function _parseFloat01(rawValue: string | undefined, key: string, defaultValue: 
     return defaultValue;
   }
   return parsed;
+}
+
+function parseTreasuryFloorsJson(
+  rawValue: string | undefined,
+  issues: string[],
+): TreasuryFloorConfig[] {
+  if (rawValue === undefined) return [];
+  const trimmed = rawValue.trim();
+  if (trimmed.length === 0) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "invalid JSON";
+    issues.push(`TREASURY_FLOORS_JSON must be valid JSON (${detail}).`);
+    return [];
+  }
+
+  const results: TreasuryFloorConfig[] = [];
+
+  if (Array.isArray(parsed)) {
+    for (let i = 0; i < parsed.length; i++) {
+      const item = parsed[i];
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        issues.push(`TREASURY_FLOORS_JSON[${i}] must be an object with 'asset' and 'floor'.`);
+        continue;
+      }
+      const record = item as Record<string, unknown>;
+      const asset = typeof record.asset === "string" ? record.asset.trim() : "";
+      if (asset.length === 0) {
+        issues.push(`TREASURY_FLOORS_JSON[${i}].asset must be a non-empty string.`);
+        continue;
+      }
+      const floor = record.floor;
+      if (typeof floor !== "number" || !Number.isFinite(floor) || floor < 0) {
+        issues.push(`TREASURY_FLOORS_JSON[${i}].floor must be a non-negative finite number.`);
+        continue;
+      }
+      const hysteresis = record.hysteresis;
+      if (hysteresis !== undefined) {
+        if (typeof hysteresis !== "number" || !Number.isFinite(hysteresis) || hysteresis < 0 || hysteresis > 1) {
+          issues.push(`TREASURY_FLOORS_JSON[${i}].hysteresis must be a number between 0 and 1.`);
+          continue;
+        }
+      }
+      results.push(hysteresis !== undefined ? { asset, floor, hysteresis } : { asset, floor });
+    }
+    return results;
+  }
+
+  if (typeof parsed === "object" && parsed !== null) {
+    for (const [rawAsset, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const asset = rawAsset.trim();
+      if (asset.length === 0) {
+        issues.push("TREASURY_FLOORS_JSON contains an empty asset key.");
+        continue;
+      }
+      if (typeof value === "number") {
+        if (!Number.isFinite(value) || value < 0) {
+          issues.push(`TREASURY_FLOORS_JSON.${asset} must be a non-negative finite number.`);
+          continue;
+        }
+        results.push({ asset, floor: value });
+      } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+        const record = value as Record<string, unknown>;
+        const floor = record.floor;
+        if (typeof floor !== "number" || !Number.isFinite(floor) || floor < 0) {
+          issues.push(`TREASURY_FLOORS_JSON.${asset}.floor must be a non-negative finite number.`);
+          continue;
+        }
+        const hysteresis = record.hysteresis;
+        if (hysteresis !== undefined) {
+          if (typeof hysteresis !== "number" || !Number.isFinite(hysteresis) || hysteresis < 0 || hysteresis > 1) {
+            issues.push(`TREASURY_FLOORS_JSON.${asset}.hysteresis must be a number between 0 and 1.`);
+            continue;
+          }
+        }
+        results.push(hysteresis !== undefined ? { asset, floor, hysteresis } : { asset, floor });
+      } else {
+        issues.push(
+          `TREASURY_FLOORS_JSON.${asset} must be a non-negative number or an object with 'floor'.`,
+        );
+      }
+    }
+    return results;
+  }
+
+  issues.push(
+    "TREASURY_FLOORS_JSON must be a JSON array of { asset, floor, hysteresis? } or an object mapping asset to floor.",
+  );
+  return [];
 }
