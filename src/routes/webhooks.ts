@@ -5,6 +5,7 @@ import { requireAdminToken } from "../middleware/authorization.js";
 import { _settlements } from "../services/settlementReconciler.js";
 import { WebhookIdempotencyStore } from "../services/webhookIdempotencyStore.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
+import { logger } from "../utils/logger.js";
 import {
   KycProvider,
   KycWebhookPayload,
@@ -221,8 +222,7 @@ export default router;
  * transition and never re-grants reputation bootstrap (see
  * KycService.processWebhook).
  */
-const handleKycWebhook = async (req: Request, res: Response, kycProvider?: KycProvider) => {
-  const provider = kycProvider ?? new MockKycProvider();
+const handleKycWebhook = async (req: Request, res: Response, provider: KycProvider) => {
 
   let payload: KycWebhookPayload;
   try {
@@ -262,6 +262,21 @@ const handleKycWebhook = async (req: Request, res: Response, kycProvider?: KycPr
 };
 
 export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions = {}) {
+  const isProduction = process.env.NODE_ENV === "production";
+  const allowMockKyc = process.env.ALLOW_MOCK_KYC === "true";
+
+  if (isProduction && !options.kycProvider && !allowMockKyc) {
+    throw new Error(
+      "KYC webhook provider must be configured in production (pass options.kycProvider or set ALLOW_MOCK_KYC=true for staging).",
+    );
+  }
+
+  const kycProvider = options.kycProvider ?? new MockKycProvider();
+  logger.info(
+    { provider: kycProvider.name },
+    `KYC webhook provider registered: ${kycProvider.name}`,
+  );
+
   const settlementSecrets = {
     get current() {
       return options.signingSecret ?? process.env.SETTLEMENTS_WEBHOOK_SECRET;
@@ -293,7 +308,7 @@ export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions
     internalHmacAuth(kycSecrets),
     validateRequiredFields(["supplierId", "kycRef", "status"]),
     (req: Request, res: Response, next: NextFunction) =>
-      handleKycWebhook(req, res, options.kycProvider).catch(next),
+      handleKycWebhook(req, res, kycProvider).catch(next),
   );
 }
 

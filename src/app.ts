@@ -84,6 +84,7 @@ export interface AppFactoryOptions {
   dbPool?: Pick<Pool, "query"> | null;
   redisClient?: RedisClient | null;
   horizonContractService?: ContractService;
+  kycProvider?: import("./services/kycProvider.js").KycProvider;
 }
 
 let cachedSwaggerSpec: unknown | null = null;
@@ -529,7 +530,7 @@ export function createApp(options: AppFactoryOptions = {}) {
   // registerWebhookRoutes() is the single registration path for provider
   // webhooks (HMAC-verified). The default router mounted below only carries
   // the admin-token-protected idempotency endpoints (#1307).
-  registerWebhookRoutes(app);
+  registerWebhookRoutes(app, { kycProvider: options.kycProvider });
   app.use("/api/v1", webhookRoutes);
 
   // ── Booking intents routes ─────────────────────────────────────────────────
