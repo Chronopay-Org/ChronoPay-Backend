@@ -19,6 +19,7 @@
  *    observability.
  */
 
+import { type Pool } from "pg";
 import {
   outboxCompactionRowsDeleted,
   outboxCompactionSafetyBrakeTriggers,
@@ -27,6 +28,61 @@ import {
 import type { InMemoryOutboxStore, OutboxEvent } from "../services/outboxRelay.js";
 
 export { InMemoryOutboxStore } from "../services/outboxRelay.js";
+
+// ─── Store interface & SQL implementation ─────────────────────────────────────
+
+export interface OutboxCompactionStore {
+  /** Count acked rows older than the given retention window (in ms). */
+  countCandidates(retentionMs: number): Promise<number>;
+  /** Delete up to `batchSize` acked rows older than the given retention window (in ms). */
+  deleteBatch(retentionMs: number, batchSize: number): Promise<number>;
+}
+
+/**
+ * Production SQL-backed outbox compaction store.
+ *
+ * Deletes acknowledged rows older than the configured retention window in
+ * bounded batches while never touching un-acked rows (`acked_at IS NULL`).
+ */
+export class SqlOutboxCompactionStore implements OutboxCompactionStore {
+  constructor(private readonly pool: Pick<Pool, "query">) {}
+
+  async countCandidates(retentionMs: number): Promise<number> {
+    const result = await this.pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+       FROM outbox_events
+       WHERE acked_at IS NOT NULL
+         AND acked_at < NOW() - ($1 * INTERVAL '1 millisecond')`,
+      [retentionMs],
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  async deleteBatch(retentionMs: number, batchSize: number): Promise<number> {
+    const result = await this.pool.query(
+      `DELETE FROM outbox_events
+       WHERE id IN (
+         SELECT id
+         FROM outbox_events
+         WHERE acked_at IS NOT NULL
+           AND acked_at < NOW() - ($1 * INTERVAL '1 millisecond')
+         ORDER BY acked_at ASC
+         LIMIT $2
+       )`,
+      [retentionMs, batchSize],
+    );
+    return result.rowCount ?? 0;
+  }
+}
+
+function isAsyncCompactionStore(
+  store: Pick<InMemoryOutboxStore, "list" | "delete"> | OutboxCompactionStore,
+): store is OutboxCompactionStore {
+  return (
+    typeof (store as OutboxCompactionStore).countCandidates === "function" &&
+    typeof (store as OutboxCompactionStore).deleteBatch === "function"
+  );
+}
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
 
@@ -103,11 +159,39 @@ export interface OutboxCompactionResult {
 
 // ─── Core compaction logic ────────────────────────────────────────────────────
 
+async function compactOutboxOnceAsync(
+  store: OutboxCompactionStore,
+  config: OutboxCompactionConfig = {},
+): Promise<OutboxCompactionResult> {
+  const cfg = resolveConfig(config);
+  const candidateCount = await store.countCandidates(cfg.retentionMs);
+
+  if (candidateCount > cfg.safetyThreshold) {
+    outboxCompactionSafetyBrakeTriggers.inc();
+    return { deleted: 0, skippedBecauseThreshold: true };
+  }
+
+  const sweepStart = Date.now();
+  const deleted =
+    candidateCount === 0
+      ? 0
+      : await store.deleteBatch(cfg.retentionMs, cfg.batchSize);
+
+  const elapsed = Date.now() - sweepStart;
+  outboxCompactionDurationMs.observe(elapsed);
+
+  if (deleted > 0) {
+    outboxCompactionRowsDeleted.inc(deleted);
+  }
+
+  return { deleted };
+}
+
 /**
- * Perform a single compaction sweep synchronously against the provided store.
+ * Perform a single compaction sweep against the provided store.
  *
  * Candidates are rows where:
- *   acked_at IS NOT NULL  AND  acked_at <= (nowMs - retentionMs)
+ *   acked_at IS NOT NULL  AND  acked_at < (nowMs - retentionMs)
  *
  * @param store   The outbox row store to compact.
  * @param config  Optional configuration overrides.
@@ -115,9 +199,23 @@ export interface OutboxCompactionResult {
  */
 export function compactOutboxOnce(
   store: Pick<InMemoryOutboxStore, "list" | "delete">,
+  config?: OutboxCompactionConfig,
+  nowMs?: number,
+): OutboxCompactionResult;
+export function compactOutboxOnce(
+  store: OutboxCompactionStore,
+  config?: OutboxCompactionConfig,
+  nowMs?: number,
+): Promise<OutboxCompactionResult>;
+export function compactOutboxOnce(
+  store: Pick<InMemoryOutboxStore, "list" | "delete"> | OutboxCompactionStore,
   config: OutboxCompactionConfig = {},
   nowMs: number = Date.now(),
-): OutboxCompactionResult {
+): OutboxCompactionResult | Promise<OutboxCompactionResult> {
+  if (isAsyncCompactionStore(store)) {
+    return compactOutboxOnceAsync(store, config);
+  }
+
   const cfg = resolveConfig(config);
   const cutoff = nowMs - cfg.retentionMs;
 
@@ -175,13 +273,17 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
  */
 export async function runOutboxCompactionWorker(
   signal: AbortSignal,
-  store: Pick<InMemoryOutboxStore, "list" | "delete">,
+  store: Pick<InMemoryOutboxStore, "list" | "delete"> | OutboxCompactionStore,
   config: OutboxCompactionConfig = {},
 ): Promise<void> {
   const cfg = resolveConfig(config);
 
   while (!signal.aborted) {
-    compactOutboxOnce(store, config);
+    if (isAsyncCompactionStore(store)) {
+      await compactOutboxOnce(store, config);
+    } else {
+      compactOutboxOnce(store, config);
+    }
     if (signal.aborted) break;
     await sleep(cfg.intervalMs, signal);
   }
