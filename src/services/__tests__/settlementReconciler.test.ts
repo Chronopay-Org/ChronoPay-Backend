@@ -9,6 +9,7 @@ import { settlementsPendingFinality } from "../../metrics.js";
 import { payoutRetryRollup } from "../../scheduler/payoutRetryMetrics.js";
 import { providerRetryRegistry } from "../../scheduler/payoutRetryPolicy.js";
 import type { ChainFinalityStatus } from "../../clients/horizon-contract-client.js";
+import { resetPayoutQuarantineState } from "../quarantineStore.js";
 
 interface ProbeMock {
   getLatestLedgerSequence: jest.Mock<() => Promise<number>>;
@@ -35,6 +36,7 @@ describe("SettlementReconciler Worker & Service", () => {
     jest.clearAllMocks();
     payoutRetryRollup.reset();
     providerRetryRegistry.clear();
+    resetPayoutQuarantineState();
 
     mockHorizonClient = makeProbeMock();
 

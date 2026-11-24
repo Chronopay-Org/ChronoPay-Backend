@@ -202,7 +202,7 @@ Applied at the route level. Never imported inside services or repositories.
 | `apiKeyAuth.ts` | Validates `x-api-key` header |
 | `validation.ts` | `validateRequiredFields()` — checks body/query/params fields are present |
 | `checkout-validation.ts` | Checkout-specific schema validation |
-| `errorHandling.ts` | `notFoundHandler`, `jsonParseErrorHandler`, `genericErrorHandler` |
+| `errorHandler.ts` | `notFoundHandler`, `jsonParseErrorHandler`, `genericErrorHandler` |
 | `rateLimiter.ts` | Request rate limiting |
 | `requestLogger.ts` | Structured request/response logging via pino |
 | `audit.ts` | Audit trail middleware |

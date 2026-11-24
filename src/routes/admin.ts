@@ -130,34 +130,38 @@ router.use(adminPaymentReversalsRouter);
 router.get(
   "/payouts/quarantine",
   requireAuthenticatedActor(["admin"]),
-  (_req: Request, res: Response) => {
-    const service = getPayoutQuarantineService();
-    const entries = service.list();
-    return res.json({
-      success: true,
-      entries,
-    });
+  async (_req: Request, res: Response, next) => {
+    try {
+      const entries = await getPayoutQuarantineService().list();
+      return res.json({ success: true, entries });
+    } catch (error) {
+      return next(error);
+    }
   }
 );
 
 router.post(
   "/payouts/:payoutId/quarantine/release",
   requireAuthenticatedActor(["admin"]),
-  (req: Request, res: Response) => {
-    const { payoutId } = req.params;
-    const { reason } = req.body ?? {};
-    const releasedBy = req.auth?.userId;
+  async (req: Request, res: Response, next) => {
+    try {
+      const { payoutId } = req.params;
+      const { reason } = req.body ?? {};
+      const releasedBy = req.auth?.userId;
+      const released = await getPayoutQuarantineService().release(payoutId, {
+        releasedBy,
+        reason,
+      });
+      if (!released) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Quarantined payout not found" });
+      }
 
-    const service = getPayoutQuarantineService();
-    const released = service.release(payoutId, { releasedBy, reason });
-    if (!released) {
-      return res.status(404).json({ success: false, error: "Quarantined payout not found" });
+      return res.json({ success: true, released: true });
+    } catch (error) {
+      return next(error);
     }
-
-    return res.json({
-      success: true,
-      released: true,
-    });
   }
 );
 
