@@ -42,6 +42,10 @@ function mapRow(row: Record<string, unknown>): MfaEnrollmentRow {
     last_used_counter: row.last_used_counter === null || row.last_used_counter === undefined
       ? null
       : Number(row.last_used_counter),
+    failed_attempts: Number(row.failed_attempts ?? 0),
+    locked_until: row.locked_until === null || row.locked_until === undefined
+      ? null
+      : new Date(String(row.locked_until)).toISOString(),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -64,9 +68,11 @@ export class PgMfaRepository implements MfaRepository {
           period,
           verified,
           last_used_counter,
+          failed_attempts,
+          locked_until,
           created_at,
           updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, NULL, NOW(), NOW())
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, NULL, 0, NULL, NOW(), NOW())
         ON CONFLICT (user_id)
         DO UPDATE SET
           secret_ciphertext = EXCLUDED.secret_ciphertext,
@@ -78,6 +84,8 @@ export class PgMfaRepository implements MfaRepository {
           period = EXCLUDED.period,
           verified = FALSE,
           last_used_counter = NULL,
+          failed_attempts = 0,
+          locked_until = NULL,
           updated_at = NOW()
         RETURNING *
       `,
@@ -133,6 +141,56 @@ export class PgMfaRepository implements MfaRepository {
     }
 
     return { advanced: true, enrollment: mapRow(result.rows[0]) };
+  }
+
+  async recordFailedAttempt(
+    userId: string,
+    threshold: number,
+    lockedUntil: Date,
+  ): Promise<{ failedAttempts: number; lockedUntil: string | null } | null> {
+    const result = await this.dbQuery(
+      `
+        UPDATE mfa_enrollments
+        SET failed_attempts = failed_attempts + 1,
+            locked_until = CASE
+              WHEN failed_attempts + 1 >= $2 AND locked_until IS NULL THEN $3
+              ELSE locked_until
+            END,
+            updated_at = NOW()
+        WHERE user_id = $1
+        RETURNING failed_attempts, locked_until
+      `,
+      [userId, threshold, lockedUntil],
+    );
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      failedAttempts: Number(row.failed_attempts),
+      lockedUntil: row.locked_until ? new Date(String(row.locked_until)).toISOString() : null,
+    };
+  }
+
+  async clearExpiredLockout(userId: string, now: Date): Promise<boolean> {
+    const result = await this.dbQuery(
+      `
+        UPDATE mfa_enrollments
+        SET failed_attempts = 0, locked_until = NULL, updated_at = NOW()
+        WHERE user_id = $1 AND locked_until IS NOT NULL AND locked_until <= $2
+      `,
+      [userId, now],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async resetFailedAttempts(userId: string): Promise<void> {
+    await this.dbQuery(
+      `
+        UPDATE mfa_enrollments
+        SET failed_attempts = 0, locked_until = NULL, updated_at = NOW()
+        WHERE user_id = $1 AND (failed_attempts <> 0 OR locked_until IS NOT NULL)
+      `,
+      [userId],
+    );
   }
 
   async deleteByUserId(userId: string): Promise<boolean> {

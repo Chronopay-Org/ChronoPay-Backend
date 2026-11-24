@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { type SettlementFinalityProbe } from "../clients/horizon-contract-client.js";
 import { settlementsPendingFinality } from "../metrics.js";
+import { Counter } from "prom-client";
 import { getPayoutQuarantineService } from "./quarantineStore.js";
 import { logger } from "../utils/logger.js";
 import {
@@ -19,7 +20,7 @@ export interface Settlement {
   eventType: string;
   amount: number;
   timestamp: number;
-  status: "pending_finality" | "payout_ready" | "failed" | "reorg_flagged";
+  status: "pending_finality" | "payout_ready" | "finalized" | "failed" | "reorg_flagged";
   ledgerNumber?: number;
   confirmations: number;
   attempts: number;
@@ -81,12 +82,28 @@ export const _refundSettlements = new Map<string, RefundSettlementRecord>();
 export const settlementEvents = new EventEmitter();
 export const refundSettlementEvents = new EventEmitter();
 
+/**
+ * Counts reconcile ticks that were skipped because a previous reconcile run
+ * was still in flight.  Exposed so operators can alert on sustained overlap.
+ */
+export const settlementReconcileSkippedTicks = new Counter({
+  name: "settlement_reconcile_skipped_ticks_total",
+  help: "Number of SettlementReconciler ticks skipped because a previous reconcile was still running",
+});
+
 export class SettlementReconciler {
   private readonly horizonClient: SettlementFinalityProbe;
   private readonly minConfirmations: number;
   private isRunning: boolean = false;
   private intervalId: NodeJS.Timeout | null = null;
   private pollIntervalMs: number;
+  /**
+   * Guards against overlapping reconcile() runs.  A tick that fires while a
+   * previous run is still awaiting Horizon is skipped (and counted).
+   */
+  private inFlight: boolean = false;
+  /** Number of extra confirmations required before a payout_ready settlement is finalized. */
+  private readonly stabilityConfirmations: number;
 
   /**
    * Pluggable clock — overridable in tests so backoff assertions are
@@ -116,6 +133,12 @@ export class SettlementReconciler {
        * (or its id is not found in `providerRetryRegistry`).
        */
       defaultProviderRetryConfig?: ProviderRetryConfig;
+      /**
+       * Extra confirmations a `payout_ready` settlement must accumulate
+       * (beyond `minConfirmations`) before it is moved to the terminal
+       * `finalized` state.  Defaults to 3.
+       */
+      stabilityConfirmations?: number;
       /** @internal test-only clock override */
       _now?: () => number;
       /** @internal test-only random override */
@@ -125,6 +148,7 @@ export class SettlementReconciler {
     this.horizonClient = horizonClient;
     this.minConfirmations = options.minConfirmations ?? Number(process.env.MIN_LEDGER_CONFIRMATIONS || 3);
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
+    this.stabilityConfirmations = options.stabilityConfirmations ?? 3;
     this._now = options._now ?? (() => Date.now());
     this._random = options._random ?? Math.random;
 
@@ -170,7 +194,14 @@ export class SettlementReconciler {
     if (this.isRunning) return;
     this.isRunning = true;
     this.intervalId = setInterval(() => {
-      void this.reconcile();
+      if (this.inFlight) {
+        settlementReconcileSkippedTicks.inc();
+        return;
+      }
+      this.inFlight = true;
+      void this.reconcile().finally(() => {
+        this.inFlight = false;
+      });
     }, this.pollIntervalMs);
   }
 
@@ -190,7 +221,9 @@ export class SettlementReconciler {
    */
   async reconcile(): Promise<void> {
     const activeSettlements = Array.from(_settlements.values()).filter(
-      (s) => s.status === "pending_finality" || s.status === "payout_ready",
+      (s) =>
+        s.status === "pending_finality" ||
+        s.status === "payout_ready",
     );
 
     if (activeSettlements.length === 0) {
@@ -340,6 +373,20 @@ export class SettlementReconciler {
 
         settlement.ledgerNumber = status.ledger;
         settlement.confirmations = status.confirmations;
+
+        // ── Stability window for payout_ready ───────────────────────────
+        // Once a settlement has reached payout_ready, keep polling it for
+        // `stabilityConfirmations` more confirmations to detect reorgs, then
+        // move it to the terminal `finalized` state and stop polling.
+        if (settlement.status === "payout_ready") {
+          const finalizedThreshold =
+            this.minConfirmations + this.stabilityConfirmations;
+          if (settlement.confirmations >= finalizedThreshold) {
+            settlement.status = "finalized";
+            _settlements.set(settlement.transactionId, settlement);
+            continue;
+          }
+        }
 
         if (settlement.confirmations >= this.minConfirmations) {
           settlement.status = "payout_ready";
@@ -570,6 +617,11 @@ export interface StartSettlementReconcilerOptions {
   minConfirmations?: number;
   pollIntervalMs?: number;
   defaultProviderRetryConfig?: ProviderRetryConfig;
+  /**
+   * Extra confirmations required before a payout_ready settlement is
+   * finalized.  Defaults to 3.
+   */
+  stabilityConfirmations?: number;
   /** @internal test-only clock override */
   _now?: () => number;
   /** @internal test-only random override */

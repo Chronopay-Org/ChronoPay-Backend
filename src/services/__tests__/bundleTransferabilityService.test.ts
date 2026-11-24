@@ -369,7 +369,7 @@ describe("BookingIntentService integration with transferability", () => {
       expect(intent1.status).toBe("pending");
 
       // Release the slot so another can try
-      service.cancelIntent(intent1.id, customerActor);
+      await service.cancelIntent(intent1.id, customerActor);
 
       // Flip the flag in the repo
       const internalSlots = (service as any).slotRepository.slots as SlotRecord[];

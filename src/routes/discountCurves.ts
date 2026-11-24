@@ -1,149 +1,121 @@
-import { Router, Request, Response } from "express";
-import { requireRole } from "../middleware/rbac.js";
-import { validateBody } from "../middleware/validation.js";
-import {
-  CreateDiscountCurveSchema,
-  UpdateDiscountCurveSchema,
-} from "../validation/discountCurveSchema.js";
+import { Router, type Request, type Response } from "express";
+import { requireAuthenticatedActor } from "../middleware/auth.js";
 import {
   createDiscountCurve,
-  getDiscountCurve,
-  listDiscountCurves,
-  updateDiscountCurve,
   deleteDiscountCurve,
   DiscountCurveNotFoundError,
   DiscountCurveValidationError,
+  getDiscountCurve,
+  listDiscountCurves,
+  updateDiscountCurve,
 } from "../services/discountCurveService.js";
 
 const router = Router();
+const authenticateSupplier = requireAuthenticatedActor(["supplier", "admin"]);
 
-/**
- * POST /api/v1/discount-curves
- * Create a new discount curve (supplier only)
- */
-router.post(
-  "/",
-  requireRole(["supplier", "admin"]),
-  validateBody(CreateDiscountCurveSchema),
-  async (req: Request, res: Response) => {
-    try {
-      const curve = createDiscountCurve(req.body);
-      res.status(201).json({
-        success: true,
-        discountCurve: curve,
-      });
-    } catch (error: any) {
-      if (error instanceof DiscountCurveValidationError) {
-        res.status(422).json({ success: false, error: error.message });
-      } else {
-        res.status(500).json({ success: false, error: "Internal server error" });
-      }
-    }
-  },
-);
+function canAccessCurve(
+  req: Request,
+  res: Response,
+  supplierId: string,
+): boolean {
+  if (req.auth?.role === "admin" || req.auth?.userId === supplierId) {
+    return true;
+  }
+  res.status(403).json({ success: false, error: "Access denied" });
+  return false;
+}
 
-/**
- * GET /api/v1/discount-curves
- * List discount curves with optional filtering
- */
-router.get(
-  "/",
-  requireRole(["supplier", "admin"]),
-  async (req: Request, res: Response) => {
-    try {
-      const { supplierId, bundleId, active } = req.query;
+function sendServiceError(
+  error: unknown,
+  res: Response,
+  next: (error?: unknown) => void,
+): void {
+  if (error instanceof DiscountCurveNotFoundError) {
+    res.status(404).json({ success: false, error: error.message });
+  } else if (error instanceof DiscountCurveValidationError) {
+    res.status(422).json({ success: false, error: error.message });
+  } else {
+    next(error);
+  }
+}
 
-      const curves = listDiscountCurves({
-        supplierId: supplierId as string,
-        bundleId: bundleId as string,
-        active: active !== undefined ? active === "true" : undefined,
-      });
+router.post("/", authenticateSupplier, async (req, res, next) => {
+  try {
+    const body =
+      req.auth?.role === "admin"
+        ? req.body
+        : { ...req.body, supplierId: req.auth?.userId };
+    const discountCurve = await createDiscountCurve(body);
+    res.status(201).json({ success: true, discountCurve });
+  } catch (error) {
+    sendServiceError(error, res, next);
+  }
+});
 
-      res.json({
-        success: true,
-        discountCurves: curves,
-        total: curves.length,
-      });
-    } catch (_error: any) {
-      res.status(500).json({ success: false, error: "Internal server error" });
-    }
-  },
-);
+router.get("/", authenticateSupplier, async (req, res, next) => {
+  try {
+    const querySupplierId =
+      typeof req.query.supplierId === "string"
+        ? req.query.supplierId
+        : undefined;
+    const supplierId =
+      req.auth?.role === "admin" ? querySupplierId : req.auth?.userId;
+    const bundleId =
+      typeof req.query.bundleId === "string" ? req.query.bundleId : undefined;
+    const active =
+      typeof req.query.active === "string"
+        ? req.query.active === "true"
+        : undefined;
+    const discountCurves = await listDiscountCurves({
+      supplierId,
+      bundleId,
+      active,
+    });
+    res.json({
+      success: true,
+      discountCurves,
+      total: discountCurves.length,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
-/**
- * GET /api/v1/discount-curves/:id
- * Get a specific discount curve
- */
-router.get(
-  "/:id",
-  requireRole(["supplier", "admin"]),
-  async (req: Request, res: Response) => {
-    try {
-      const curve = getDiscountCurve(req.params.id);
-      res.json({
-        success: true,
-        discountCurve: curve,
-      });
-    } catch (error: any) {
-      if (error instanceof DiscountCurveNotFoundError) {
-        res.status(404).json({ success: false, error: error.message });
-      } else {
-        res.status(500).json({ success: false, error: "Internal server error" });
-      }
-    }
-  },
-);
+router.get("/:id", authenticateSupplier, async (req, res, next) => {
+  try {
+    const discountCurve = await getDiscountCurve(req.params.id);
+    if (!canAccessCurve(req, res, discountCurve.supplierId)) return;
+    res.json({ success: true, discountCurve });
+  } catch (error) {
+    sendServiceError(error, res, next);
+  }
+});
 
-/**
- * PATCH /api/v1/discount-curves/:id
- * Update an existing discount curve
- */
-router.patch(
-  "/:id",
-  requireRole(["supplier", "admin"]),
-  validateBody(UpdateDiscountCurveSchema),
-  async (req: Request, res: Response) => {
-    try {
-      const curve = updateDiscountCurve(req.params.id, req.body);
-      res.json({
-        success: true,
-        discountCurve: curve,
-      });
-    } catch (error: any) {
-      if (error instanceof DiscountCurveNotFoundError) {
-        res.status(404).json({ success: false, error: error.message });
-      } else if (error instanceof DiscountCurveValidationError) {
-        res.status(422).json({ success: false, error: error.message });
-      } else {
-        res.status(500).json({ success: false, error: "Internal server error" });
-      }
-    }
-  },
-);
+router.patch("/:id", authenticateSupplier, async (req, res, next) => {
+  try {
+    const existing = await getDiscountCurve(req.params.id);
+    if (!canAccessCurve(req, res, existing.supplierId)) return;
+    const body =
+      req.auth?.role === "admin"
+        ? req.body
+        : { ...req.body, supplierId: existing.supplierId };
+    const discountCurve = await updateDiscountCurve(req.params.id, body);
+    res.json({ success: true, discountCurve });
+  } catch (error) {
+    sendServiceError(error, res, next);
+  }
+});
 
-/**
- * DELETE /api/v1/discount-curves/:id
- * Delete a discount curve
- */
-router.delete(
-  "/:id",
-  requireRole(["supplier", "admin"]),
-  async (req: Request, res: Response) => {
-    try {
-      deleteDiscountCurve(req.params.id);
-      res.json({
-        success: true,
-        deleted: true,
-      });
-    } catch (error: any) {
-      if (error instanceof DiscountCurveNotFoundError) {
-        res.status(404).json({ success: false, error: error.message });
-      } else {
-        res.status(500).json({ success: false, error: "Internal server error" });
-      }
-    }
-  },
-);
+router.delete("/:id", authenticateSupplier, async (req, res, next) => {
+  try {
+    const existing = await getDiscountCurve(req.params.id);
+    if (!canAccessCurve(req, res, existing.supplierId)) return;
+    await deleteDiscountCurve(req.params.id);
+    res.json({ success: true, deleted: true });
+  } catch (error) {
+    sendServiceError(error, res, next);
+  }
+});
 
 export { router };
 export default router;

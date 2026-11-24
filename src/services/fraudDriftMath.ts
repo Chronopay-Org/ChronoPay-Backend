@@ -53,9 +53,24 @@ export const DEFAULT_THRESHOLDS: DriftThresholds = {
 
 export type DriftSeverity = "ok" | "warning" | "critical";
 
-export interface HistogramCounts {
-  [bin: string]: number;
-}
+/**
+ * Fixed-shape count vector: exactly one numeric entry per canonical score bin.
+ * Sharing this type between the metrics state and the math primitives makes a
+ * baseline/live bucket mismatch a compile-time error rather than a runtime
+ * surprise.
+ */
+export type HistogramCounts = {
+  [K in ScoreBin]: number;
+};
+
+/**
+ * Loose input shape accepted by canonicalisation helpers. Callers may pass a
+ * partial histogram (or legacy/unknown keys); {@link canonicalizeCounts}
+ * folds it onto the fixed {@link HistogramCounts} shape.
+ */
+export type HistogramInput = {
+  [bin: string]: number | undefined;
+};
 
 export interface Distribution {
   /** Mass per bin keyed by bin identifier. Sums to 1 (within ULP error). */
@@ -80,7 +95,7 @@ export function scoreToBin(score: number): ScoreBin {
 
 /** Empty counts object keyed by every canonical bin. */
 export function emptyHistogram(): HistogramCounts {
-  const out: HistogramCounts = {};
+  const out = {} as HistogramCounts;
   for (const b of SCORE_BINS) out[b] = 0;
   return out;
 }
@@ -89,10 +104,10 @@ export function emptyHistogram(): HistogramCounts {
  * Aggregate any count map into the canonical bin set, clamping unknown keys
  * into the "9+" overflow bin. Non-finite or negative counts are dropped.
  */
-export function canonicalizeCounts(raw: HistogramCounts): HistogramCounts {
+export function canonicalizeCounts(raw: HistogramInput): HistogramCounts {
   const out = emptyHistogram();
   for (const [k, v] of Object.entries(raw)) {
-    if (!Number.isFinite(v) || v <= 0) continue;
+    if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) continue;
     const bin = SCORE_BINS.includes(k as ScoreBin) ? (k as ScoreBin) : "9+";
     out[bin] += v;
   }
@@ -103,7 +118,7 @@ export function canonicalizeCounts(raw: HistogramCounts): HistogramCounts {
  * Return the sorted union of bin keys across the two histograms; used by
  * downstream callers that want a stable iteration order for diffs/logs.
  */
-export function alignmentKeys(a: HistogramCounts, b: HistogramCounts): string[] {
+export function alignmentKeys(a: HistogramInput, b: HistogramInput): string[] {
   const set = new Set<string>([...Object.keys(a), ...Object.keys(b)]);
   return Array.from(set).sort();
 }
@@ -117,7 +132,7 @@ export function alignmentKeys(a: HistogramCounts, b: HistogramCounts): string[] 
  * callers can distinguish "empty" from "degenerate".
  */
 export function normalizeToDistribution(
-  counts: HistogramCounts,
+  counts: HistogramInput,
   epsilon: number = DEFAULT_EPSILON,
 ): Distribution | null {
   if (!Number.isFinite(epsilon) || epsilon < 0) return null;

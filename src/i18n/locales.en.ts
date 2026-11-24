@@ -44,6 +44,7 @@ export const EN_MESSAGES = {
     resource: {
       not_found: "Resource not found",
       conflict: "Conflict",
+      hold_expired: "Hold has expired",
       unprocessable_entity: "Unprocessable entity",
     },
     bundle: {

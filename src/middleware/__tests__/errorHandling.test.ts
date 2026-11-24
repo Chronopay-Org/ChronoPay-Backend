@@ -180,6 +180,49 @@ describe("errorHandling middleware", () => {
       });
     });
 
+    it("responds 413 PAYLOAD_TOO_LARGE for entity.too.large", () => {
+      const err = Object.assign(new Error("too large"), {
+        type: "entity.too.large",
+        status: 413,
+      });
+      const next = jest.fn() as unknown as NextFunction;
+      const json = jest.fn();
+      const status = jest.fn().mockReturnValue({ json });
+
+      jsonParseErrorHandler(err, {} as Request, { status } as unknown as Response, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(413);
+      expect(json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          code: "PAYLOAD_TOO_LARGE",
+          message: "Request body exceeds the maximum allowed size.",
+        }),
+      );
+    });
+
+    it.each(["charset.unsupported", "encoding.unsupported"])(
+      "responds 415 UNSUPPORTED_MEDIA_TYPE for %s",
+      (type) => {
+        const err = Object.assign(new Error("unsupported"), { type, status: 415 });
+        const next = jest.fn() as unknown as NextFunction;
+        const json = jest.fn();
+        const status = jest.fn().mockReturnValue({ json });
+
+        jsonParseErrorHandler(err, {} as Request, { status } as unknown as Response, next);
+
+        expect(next).not.toHaveBeenCalled();
+        expect(status).toHaveBeenCalledWith(415);
+        expect(json).toHaveBeenCalledWith(
+          expect.objectContaining({
+            success: false,
+            code: "UNSUPPORTED_MEDIA_TYPE",
+          }),
+        );
+      },
+    );
+
     it("propagates requestId when wrapping a parse error", () => {
       const err = Object.assign(new SyntaxError("bad json"), {
         type: "entity.parse.failed",

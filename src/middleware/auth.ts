@@ -5,12 +5,19 @@ import { defaultAuditLogger } from "../services/auditLogger.js";
 import { verifyJwt, type VerifiedJwtPayload } from "../utils/jwt.js";
 import { configService } from "../config/config.service.js";
 import {
+  getUserId,
+  readBearerToken,
+  verifyRequestJwt,
+  MissingBearerTokenError,
+} from "./jwtIdentity.js";
+import {
   auditRoleDenied,
   isKnownRole,
   roleSatisfies,
   type UserRole,
 } from "./rbac.js";
 
+export type ChronoPayRole = "customer" | "admin" | "professional" | "supplier";
 export type ChronoPayRole = UserRole;
 
 export interface AuthContext {
@@ -18,6 +25,8 @@ export interface AuthContext {
   role: ChronoPayRole;
   claims: VerifiedJwtPayload;
 }
+
+export { getUserId, readBearerToken };
 
 declare global {
   namespace Express {
@@ -41,21 +50,6 @@ export function parseJwtRole(value: unknown): ChronoPayRole {
   return parseRole(value) ?? "customer";
 }
 
-export function getUserId(claims: VerifiedJwtPayload): string {
-  const candidate = claims.sub ?? claims.id;
-  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate.trim() : "";
-}
-
-export function readBearerToken(req: Request): string | null {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return null;
-  }
-
-  const token = authHeader.slice("Bearer ".length).trim();
-  return token.length > 0 ? token : null;
-}
-
 export function requireAuth(expectedIssuer?: string) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -64,11 +58,16 @@ export function requireAuth(expectedIssuer?: string) {
         return res.status(401).json({ success: false, error: "Missing Authorization header" });
       }
 
-      const payload = await verifyJwt(token, { issuer: expectedIssuer ?? configService.jwtIssuer ?? undefined });
+      const payload = await verifyRequestJwt(req, expectedIssuer);
+      const userId = getUserId(payload);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: "Token subject missing" });
+      }
+
       // @ts-expect-error - Auto-fixed by script
       req.user = payload;
       req.auth = {
-        userId: getUserId(payload),
+        userId,
         role: parseJwtRole(payload.role),
         claims: payload,
       };
@@ -80,7 +79,7 @@ export function requireAuth(expectedIssuer?: string) {
   };
 }
 
-// Named export for the header-based auth used by booking-intents
+// Named export retained for booking-intents JWT authentication.
 export { requireAuthenticatedActor as authenticateToken };
 
 export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
@@ -91,31 +90,20 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
     }
   }
 
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const userId = req.headers["x-chronopay-user-id"] as string | undefined;
-      const roleHeader = req.headers["x-chronopay-role"] as string | undefined;
-
+      const claims = await verifyRequestJwt(req);
+      const userId = getUserId(claims);
       if (!userId) {
         return res.status(401).json({ success: false, error: "Authentication required." });
       }
 
-      if (!userId.trim()) {
-        return res.status(401).json({ success: false, error: "Authentication required." });
-      }
-
-      const role = parseRole(roleHeader);
-      if (!role) {
-        auditRoleDenied(req, roleHeader ? "RBAC_INVALID_ROLE" : "RBAC_MISSING", roleHeader ? 400 : 401);
-        return res
-          .status(roleHeader ? 400 : 401)
-          .json({ success: false, error: "Role is not authorized for this action." });
-      }
+      const role = parseJwtRole(claims.role);
 
       req.auth = {
-        userId: userId.trim(),
+        userId,
         role,
-        claims: {} as VerifiedJwtPayload,
+        claims,
       };
 
       if (!requiredRoles.some((requiredRole) => roleSatisfies(req.auth!.role, requiredRole))) {
@@ -127,8 +115,69 @@ export function requireAuthenticatedActor(allowedRoles: ChronoPayRole[]) {
       }
 
       next();
+    } catch (error) {
+      const message =
+        error instanceof MissingBearerTokenError
+          ? "Authentication required."
+          : "Invalid or expired token";
+      return res.status(401).json({ success: false, error: message });
+    }
+  };
+}
+
+/**
+ * Best-effort authentication for routes where authentication is OPTIONAL
+ * (e.g. POST /api/v1/checkout/sessions).
+ *
+ * When a `Bearer` token is present and verifies against the configured JWT
+ * secrets, `req.auth` is attached exactly like `requireAuth()`. Missing,
+ * malformed or invalid tokens fall through unauthenticated — this middleware
+ * never rejects a request.
+ *
+ * Mount it BEFORE middleware that derives per-caller state from `req.auth`
+ * (such as `idempotencyMiddleware`, which namespaces Idempotency-Key entries by
+ * the verified principal). Enforcing REQUIRED authentication remains the job
+ * of `requireAuth()`.
+ */
+export function optionalAuth(expectedIssuer?: string) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const token = readBearerToken(req);
+      if (!token) {
+        next();
+        return;
+      }
+
+  const normalized = rawRole.trim().toLowerCase();
+  if (
+    normalized === "customer" ||
+    normalized === "admin" ||
+    normalized === "professional" ||
+    normalized === "supplier"
+  ) {
+    return normalized;
+  }
+      const payload = await verifyJwt(token, {
+        issuer: expectedIssuer ?? configService.jwtIssuer ?? undefined,
+      });
+
+      const userId = getUserId(payload);
+      if (!userId) {
+        next();
+        return;
+      }
+
+      req.auth = {
+        userId,
+        role: parseJwtRole(payload.role),
+        claims: payload,
+      };
+
+      next();
     } catch {
-      return res.status(401).json({ success: false, error: "Invalid or expired token" });
+      // Invalid/expired token: treat as anonymous. Routes that REQUIRE auth
+      // must use requireAuth() instead.
+      next();
     }
   };
 }

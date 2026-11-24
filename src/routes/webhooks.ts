@@ -1,6 +1,7 @@
 import { Router, Express, Request, Response, NextFunction } from "express";
 import { validateRequiredFields } from "../middleware/validation.js";
 import { internalHmacAuth } from "../middleware/internalHmacAuth.js";
+import { requireAdminToken } from "../middleware/authorization.js";
 import { _settlements } from "../services/settlementReconciler.js";
 import { WebhookIdempotencyStore } from "../services/webhookIdempotencyStore.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
@@ -21,6 +22,11 @@ const allowedEventTypes = new Set([
 
 const CLOCK_SKEW_MS = 60 * 1000; // 1 minute
 
+const TRANSACTION_ID_MAX_LENGTH = 128;
+const TRANSACTION_ID_PATTERN = /^[A-Za-z0-9_\-:.]+$/;
+const TENANT_ID_MAX_LENGTH = 128;
+const TENANT_ID_PATTERN = /^[A-Za-z0-9_\-:.]+$/;
+
 export interface WebhookRouteOptions {
   signingSecret?: string;
   kycSigningSecret?: string;
@@ -28,9 +34,7 @@ export interface WebhookRouteOptions {
 }
 
 const handleSettlementWebhook = async (req: Request, res: Response) => {
-  const { eventType, amount, timestamp } = req.body;
-  const idempotencyKey = String(req.body.transactionId);
-  const tenantId = req.headers["x-tenant-id"] ? String(req.headers["x-tenant-id"]) : "default";
+  const { eventType, amount, timestamp, transactionId } = req.body;
 
   if (!allowedEventTypes.has(eventType)) {
     return res.status(400).json({
@@ -39,6 +43,36 @@ const handleSettlementWebhook = async (req: Request, res: Response) => {
         "Invalid eventType. Allowed values are settlement_completed, settlement_initiated, settlement_failed.",
     });
   }
+
+  if (
+    typeof transactionId !== "string" ||
+    transactionId.length < 1 ||
+    transactionId.length > TRANSACTION_ID_MAX_LENGTH ||
+    !TRANSACTION_ID_PATTERN.test(transactionId)
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: `Invalid transactionId. transactionId must be a string of 1-${TRANSACTION_ID_MAX_LENGTH} characters from [A-Za-z0-9_-:.].`,
+    });
+  }
+
+  const rawTenantHeader = req.headers["x-tenant-id"];
+  if (rawTenantHeader !== undefined) {
+    const tenantHeader = String(rawTenantHeader);
+    if (
+      tenantHeader.length < 1 ||
+      tenantHeader.length > TENANT_ID_MAX_LENGTH ||
+      !TENANT_ID_PATTERN.test(tenantHeader)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid x-tenant-id. Header must be 1-${TENANT_ID_MAX_LENGTH} characters from [A-Za-z0-9_-:.].`,
+      });
+    }
+  }
+
+  const idempotencyKey = transactionId;
+  const tenantId = rawTenantHeader !== undefined ? String(rawTenantHeader) : "default";
 
   if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json({
@@ -118,34 +152,40 @@ const handleSettlementWebhook = async (req: Request, res: Response) => {
 };
 
 const router = Router();
-router.post(
-  "/settlements",
-  validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
-  (req, res, next) => handleSettlementWebhook(req, res).catch(next),
+
+// NOTE: provider webhooks are intentionally NOT registered on this router.
+// POST /settlements used to live here as well, so mounting this default
+// router at /api/v1 exposed POST /api/v1/settlements with no HMAC check
+// (#1307). registerWebhookRoutes() below is the single registration path for
+// provider webhooks; this router only carries the admin-token-protected
+// idempotency endpoints.
+
+// Admin inspection endpoint — admin token required (#1307)
+router.get(
+  "/admin/idempotency/:tenantId/:idempotencyKey",
+  requireAdminToken,
+  async (req, res, next) => {
+    try {
+      const { tenantId, idempotencyKey } = req.params;
+      const result = await WebhookIdempotencyStore.inspect(tenantId, idempotencyKey);
+      if (!result) {
+        return res.status(404).json({ success: false, error: "Key not found" });
+      }
+      await defaultAuditLogger.log({
+        action: "webhook_idempotency.inspect",
+        status: "success",
+        resource: `idempotencyKey:${idempotencyKey}`,
+        metadata: { tenantId },
+      });
+      return res.json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
-// Admin inspection endpoint
-router.get("/admin/idempotency/:tenantId/:idempotencyKey", async (req, res, next) => {
-  try {
-    const { tenantId, idempotencyKey } = req.params;
-    const result = await WebhookIdempotencyStore.inspect(tenantId, idempotencyKey);
-    if (!result) {
-      return res.status(404).json({ success: false, error: "Key not found" });
-    }
-    await defaultAuditLogger.log({
-      action: "webhook_idempotency.inspect",
-      status: "success",
-      resource: `idempotencyKey:${idempotencyKey}`,
-      metadata: { tenantId },
-    });
-    return res.json({ success: true, data: result });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Admin sweep endpoint
-router.post("/admin/idempotency/sweep", async (req, res, next) => {
+// Admin sweep endpoint — admin token required (#1307)
+router.post("/admin/idempotency/sweep", requireAdminToken, async (req, res, next) => {
   try {
     const deletedCount = await WebhookIdempotencyStore.sweep();
     await defaultAuditLogger.log({
@@ -222,16 +262,35 @@ const handleKycWebhook = async (req: Request, res: Response, kycProvider?: KycPr
 };
 
 export function registerWebhookRoutes(app: Express, options: WebhookRouteOptions = {}) {
+  const settlementSecrets = {
+    get current() {
+      return options.signingSecret ?? process.env.SETTLEMENTS_WEBHOOK_SECRET;
+    },
+    get previous() {
+      return process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS;
+    },
+    secretName: "Settlement",
+  };
+  const kycSecrets = {
+    get current() {
+      return options.kycSigningSecret ?? process.env.KYC_WEBHOOK_SECRET;
+    },
+    get previous() {
+      return process.env.KYC_WEBHOOK_SECRET_PREVIOUS;
+    },
+    secretName: "KYC",
+  };
+
   app.post(
     "/api/v1/webhooks/settlements",
-    internalHmacAuth(options.signingSecret),
+    internalHmacAuth(settlementSecrets),
     validateRequiredFields(["eventType", "transactionId", "amount", "timestamp"]),
     (req, res, next) => handleSettlementWebhook(req, res).catch(next),
   );
 
   app.post(
     "/api/v1/webhooks/kyc",
-    internalHmacAuth(options.kycSigningSecret ?? process.env.KYC_WEBHOOK_SECRET),
+    internalHmacAuth(kycSecrets),
     validateRequiredFields(["supplierId", "kycRef", "status"]),
     (req: Request, res: Response, next: NextFunction) =>
       handleKycWebhook(req, res, options.kycProvider).catch(next),

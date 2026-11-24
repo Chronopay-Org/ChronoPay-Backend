@@ -1,12 +1,20 @@
-import express from "express";
+import express, { type Request } from "express";
 import request from "supertest";
 import { jest } from "@jest/globals";
 import { FraudScorer } from "../../services/fraudScorer.js";
-import { antiFraudScoring, captureRequestBody } from "../fraudScoring.js";
+import { antiFraudScoring, captureRequestBody, enqueueHitlReviewForIntent } from "../fraudScoring.js";
 import { getFraudDriftSnapshot, resetFraudDriftState } from "../../metrics/fraudDriftMetrics.js";
 import { fraudReviewQueue } from "../../services/fraudReviewQueue.js";
+import {
+  hashFraudChallengeBody,
+  InMemoryFraudChallengeStore,
+  type FraudChallengeStore,
+} from "../../services/fraudChallengeStore.js";
 import { QuarantineStore } from "../../services/quarantineStore.js";
 import type { AuditLogger } from "../../services/auditLogger.js";
+import { signJwt } from "../../utils/jwt.js";
+import { configService } from "../../config/config.service.js";
+import { flushMicrotasks } from "../../test-helpers/fakeMfaRepository.js";
 
 const DISPOSABLE = "customer@tempmail.com";
 
@@ -14,11 +22,19 @@ function buildApp(opts: {
   scorer: FraudScorer;
   auditLogger?: AuditLogger;
   quarantineStore?: QuarantineStore;
+  challengeStore?: FraudChallengeStore;
+  /** Actor the auth stub binds to the request (default "user-1"). */
+  userId?: string;
+  /**
+   * When set, the terminal handler mimics the route completing the HITL
+   * enqueue with a real intent id (see issue #1345).
+   */
+  hitlIntentId?: string;
 }) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).auth = { userId: "user-1", role: "customer", claims: {} };
+    (req as any).auth = { userId: opts.userId ?? "user-1", role: "customer", claims: {} };
     next();
   });
   app.post(
@@ -27,12 +43,18 @@ function buildApp(opts: {
       scorer: opts.scorer,
       auditLogger: opts.auditLogger,
       quarantineStore: opts.quarantineStore,
+      challengeStore: opts.challengeStore,
     }),
     (req, res) => {
+      const queued = opts.hitlIntentId
+        ? enqueueHitlReviewForIntent(req, opts.hitlIntentId)
+        : undefined;
       res.status(200).json({
         ok: true,
         score: (req as any).fraudResult?.score,
         reasons: (req as any).fraudResult?.reasons,
+        decision: (req as any).fraudDecision,
+        queuedIntentId: queued?.intentId ?? null,
       });
     },
   );
@@ -75,7 +97,13 @@ describe("antiFraudScoring middleware", () => {
       .send({ slotId: "slot-11111111-1111-4111-8111-111111111111" });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, score: 0, reasons: [] });
+    expect(res.body).toEqual({
+      ok: true,
+      score: 0,
+      reasons: [],
+      decision: "allowed",
+      queuedIntentId: null,
+    });
 
     const snapshot = getFraudDriftSnapshot();
     expect(snapshot.liveTotals["vdefault"]).toBe(1);
@@ -144,20 +172,19 @@ describe("antiFraudScoring middleware", () => {
     expect(entry.fraudResult.score).toBe(2);
   });
 
-  it("queues borderline scores (threshold - 1) for HITL review and still allows the intent", async () => {
+  it("marks borderline scores (threshold - 1) for review, still allows them, and defers the HITL enqueue to the route", async () => {
     const app = buildApp({ scorer: makeScorer() });
 
     const res = await request(app).post("/").send({ email: DISPOSABLE });
 
     expect(res.status).toBe(200);
     expect(res.body.score).toBe(1);
+    expect(res.body.decision).toBe("review");
 
-    const pending = fraudReviewQueue.getPendingItems();
-    expect(pending).toHaveLength(1);
-    expect(pending[0]).toMatchObject({
-      score: 1,
-      reasons: ["disposable_email"],
-    });
+    // Issue #1345: the middleware must NOT enqueue here — the intent does not
+    // exist yet, so any enqueue would store a placeholder reviewers cannot act
+    // on. The route completes it via enqueueHitlReviewForIntent(intent.id).
+    expect(fraudReviewQueue.getPendingItems()).toHaveLength(0);
   });
 
   it("enforces the exact score boundary: below threshold allowed, at threshold blocked", async () => {
@@ -480,8 +507,8 @@ describe("FraudScoringOptions (issue #1109)", () => {
     expect(codes).toContain("INVALID_CONTACT_INFO");
   });
 
-  it("enqueues borderline scores with the intent reference and never blocks them", async () => {
-    const app = buildApp({ scorer: makeScorer() });
+  it("enqueues the HITL item with the real intent id when the route completes it (issue #1345)", async () => {
+    const app = buildApp({ scorer: makeScorer(), hitlIntentId: "intent-real-42" });
 
     const res = await request(app).post("/").send({ slotId: "slot-hitl", email: DISPOSABLE });
     expect(res.status).toBe(200);
@@ -489,9 +516,11 @@ describe("FraudScoringOptions (issue #1109)", () => {
     const pending = fraudReviewQueue.getPendingItems();
     expect(pending.length).toBeGreaterThan(0);
     const item = pending[pending.length - 1];
-    expect(item.intentId).toBe("temp-intent-id");
+    expect(item.intentId).toBe("intent-real-42");
+    expect(item.intentId).not.toBe("temp-intent-id");
     expect(item.score).toBeGreaterThan(0);
     expect(Array.isArray(item.reasons)).toBe(true);
+    expect(res.body.queuedIntentId).toBe("intent-real-42");
   });
 
   it("rejects malformed scoring inputs deterministically (scorer throws -> fail closed)", async () => {
@@ -532,5 +561,234 @@ describe("FraudScoringOptions (issue #1109)", () => {
     expect(res.status).toBe(200);
     expect(res.body.score).toBe(0);
     expect(fraudReviewQueue.getPendingItems()).toHaveLength(0);
+  });
+});
+
+describe("enqueueHitlReviewForIntent (issue #1345)", () => {
+  const borderlineReq = {
+    fraudDecision: "review",
+    fraudResult: { score: 1, reasons: ["disposable_email"] },
+  } as any;
+
+  beforeEach(() => {
+    fraudReviewQueue._reset();
+  });
+
+  it("queues exactly one item keyed by the real intent id", () => {
+    const item = enqueueHitlReviewForIntent(borderlineReq, "intent-real-9");
+
+    expect(item).toMatchObject({
+      intentId: "intent-real-9",
+      score: 1,
+      reasons: ["disposable_email"],
+      status: "pending",
+    });
+    expect(fraudReviewQueue.getPendingItems()).toHaveLength(1);
+  });
+
+  it("is a no-op without a review decision, without a fraud result, or without an id", () => {
+    expect(enqueueHitlReviewForIntent({} as any, "i-1")).toBeUndefined();
+    expect(
+      enqueueHitlReviewForIntent({ fraudDecision: "allowed" } as any, "i-1"),
+    ).toBeUndefined();
+    expect(
+      enqueueHitlReviewForIntent({ fraudDecision: "review" } as any, "i-1"),
+    ).toBeUndefined();
+    expect(enqueueHitlReviewForIntent(borderlineReq, "")).toBeUndefined();
+    expect(fraudReviewQueue.getPendingItems()).toHaveLength(0);
+  });
+});
+
+describe("step-up challenge retry with x-fraud-challenge (issue #1345)", () => {
+  const MFA_SECRET = "fraud-step-up-mfa-secret-12345";
+  const ISSUER = "test-issuer";
+  const AUDIENCE = "test-audience";
+
+  async function mfaToken(sub: string): Promise<string> {
+    const iat = Math.floor(Date.now() / 1000);
+    return signJwt({ sub, iat, mfa_at: iat }, MFA_SECRET, {
+      expiresInSec: 3600,
+      issuer: ISSUER,
+      audience: AUDIENCE,
+    });
+  }
+
+  /** Drives the middleware to a challenge-mode block and returns the token. */
+  async function issueChallengeToken(app: ReturnType<typeof buildApp>): Promise<string> {
+    for (let i = 0; i < 5; i += 1) {
+      await request(app).post("/").send({ slotId: "slot-A" });
+    }
+    const blocked = await request(app)
+      .post("/")
+      .send({ slotId: "slot-A", email: DISPOSABLE });
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.challengeRequired).toBe(true);
+    expect(typeof blocked.body.challengeToken).toBe("string");
+    return blocked.body.challengeToken;
+  }
+
+  const blockedBody = { slotId: "slot-A", email: DISPOSABLE };
+
+  beforeAll(async () => {
+    process.env.MFA_CHALLENGE_SECRET = MFA_SECRET;
+    process.env.MFA_ISSUER = ISSUER;
+    process.env.JWT_AUDIENCE = AUDIENCE;
+    configService.refresh();
+    await flushMicrotasks(20);
+  });
+
+  afterAll(() => {
+    delete process.env.MFA_CHALLENGE_SECRET;
+    delete process.env.MFA_ISSUER;
+    delete process.env.JWT_AUDIENCE;
+    configService.refresh();
+  });
+
+  beforeEach(() => {
+    resetFraudDriftState();
+    fraudReviewQueue._reset();
+  });
+
+  afterEach(() => {
+    delete process.env.FRAUD_STEP_UP_MODE;
+    delete process.env.FRAUD_STEP_UP_THRESHOLD;
+    resetFraudDriftState();
+  });
+
+  it("persists the issued token bound to the actor and the request body", async () => {
+    const store = new InMemoryFraudChallengeStore();
+    const app = buildApp({ scorer: makeScorer(), challengeStore: store });
+
+    const token = await issueChallengeToken(app);
+
+    const verdict = store.consume(token, {
+      actorId: "user-1",
+      bodyHash: hashFraudChallengeBody(blockedBody),
+    });
+    expect(verdict.ok).toBe(true);
+  });
+
+  it("passes exactly one retry with the token plus fresh MFA, then rejects reuse", async () => {
+    const app = buildApp({ scorer: makeScorer() });
+    const token = await issueChallengeToken(app);
+
+    const retry = await request(app)
+      .post("/")
+      .set("x-fraud-challenge", token)
+      .set("x-chronopay-mfa", await mfaToken("user-1"))
+      .send(blockedBody);
+    expect(retry.status).toBe(200);
+    expect(retry.body.ok).toBe(true);
+    expect(retry.body.decision).toBe("blocked"); // scored again, then bypassed
+
+    const replay = await request(app)
+      .post("/")
+      .set("x-fraud-challenge", token)
+      .set("x-chronopay-mfa", await mfaToken("user-1"))
+      .send(blockedBody);
+    expect(replay.status).toBe(403);
+    expect(replay.body).toMatchObject({
+      success: false,
+      error: "Fraud challenge is invalid or has expired.",
+      challengeRequired: true,
+    });
+  });
+
+  it("rejects an expired token even when the MFA proof is fresh", async () => {
+    const store = new InMemoryFraudChallengeStore({ ttlMs: -1 });
+    const app = buildApp({ scorer: makeScorer(), challengeStore: store });
+
+    const token = await issueChallengeToken(app);
+
+    const retry = await request(app)
+      .post("/")
+      .set("x-fraud-challenge", token)
+      .set("x-chronopay-mfa", await mfaToken("user-1"))
+      .send(blockedBody);
+    expect(retry.status).toBe(403);
+    expect(retry.body.error).toBe("Fraud challenge is invalid or has expired.");
+  });
+
+  it("rejects a token presented by a different actor (foreign-actor replay)", async () => {
+    const store = new InMemoryFraudChallengeStore();
+    const appUser1 = buildApp({ scorer: makeScorer(), challengeStore: store });
+    const token = await issueChallengeToken(appUser1);
+
+    // Second actor, same shared store; threshold lowered so their first
+    // disposable-email request is blocked and reaches the challenge branch.
+    process.env.FRAUD_STEP_UP_THRESHOLD = "1";
+    const appUser2 = buildApp({
+      scorer: makeScorer(),
+      challengeStore: store,
+      userId: "user-2",
+    });
+    const retry = await request(appUser2)
+      .post("/")
+      .set("x-fraud-challenge", token)
+      .set("x-chronopay-mfa", await mfaToken("user-2"))
+      .send(blockedBody);
+
+    expect(retry.status).toBe(403);
+    expect(retry.body.error).toBe("Fraud challenge is invalid or has expired.");
+
+    // The legitimate owner's token was not burned by the foreign attempt.
+    const ownerRetry = await request(appUser1)
+      .post("/")
+      .set("x-fraud-challenge", token)
+      .set("x-chronopay-mfa", await mfaToken("user-1"))
+      .send(blockedBody);
+    expect(ownerRetry.status).toBe(200);
+  });
+
+  it("rejects a token replayed against a different request body", async () => {
+    const app = buildApp({ scorer: makeScorer() });
+    const token = await issueChallengeToken(app);
+
+    const retry = await request(app)
+      .post("/")
+      .set("x-fraud-challenge", token)
+      .set("x-chronopay-mfa", await mfaToken("user-1"))
+      .send({ slotId: "slot-B", email: DISPOSABLE });
+
+    expect(retry.status).toBe(403);
+    expect(retry.body.error).toBe("Fraud challenge is invalid or has expired.");
+  });
+
+  it("keeps the token usable when the MFA proof is missing or invalid", async () => {
+    const app = buildApp({ scorer: makeScorer() });
+    const token = await issueChallengeToken(app);
+
+    const missingMfa = await request(app)
+      .post("/")
+      .set("x-fraud-challenge", token)
+      .send(blockedBody);
+    expect(missingMfa.status).toBe(401);
+    expect(missingMfa.body.error).toBe("Missing MFA challenge");
+
+    const invalidMfa = await request(app)
+      .post("/")
+      .set("x-fraud-challenge", token)
+      .set("x-chronopay-mfa", "not-a-jwt")
+      .send(blockedBody);
+    expect(invalidMfa.status).toBe(403);
+    expect(invalidMfa.body.error).toBe("Invalid MFA challenge");
+
+    // Neither failure consumed the token: the owner can still step up.
+    const retry = await request(app)
+      .post("/")
+      .set("x-fraud-challenge", token)
+      .set("x-chronopay-mfa", await mfaToken("user-1"))
+      .send(blockedBody);
+    expect(retry.status).toBe(200);
+  });
+
+  it("still issues a fresh token when the retry is not attempted", async () => {
+    const app = buildApp({ scorer: makeScorer() });
+
+    const first = await issueChallengeToken(app);
+    const second = await issueChallengeToken(app);
+
+    // Distinct UUIDs: every block issues its own persistable token.
+    expect(first).not.toBe(second);
   });
 });

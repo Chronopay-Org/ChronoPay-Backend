@@ -10,7 +10,7 @@ import { Migration } from "../migrationRunner.js";
  * successful mint, guaranteeing idempotency across restarts.
  */
 export const migration: Migration = {
-  id: "021b",
+  id: "036",
   name: "create_subscriptions",
 
   async up(client: PoolClient): Promise<void> {

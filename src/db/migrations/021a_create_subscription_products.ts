@@ -9,7 +9,7 @@ import { Migration } from "../migrationRunner.js";
  * and the slot configuration that should be minted for each subscriber.
  */
 export const migration: Migration = {
-  id: "021a",
+  id: "035",
   name: "create_subscription_products",
 
   async up(client: PoolClient): Promise<void> {

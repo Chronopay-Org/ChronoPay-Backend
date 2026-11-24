@@ -14,11 +14,15 @@ import {
   BookingIntentRecord,
   CancellationPolicySnapshot,
   ProratedCancellationTerms,
+  InMemoryBookingIntentRepository,
 } from "../../modules/booking-intents/booking-intent-repository.js";
 import { AuditLogger } from "../auditLogger.js";
 import {
   InMemorySupplierCancellationOverrideStore,
 } from "../supplierCancellationOverrideStore.js";
+import { BookingIntentService } from "../../modules/booking-intents/booking-intent-service.js";
+import { InMemorySlotRepository } from "../../modules/slots/slot-repository.js";
+import type { HoldFeePolicyRegistry } from "../holdFeePolicy.js";
 
 const BASE_PRICE = 10000;
 const HOUR_MS = 1000 * 60 * 60;
@@ -355,7 +359,7 @@ describe("CancellationPolicyService with supplier overrides", () => {
   }
 
   describe("calculateRefund with supplier override", () => {
-    it("uses supplier override when it exists for the intent's professional", async () => {
+    it("uses supplier override when it exists for a legacy intent without a snapshot", async () => {
       const nowMs = () => Date.now();
       const store = new InMemorySupplierCancellationOverrideStore({
         nowIso: () => new Date(nowMs()).toISOString(),
@@ -410,12 +414,23 @@ describe("CancellationPolicyService with supplier overrides", () => {
       expect(refund.tierApplied?.refundRatio).toBe(1);
     });
 
-    it("uses supplier override even when intent has a grandfathered snapshot", async () => {
+    it("refunds an intent created before a supplier override is added under its snapshot terms", async () => {
       const nowMs = () => Date.now();
       const store = new InMemorySupplierCancellationOverrideStore({
         nowIso: () => new Date(nowMs()).toISOString(),
       });
+      const service = makeService(nowMs, store);
 
+      // 1. Capture snapshot before any supplier override exists (captures global v2-prorated)
+      const snapshotBeforeOverride = service.snapshotCurrentPolicy(undefined, "prof-1");
+      expect(snapshotBeforeOverride.policyVersionId).toBe(PRORATED_V2_VERSION.versionId);
+
+      const intent = makeIntent({
+        professional: "prof-1",
+        cancellationPolicySnapshot: snapshotBeforeOverride,
+      });
+
+      // 2. Supplier adds a stricter 25% override after the booking was created
       await store.setOverride(
         "prof-1",
         {
@@ -424,29 +439,92 @@ describe("CancellationPolicyService with supplier overrides", () => {
         "admin-1",
       );
 
+      // 3. Refund must honour the grandfathered snapshot terms (60% at 48h under v2), not the new 25% override
+      const refund = service.calculateRefund(intent);
+      expect(refund.policyVersion).toBe(PRORATED_V2_VERSION.versionId);
+      expect(refund.tierApplied?.refundRatio).toBe(0.6);
+      expect(refund.fee).toBe(50);
+      expect(refund.netRefund).toBe(6550);
+    });
+
+    it("records supplier-override:<id> in snapshot when created while override is active and keeps those terms after override is removed", async () => {
+      const nowMs = () => Date.now();
+      const store = new InMemorySupplierCancellationOverrideStore({
+        nowIso: () => new Date(nowMs()).toISOString(),
+      });
       const service = makeService(nowMs, store);
 
-      // Intent has a grandfathered v1 snapshot but supplier override should win
-      const v1Snapshot: CancellationPolicySnapshot = {
-        policyVersionId: LEGACY_V1_VERSION.versionId,
-        policyTerms: {
-          tiers: [
-            { minHoursUntilStart: 24, refundRatio: 1, percentageFee: 0.05, taxReversalRatio: 0.1 },
-            { minHoursUntilStart: 0, maxHoursUntilStart: 24, refundRatio: 0.5, percentageFee: 0.05, taxReversalRatio: 0.1 },
-          ],
-          minRefundAmount: 0,
+      await store.setOverride(
+        "prof-1",
+        {
+          tiers: [{ minHoursUntilStart: 0, refundRatio: 0.75, flatFee: 100 }],
         },
-        capturedAtMs: Date.now() - 1000,
-      };
+        "admin-1",
+      );
+
+      // Capture snapshot while override is active
+      const snapshot = service.snapshotCurrentPolicy(undefined, "prof-1");
+      expect(snapshot.policyVersionId).toBe("supplier-override:prof-1");
 
       const intent = makeIntent({
         professional: "prof-1",
-        cancellationPolicySnapshot: v1Snapshot,
+        cancellationPolicySnapshot: snapshot,
       });
+
+      // Remove the override before refunding
+      await store.deleteOverride("prof-1", "admin-1");
+      expect(store.getOverride("prof-1")).toBeUndefined();
 
       const refund = service.calculateRefund(intent);
       expect(refund.policyVersion).toBe("supplier-override:prof-1");
-      expect(refund.tierApplied?.refundRatio).toBe(0.25);
+      expect(refund.tierApplied?.refundRatio).toBe(0.75);
+      expect(refund.fee).toBe(100);
+      expect(refund.netRefund).toBe(7400);
+    });
+
+    it("reduces the refund by holdFeePolicySnapshot retention when a supplier override applies (both snapshotted and legacy)", async () => {
+      const nowMs = () => Date.now();
+      const store = new InMemorySupplierCancellationOverrideStore({
+        nowIso: () => new Date(nowMs()).toISOString(),
+      });
+      const service = makeService(nowMs, store);
+
+      await store.setOverride(
+        "prof-1",
+        {
+          tiers: [{ minHoursUntilStart: 0, refundRatio: 0.5 }],
+        },
+        "admin-1",
+      );
+
+      const snapshotWithOverride = service.snapshotCurrentPolicy(undefined, "prof-1");
+      const holdFeePolicySnapshot = {
+        supplierId: "prof-1",
+        holdFeeCents: 300,
+        capturedAtMs: nowMs(),
+      };
+
+      // Path A: intent with captured override snapshot + holdFeePolicySnapshot
+      const snapshottedIntent = makeIntent({
+        professional: "prof-1",
+        cancellationPolicySnapshot: snapshotWithOverride,
+        holdFeePolicySnapshot,
+      });
+      const snapshottedRefund = service.calculateRefund(snapshottedIntent);
+      expect(snapshottedRefund.policyVersion).toBe("supplier-override:prof-1");
+      expect(snapshottedRefund.holdFee).toBe(300);
+      expect(snapshottedRefund.netRefund).toBe(5000 - 300);
+
+      // Path B: legacy intent without cancellationPolicySnapshot + live override + holdFeePolicySnapshot
+      const legacyIntent = makeIntent({
+        professional: "prof-1",
+        cancellationPolicySnapshot: undefined,
+        holdFeePolicySnapshot,
+      });
+      const legacyRefund = service.calculateRefund(legacyIntent);
+      expect(legacyRefund.policyVersion).toBe("supplier-override:prof-1");
+      expect(legacyRefund.holdFee).toBe(300);
+      expect(legacyRefund.netRefund).toBe(5000 - 300);
     });
 
     it("ignores supplier override when no override store is configured", async () => {
@@ -494,6 +572,101 @@ describe("CancellationPolicyService with supplier overrides", () => {
       });
       const refundUnder24h = service.calculateRefund(intentUnder24h);
       expect(refundUnder24h.tierApplied?.refundRatio).toBe(0.0);
+    });
+
+    it("BookingIntentService captures supplier-override:<id> in cancellationPolicySnapshot and grandfathers both before-override and active-override bookings with holdFee retention", async () => {
+      const fixedNowMs = 1_900_000_000_000;
+      const startTime = fixedNowMs + 48 * HOUR_MS;
+      const endTime = startTime + HOUR_MS;
+      const slot1 = "slot-11111111-1111-4111-8111-111111111111";
+      const slot2 = "slot-22222222-2222-4222-8222-222222222222";
+
+      const store = new InMemorySupplierCancellationOverrideStore({
+        nowIso: () => new Date(fixedNowMs).toISOString(),
+      });
+      const holdFeeRegistry: HoldFeePolicyRegistry = {
+        entries: {
+          "prof-1": {
+            supplierId: "prof-1",
+            holdFeeCents: 250,
+            updatedAt: new Date(fixedNowMs).toISOString(),
+          },
+        },
+      };
+      const slotRepo = new InMemorySlotRepository([
+        {
+          id: slot1,
+          professional: "prof-1",
+          startTime,
+          endTime,
+          bookable: true,
+          pricingStrategy: {
+            strategyId: "fixed",
+            basePrice: 10000,
+            capacity: 1,
+            config: { strategy: "fixed" },
+          },
+        },
+        {
+          id: slot2,
+          professional: "prof-1",
+          startTime,
+          endTime,
+          bookable: true,
+          pricingStrategy: {
+            strategyId: "fixed",
+            basePrice: 10000,
+            capacity: 1,
+            config: { strategy: "fixed" },
+          },
+        },
+      ]);
+      const intentRepo = new InMemoryBookingIntentRepository();
+      const bookingService = new BookingIntentService(
+        intentRepo,
+        slotRepo,
+        () => new Date(fixedNowMs).toISOString(),
+        () => fixedNowMs,
+        undefined,
+        holdFeeRegistry,
+        undefined,
+        { supplierOverrideStore: store },
+      );
+      const policyService = makeService(() => fixedNowMs, store);
+      const actor = { userId: "cust-1", role: "customer" as const, claims: {} as any };
+
+      // 1. Intent created BEFORE supplier override is added
+      const intentBeforeOverride = await bookingService.createIntent({ slotId: slot1 }, actor);
+      expect(intentBeforeOverride.cancellationPolicySnapshot?.policyVersionId).toBe(
+        PRORATED_V2_VERSION.versionId,
+      );
+
+      // 2. Add supplier override (50% refund)
+      await store.setOverride(
+        "prof-1",
+        { tiers: [{ minHoursUntilStart: 0, refundRatio: 0.5 }] },
+        "admin-1",
+      );
+
+      // Intent 1 must still be refunded under its v2 snapshot terms (60% + 10% tax - 50 fee - 250 holdFee = 6300)
+      const refundBefore = policyService.calculateRefund(intentBeforeOverride);
+      expect(refundBefore.policyVersion).toBe(PRORATED_V2_VERSION.versionId);
+      expect(refundBefore.holdFee).toBe(250);
+      expect(refundBefore.netRefund).toBe(6550 - 250);
+
+      // 3. Intent created WHILE override is active records supplier-override:prof-1
+      const intentDuringOverride = await bookingService.createIntent({ slotId: slot2 }, actor);
+      expect(intentDuringOverride.cancellationPolicySnapshot?.policyVersionId).toBe(
+        "supplier-override:prof-1",
+      );
+
+      // 4. Remove override — intent 2 keeps supplier-override:prof-1 terms and applies holdFee retention
+      await store.deleteOverride("prof-1", "admin-1");
+      const refundDuring = policyService.calculateRefund(intentDuringOverride);
+      expect(refundDuring.policyVersion).toBe("supplier-override:prof-1");
+      expect(refundDuring.tierApplied?.refundRatio).toBe(0.5);
+      expect(refundDuring.holdFee).toBe(250);
+      expect(refundDuring.netRefund).toBe(5000 - 250);
     });
   });
 });

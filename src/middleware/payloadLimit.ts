@@ -1,8 +1,8 @@
 /**
  * Per-route request payload size limits middleware.
  *
- * Enforces body size limits before deep JSON parsing so that oversized
- * payloads are rejected at the network layer, not after allocation.
+ * Enforces route-specific size limits even when a global JSON parser has
+ * already parsed the request body.
  *
  * Usage
  * ─────
@@ -14,8 +14,8 @@
  *
  * Security notes
  * ──────────────
- * - Limits are enforced by express's built-in body-parser before any
- *   application logic runs.
+ * - The global body parser caps allocation; route limits are checked before
+ *   the route's application logic runs.
  * - The 413 response uses the standard error envelope so clients get a
  *   consistent shape.
  * - Limits are expressed as human-readable strings ("16kb", "1mb") and
@@ -23,6 +23,7 @@
  */
 
 import express, { Request, Response, NextFunction, RequestHandler } from "express";
+import { AppError } from "../errors/AppError.js";
 
 /** Supported size string format: a positive integer followed by kb or mb. */
 const SIZE_PATTERN = /^\d+(?:kb|mb|b)$/i;
@@ -40,10 +41,29 @@ function assertValidSizeString(size: string): void {
   }
 }
 
+function sizeInBytes(size: string): number {
+  const match = /^(\d+)(b|kb|mb)$/i.exec(size.trim());
+  if (!match) {
+    throw new Error(`payloadLimit: invalid size string "${size}"`);
+  }
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  return amount * (unit === "mb" ? 1024 * 1024 : unit === "kb" ? 1024 : 1);
+}
+
+function payloadTooLargeError(limit: string): AppError {
+  return new AppError(
+    `Request body exceeds the ${limit} limit for this endpoint.`,
+    413,
+    "PAYLOAD_TOO_LARGE",
+    true,
+  );
+}
+
 /**
  * Return an Express middleware stack that:
- * 1. Re-parses the raw body with the given size limit (overriding any global
- *    limit set earlier in the chain).
+ * 1. Checks the captured raw body against the route limit, even if a global
+ *    JSON parser has already populated req.body; otherwise parses with limit.
  * 2. Returns a 413 with the standard error envelope when the limit is exceeded.
  *
  * @param limit - Size string accepted by the `bytes` package, e.g. "16kb".
@@ -52,6 +72,7 @@ export function payloadLimit(limit: string): RequestHandler[] {
   assertValidSizeString(limit);
 
   const jsonParser = express.json({ limit });
+  const maxBytes = sizeInBytes(limit);
 
   // Wrap the parser so we can intercept the 413 it emits and normalise it.
   const middleware: RequestHandler = (
@@ -59,6 +80,12 @@ export function payloadLimit(limit: string): RequestHandler[] {
     res: Response,
     next: NextFunction,
   ) => {
+    const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+    if (rawBody && rawBody.length > maxBytes) {
+      next(payloadTooLargeError(limit));
+      return;
+    }
+
     jsonParser(req, res, (err: unknown) => {
       if (err) {
         const status =
@@ -67,11 +94,7 @@ export function payloadLimit(limit: string): RequestHandler[] {
             : 400;
 
         if (status === 413) {
-          res.status(413).json({
-            success: false,
-            code: "PAYLOAD_TOO_LARGE",
-            error: `Request body exceeds the ${limit} limit for this endpoint.`,
-          });
+          next(payloadTooLargeError(limit));
           return;
         }
 

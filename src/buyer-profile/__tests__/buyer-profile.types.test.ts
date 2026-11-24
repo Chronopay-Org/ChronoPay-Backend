@@ -18,6 +18,7 @@ import {
   type CreateBuyerProfileDTO,
   type UpdateBuyerProfileDTO,
 } from "../dto/buyer-profile.dto.js";
+import { BuyerProfileService } from "../buyer-profile.service.js";
 import { BuyerProfileService, buyerProfileService } from "../buyer-profile.service.js";
 
 const VALID_UUID = "550e8400-e29b-41d4-a716-446655440000";

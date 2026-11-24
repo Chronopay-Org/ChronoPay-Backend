@@ -35,6 +35,8 @@ const camelToSnake = (key: string): string =>
 const GENERATED_ROW_COLUMNS = [
   "verified",
   "last_used_counter",
+  "failed_attempts",
+  "locked_until",
   "created_at",
   "updated_at",
 ] as const;
@@ -51,6 +53,8 @@ const fullRow = {
   period: 30,
   verified: true,
   last_used_counter: 42,
+  failed_attempts: 0,
+  locked_until: null,
   created_at: "2026-01-01T00:00:00.000Z",
   updated_at: "2026-01-02T00:00:00.000Z",
 } satisfies MfaEnrollmentRow;
@@ -72,7 +76,7 @@ const persistentColumnsOf = (
   input: NewMfaEnrollment,
 ): Omit<
   MfaEnrollmentRow,
-  "verified" | "last_used_counter" | "created_at" | "updated_at"
+  "verified" | "last_used_counter" | "failed_attempts" | "locked_until" | "created_at" | "updated_at"
 > => ({
   user_id: input.userId,
   secret_ciphertext: input.secretCiphertext,

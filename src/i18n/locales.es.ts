@@ -44,6 +44,7 @@ export const ES_MESSAGES = {
     resource: {
       not_found: "Recurso no encontrado",
       conflict: "Conflicto",
+      hold_expired: "La reserva temporal ha expirado",
       unprocessable_entity: "Entidad no procesable",
     },
     bundle: {

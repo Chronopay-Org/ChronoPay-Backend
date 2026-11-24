@@ -47,15 +47,19 @@ function compareSignatures(expectedHex: string, actualHex: string) {
   return timingSafeEqual(expectedBuffer, actualBuffer);
 }
 
-export function internalHmacAuth(expectedSecret?: string) {
+export function internalHmacAuth(secrets: {
+  current?: string;
+  previous?: string;
+  secretName?: string;
+}) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const currentSecret = expectedSecret ?? process.env.SETTLEMENTS_WEBHOOK_SECRET;
-    const previousSecret = process.env.SETTLEMENTS_WEBHOOK_SECRET_PREVIOUS;
+    const currentSecret = secrets.current;
+    const previousSecret = secrets.previous;
 
     if (!currentSecret) {
       return res.status(500).json({
         success: false,
-        error: "Settlement webhook signing secret is not configured.",
+        error: `${secrets.secretName ?? "Settlement"} webhook signing secret is not configured.`,
       });
     }
 

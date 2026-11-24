@@ -10,6 +10,7 @@ This document describes the `PATCH /api/v1/slots/:id` endpoint implementation in
 - Path: `/api/v1/slots/:id`
 - Header: `x-chronopay-admin-token` (required)
 - Body: one or more of `professional`, `startTime`, `endTime`
+- Unknown body fields are rejected with `400`.
 
 ## Acceptance Criteria
 
@@ -31,3 +32,4 @@ This document describes the `PATCH /api/v1/slots/:id` endpoint implementation in
 - Sensitive update operations are protected by a server-configured admin token.
 - Authorization failures intentionally do not leak token details.
 - Input validation blocks malformed updates and invalid schedule windows.
+- Unexpected server errors use the generic error envelope and do not expose internal messages.

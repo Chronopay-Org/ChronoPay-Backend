@@ -1,12 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { requireAuthenticatedActor } from "../middleware/auth.js";
 import { GdprExportService, type ProfileProvider, type BookingsProvider, type ReceiptsProvider } from "../services/gdprExportService.js";
-
-function buildBaseUrl(req: Request): string {
-  const scheme = req.protocol;
-  const host = req.get("host") ?? "localhost";
-  return `${scheme}://${host}`;
-}
+import { buildExportBaseUrl } from "../utils/buildBaseUrl.js";
 
 export function createGdprExportRouter(
   profileProvider?: ProfileProvider,
@@ -27,14 +22,14 @@ export function createGdprExportRouter(
    * @desc Request a GDPR data portability export for the authenticated user.
    * @access Authenticated user only
    */
-  router.post("/", requireAuthenticatedActor, async (req: any, res: Response) => {
+  router.post("/", requireAuthenticatedActor(["customer", "professional", "admin"]), async (req: any, res: Response) => {
     try {
-      const userId = req.auth?.userId ?? req.auth?.sub;
+      const userId = req.auth?.userId;
       if (!userId) {
         return res.status(401).json({ success: false, error: "Unable to identify user for export" });
       }
 
-      const baseUrl = buildBaseUrl(req);
+      const baseUrl = buildExportBaseUrl();
       const result = await service.createExport(userId, baseUrl);
 
       return res.status(201).json({

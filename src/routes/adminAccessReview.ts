@@ -1,5 +1,13 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdminToken } from "../middleware/authorization.js";
+import {
+  ACCESS_REVIEW_LOOKBACK_DEFAULT,
+  ACCESS_REVIEW_LOOKBACK_MAX,
+  ACCESS_REVIEW_LOOKBACK_MIN,
+  ACCESS_REVIEW_MAX_LIMIT,
+  ACCESS_REVIEW_MIN_LIMIT,
+  ACCESS_REVIEW_MIN_OFFSET,
+} from "../constants/accessReview.js";
 import { accessReviewService } from "../services/accessReviewService.js";
 import type {
   AttestationOutcome,
@@ -41,11 +49,33 @@ function handleServiceError(err: any, res: Response): Response {
   return res.status(500).json({ success: false, error: message });
 }
 
-/** Parses a positive-integer query param, falling back when absent/invalid. */
-function readPositiveInt(value: unknown): number | undefined {
-  if (value === undefined) return undefined;
+type BoundedIntResult = { ok: true; value: number | undefined } | { ok: false; error: string };
+
+/**
+ * Parses an integer query param within [min, max], naming the field in the
+ * error. An absent param falls back to the caller's default; a present but
+ * non-integer or out-of-range value is rejected.
+ */
+function readBoundedInt(
+  value: unknown,
+  { min, max, name }: { min: number; max?: number; name: string },
+): BoundedIntResult {
+  if (value === undefined) return { ok: true, value: undefined };
   const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+  const valid = Number.isInteger(parsed) && parsed >= min && (max === undefined || parsed <= max);
+  if (!valid) {
+    if (max === undefined) {
+      return {
+        ok: false,
+        error:
+          min === 0
+            ? `${name} must be a non-negative integer`
+            : `${name} must be an integer of at least ${min}`,
+      };
+    }
+    return { ok: false, error: `${name} must be an integer between ${min} and ${max}` };
+  }
+  return { ok: true, value: parsed };
 }
 
 /** Only "csv" opts out of the default JSON representation. */
@@ -79,10 +109,23 @@ router.post("/access-review/snapshots", requireAdminToken, async (req: Request, 
 router.get("/access-review/snapshots", requireAdminToken, (req: Request, res: Response) => {
   try {
     const options: ListSnapshotsOptions = {};
-    const limit = readPositiveInt(req.query.limit);
-    const offset = readPositiveInt(req.query.offset);
-    if (limit !== undefined) options.limit = limit;
-    if (offset !== undefined) options.offset = offset;
+    const limit = readBoundedInt(req.query.limit, {
+      min: ACCESS_REVIEW_MIN_LIMIT,
+      max: ACCESS_REVIEW_MAX_LIMIT,
+      name: "limit",
+    });
+    if (!limit.ok) {
+      return res.status(400).json({ success: false, error: limit.error });
+    }
+    const offset = readBoundedInt(req.query.offset, {
+      min: ACCESS_REVIEW_MIN_OFFSET,
+      name: "offset",
+    });
+    if (!offset.ok) {
+      return res.status(400).json({ success: false, error: offset.error });
+    }
+    if (limit.value !== undefined) options.limit = limit.value;
+    if (offset.value !== undefined) options.offset = offset.value;
     if (req.query.quarterLabel) {
       options.quarterLabel = req.query.quarterLabel as ListSnapshotsOptions["quarterLabel"];
     }
@@ -186,10 +229,23 @@ router.post(
 router.get("/access-review/attestations", requireAdminToken, (req: Request, res: Response) => {
   try {
     const options: ListAttestationsOptions = {};
-    const limit = readPositiveInt(req.query.limit);
-    const offset = readPositiveInt(req.query.offset);
-    if (limit !== undefined) options.limit = limit;
-    if (offset !== undefined) options.offset = offset;
+    const limit = readBoundedInt(req.query.limit, {
+      min: ACCESS_REVIEW_MIN_LIMIT,
+      max: ACCESS_REVIEW_MAX_LIMIT,
+      name: "limit",
+    });
+    if (!limit.ok) {
+      return res.status(400).json({ success: false, error: limit.error });
+    }
+    const offset = readBoundedInt(req.query.offset, {
+      min: ACCESS_REVIEW_MIN_OFFSET,
+      name: "offset",
+    });
+    if (!offset.ok) {
+      return res.status(400).json({ success: false, error: offset.error });
+    }
+    if (limit.value !== undefined) options.limit = limit.value;
+    if (offset.value !== undefined) options.offset = offset.value;
     if (req.query.snapshotId) options.snapshotId = req.query.snapshotId as string;
     if (req.query.quarterLabel) {
       options.quarterLabel = req.query.quarterLabel as ListAttestationsOptions["quarterLabel"];
@@ -209,8 +265,18 @@ router.get("/access-review/attestations", requireAdminToken, (req: Request, res:
  */
 router.get("/access-review/gaps", requireAdminToken, (req: Request, res: Response) => {
   try {
-    const lookback = readPositiveInt(req.query.lookback) ?? 8;
-    return res.status(200).json({ success: true, gaps: accessReviewService.detectGaps(lookback) });
+    const lookback = readBoundedInt(req.query.lookback, {
+      min: ACCESS_REVIEW_LOOKBACK_MIN,
+      max: ACCESS_REVIEW_LOOKBACK_MAX,
+      name: "lookback",
+    });
+    if (!lookback.ok) {
+      return res.status(400).json({ success: false, error: lookback.error });
+    }
+    return res.status(200).json({
+      success: true,
+      gaps: accessReviewService.detectGaps(lookback.value ?? ACCESS_REVIEW_LOOKBACK_DEFAULT),
+    });
   } catch (err) {
     return handleServiceError(err, res);
   }
@@ -242,3 +308,4 @@ router.get(
 );
 
 export default router;
+

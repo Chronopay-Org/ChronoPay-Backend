@@ -14,6 +14,8 @@ function makeRow(overrides: Record<string, unknown> = {}) {
     period: 30,
     verified: false,
     last_used_counter: null,
+    failed_attempts: 0,
+    locked_until: null,
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -52,6 +54,9 @@ function fakeRepository(): MfaRepository {
     findByUserId: jest.fn(),
     markVerified: jest.fn(),
     advanceLastUsedCounter: jest.fn(),
+    recordFailedAttempt: jest.fn(),
+    clearExpiredLockout: jest.fn(),
+    resetFailedAttempts: jest.fn(),
     deleteByUserId: jest.fn(),
   };
 }
@@ -196,6 +201,55 @@ describe("PgMfaRepository", () => {
       expect(result.enrollment?.last_used_counter).toBe(77);
     });
 
+    describe("recordFailedAttempt", () => {
+      it("increments failures and returns the lock timestamp", async () => {
+        const lockedUntil = new Date("2026-01-01T00:15:00.000Z");
+        const dbQuery = fakeQuery(({ text, params }) => {
+          expect(text).toContain("failed_attempts = failed_attempts + 1");
+          expect(params).toEqual(["user-123", 5, lockedUntil]);
+          return {
+            rows: [{ failed_attempts: 5, locked_until: lockedUntil }],
+          };
+        });
+        const result = await new PgMfaRepository(dbQuery).recordFailedAttempt(
+          "user-123",
+          5,
+          lockedUntil,
+        );
+        expect(result).toEqual({
+          failedAttempts: 5,
+          lockedUntil: lockedUntil.toISOString(),
+        });
+      });
+
+      it("returns null when no enrollment row was updated", async () => {
+        const repo = new PgMfaRepository(fakeQuery(() => ({ rows: [] })));
+        await expect(repo.recordFailedAttempt("nobody", 5, new Date())).resolves.toBeNull();
+      });
+    });
+
+    describe("clearExpiredLockout and resetFailedAttempts", () => {
+      it("clears only expired locks", async () => {
+        const now = new Date("2026-01-01T00:15:00.000Z");
+        const dbQuery = fakeQuery(({ text, params }) => {
+          expect(text).toContain("locked_until <= $2");
+          expect(params).toEqual(["user-123", now]);
+          return { rowCount: 1 };
+        });
+        await expect(new PgMfaRepository(dbQuery).clearExpiredLockout("user-123", now))
+          .resolves.toBe(true);
+      });
+
+      it("resets failures and lock state after success", async () => {
+        const dbQuery = fakeQuery(({ text, params }) => {
+          expect(text).toContain("failed_attempts = 0, locked_until = NULL");
+          expect(params).toEqual(["user-123"]);
+          return { rowCount: 1 };
+        });
+        await expect(new PgMfaRepository(dbQuery).resetFailedAttempts("user-123")).resolves.toBeUndefined();
+      });
+    });
+
     it("reports replay when the stored counter is not behind", async () => {
       const repo = new PgMfaRepository(fakeQuery(() => ({ rows: [], rowCount: 0 })));
       const result = await repo.advanceLastUsedCounter("user-123", 2);
@@ -286,6 +340,9 @@ describe("repository singleton + test seam", () => {
       findByUserId: jest.fn(),
       markVerified: jest.fn(),
       advanceLastUsedCounter: jest.fn(),
+      recordFailedAttempt: jest.fn(),
+      clearExpiredLockout: jest.fn(),
+      resetFailedAttempts: jest.fn(),
       deleteByUserId: jest.fn(),
     };
     setMfaRepositoryForTests(fake);

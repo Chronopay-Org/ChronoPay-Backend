@@ -14,7 +14,7 @@ Entry point: [../README.md](../README.md). Files below are existing design notes
 
 ## Security and auth
 - [API_SECURITY.md](API_SECURITY.md), [SECURITY_VALIDATION.md](SECURITY_VALIDATION.md), [CORS_CONFIGURATION.md](CORS_CONFIGURATION.md), [rate-limiting.md](rate-limiting.md)
-- [auth/jwt.md](auth/jwt.md), [auth/mfa.md](auth/mfa.md), [auth/api-keys.md](auth/api-keys.md), [auth/permissions.md](auth/permissions.md), [auth/role-hierarchy.md](auth/role-hierarchy.md)
+- [auth/jwt.md](auth/jwt.md), [auth/oauth2.md](auth/oauth2.md), [auth/mfa.md](auth/mfa.md), [auth/api-keys.md](auth/api-keys.md), [auth/permissions.md](auth/permissions.md), [auth/role-hierarchy.md](auth/role-hierarchy.md)
 - [security/](security/) (headers, impersonation recording, internal auth, Redis encryption, request limits), [IMPERSONATION_EXAMPLES.md](IMPERSONATION_EXAMPLES.md), [SECRET_ROTATION_RUNBOOK.md](SECRET_ROTATION_RUNBOOK.md), [audit-events.md](audit-events.md), [dependency-scanning.md](dependency-scanning.md)
 
 ## Domain features

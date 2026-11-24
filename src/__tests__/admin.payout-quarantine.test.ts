@@ -1,3 +1,4 @@
+import { createTestAuthorization } from "../../test/auth.js";
 import express from "express";
 import request from "supertest";
 import adminRouter from "../routes/admin.js";
@@ -29,8 +30,7 @@ describe("Admin payout quarantine endpoints", () => {
 
     const listRes = await request(app)
       .get("/api/v1/admin/payouts/quarantine")
-      .set("x-chronopay-user-id", "admin-1")
-      .set("x-chronopay-role", "admin");
+      .set("Authorization", createTestAuthorization("admin-1", "admin"));
 
     expect(listRes.status).toBe(200);
     expect(listRes.body.success).toBe(true);
@@ -39,8 +39,7 @@ describe("Admin payout quarantine endpoints", () => {
 
     const releaseRes = await request(app)
       .post("/api/v1/admin/payouts/tx-77/quarantine/release")
-      .set("x-chronopay-user-id", "admin-1")
-      .set("x-chronopay-role", "admin")
+      .set("Authorization", createTestAuthorization("admin-1", "admin"))
       .send({ reason: "Reviewed" });
 
     expect(releaseRes.status).toBe(200);

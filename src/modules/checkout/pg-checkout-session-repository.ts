@@ -64,14 +64,15 @@ export class PgCheckoutSessionRepository {
       paymentToken?: string;
       metadata?: Record<string, string | number | boolean>;
     },
-  ): Promise<CheckoutSession> {
+    expectedStatus: CheckoutSessionStatus,
+  ): Promise<CheckoutSession | null> {
     const sql = `
       UPDATE checkout_sessions
       SET status        = $2,
           updated_at    = to_timestamp($3),
           payment_token = COALESCE($4, payment_token),
           metadata      = COALESCE($5::jsonb, metadata)
-      WHERE id = $1
+      WHERE id = $1 AND status = $6
       RETURNING *
     `;
     const res = await this.dbQuery(sql, [
@@ -80,13 +81,14 @@ export class PgCheckoutSessionRepository {
       fields.updatedAt,
       fields.paymentToken ?? null,
       fields.metadata ? JSON.stringify(fields.metadata) : null,
+      expectedStatus,
     ]);
-    return this.mapRow(res.rows[0]);
+    return res.rows[0] ? this.mapRow(res.rows[0]) : null;
   }
 
   private mapRow(row: Record<string, unknown> | undefined): CheckoutSession {
     if (!row) {
-      return {} as CheckoutSession;
+      throw new Error("Cannot map missing checkout session row");
     }
     return {
       id: row.id as string,

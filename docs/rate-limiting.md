@@ -47,8 +47,16 @@ Rate limiting is configured via environment variables:
 | `RATE_LIMIT_WINDOW_MS` | `900000` (15 minutes) | Time window for the sliding bucket |
 | `RATE_LIMIT_MAX` | `100` | Maximum requests per window per principal |
 | `TRUST_PROXY` | `false` | When `true`, `req.ip` uses `X-Forwarded-For` (behind load balancer) |
+| `QUOTA_FAIL_MODE` | `open` | Partner quota store failure behavior: `open` allows the request; `closed` returns `503 Service Unavailable` |
 
-All three are exposed via `ConfigService` and validated at startup.
+These settings are exposed via `ConfigService` and validated at startup. The
+quota fail mode accepts only `open` or `closed`; the default preserves the
+existing fail-open behavior.
+
+In `closed` mode, a failed partner quota check returns the standard
+`DEPENDENCY_UNAVAILABLE` error envelope with `Retry-After: 30` and does not
+continue to the route handler. In either mode, failures increment
+`partner_quota_check_failures_total`, labelled by the selected `mode`.
 
 ## Usage
 

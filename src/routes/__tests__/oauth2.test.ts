@@ -1,12 +1,44 @@
 // @ts-nocheck
-import { describe, it, expect, beforeAll, beforeEach, jest } from "@jest/globals";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, jest } from "@jest/globals";
 import express from "express";
 import request from "supertest";
-import oauth2Router from "../oauth2.js";
 import { configService } from "../../config/config.service.js";
+
+// The OAuth2 provider registry is built when the service singleton is
+// constructed, which happens on first import. Seed the provider env before
+// importing the router so /start can resolve google and github.
+process.env.OAUTH_GOOGLE_CLIENT_ID = "google-client-id";
+process.env.OAUTH_GOOGLE_CLIENT_SECRET = "google-client-secret";
+process.env.OAUTH_GOOGLE_REDIRECT_URI = "http://localhost:3000/callback";
+process.env.OAUTH_GITHUB_CLIENT_ID = "github-client-id";
+process.env.OAUTH_GITHUB_CLIENT_SECRET = "github-client-secret";
+process.env.OAUTH_GITHUB_REDIRECT_URI = "http://localhost:3000/callback";
+// Cookie options are computed at module load, so the Secure flag test needs
+// production mode before the router is imported.
+process.env.NODE_ENV = "production";
+
+const { default: oauth2Router } = await import("../oauth2.js");
 
 // Mock fetch to avoid real HTTP calls
 global.fetch = jest.fn();
+
+/** Build a JWT-shaped ID token with a base64url payload (no real signature). */
+function makeIdToken(payload: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(
+    JSON.stringify({
+      iss: "https://accounts.google.com",
+      sub: "user-123",
+      ...payload,
+    }),
+  ).toString("base64url");
+  return `${header}.${body}.fake-signature`;
+}
+
+/** Pull the nonce the /start handler generated from the authorization URL. */
+function nonceFromStart(res: { body: { authorization_url: string } }): string {
+  return new URL(res.body.authorization_url).searchParams.get("nonce") ?? "";
+}
 
 describe("OAuth2 Routes", () => {
   let app: express.Express;
@@ -122,14 +154,14 @@ describe("OAuth2 Routes", () => {
 
   describe("GET /:provider/callback", () => {
     it("returns 400 for missing provider parameter", async () => {
-      const res = await request(app).get("/oauth/undefined/callback?code=test&state=test");
+      const res = await request(app).get("/oauth/undefined/callback?provider=undefined&code=test&state=test");
 
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/invalid|unsupported/i);
     });
 
     it("returns 400 for missing code parameter", async () => {
-      const res = await request(app).get("/oauth/google/callback?state=test");
+      const res = await request(app).get("/oauth/google/callback?provider=google&state=test");
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("missing_parameters");
@@ -137,7 +169,7 @@ describe("OAuth2 Routes", () => {
 
     it("returns 400 for state mismatch (CSRF protection)", async () => {
       const res = await request(app)
-        .get("/oauth/google/callback?code=auth-code&state=wrong-state");
+        .get("/oauth/google/callback?provider=google&code=auth-code&state=wrong-state");
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("state_mismatch");
@@ -155,7 +187,7 @@ describe("OAuth2 Routes", () => {
 
       // Now simulate callback with cookies cleared (losing PKCE)
       const res = await request(app)
-        .get(`/oauth/google/callback?code=auth-code&state=${state}`)
+        .get(`/oauth/google/callback?provider=google&code=auth-code&state=${state}`)
         .set("Cookie", startCookies.filter((c: string) => c.includes("oauth2_state")));
 
       expect(res.status).toBe(400);
@@ -167,7 +199,7 @@ describe("OAuth2 Routes", () => {
 
     it("handles OAuth2 provider errors", async () => {
       const res = await request(app).get(
-        "/oauth/google/callback?error=access_denied&error_description=User%20denied"
+        "/oauth/google/callback?provider=google&error=access_denied&error_description=User%20denied"
       );
 
       expect(res.status).toBe(400);
@@ -182,11 +214,12 @@ describe("OAuth2 Routes", () => {
       const match = startRes.body.authorization_url.match(/state=([^&]+)/);
       const state = match ? match[1] : "";
 
-      // Mock successful token exchange
+      // Mock successful token exchange (OIDC providers must return an ID token)
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           access_token: "test-access-token",
+          id_token: makeIdToken({ nonce: nonceFromStart(startRes) }),
           token_type: "Bearer",
           expires_in: 3600,
         }),
@@ -204,7 +237,7 @@ describe("OAuth2 Routes", () => {
       } as any);
 
       const res = await request(app)
-        .get(`/oauth/google/callback?code=auth-code&state=${state}`)
+        .get(`/oauth/google/callback?provider=google&code=auth-code&state=${state}`)
         .set("Cookie", startCookies);
 
       expect(res.status).toBe(200);
@@ -218,9 +251,7 @@ describe("OAuth2 Routes", () => {
       expect(res.body.access_token).toBeUndefined();
       // Check cookies are cleared
       const setCookies = res.headers["set-cookie"] || [];
-      expect(
-        setCookies.some((c: string) => c.includes("oauth2_state=") && c.includes("Max-Age=0"))
-      ).toBe(true);
+      expect(setCookies.some((c: string) => c.startsWith("oauth2_state=;"))).toBe(true);
     });
 
     it("returns valid JWT that can be verified", async () => {
@@ -235,6 +266,7 @@ describe("OAuth2 Routes", () => {
         ok: true,
         json: async () => ({
           access_token: "test-access-token",
+          id_token: makeIdToken({ nonce: nonceFromStart(startRes) }),
           token_type: "Bearer",
           expires_in: 3600,
         }),
@@ -249,7 +281,7 @@ describe("OAuth2 Routes", () => {
       } as any);
 
       const res = await request(app)
-        .get(`/oauth/google/callback?code=auth-code&state=${state}`)
+        .get(`/oauth/google/callback?provider=google&code=auth-code&state=${state}`)
         .set("Cookie", startCookies);
 
       // Verify JWT structure
@@ -257,8 +289,9 @@ describe("OAuth2 Routes", () => {
       expect(jwtParts).toHaveLength(3);
 
       // Can parse payload
-      const payload = JSON.parse(Buffer.from(jwtParts[1], "base64").toString("utf-8"));
-      expect(payload.sub).toBe("user-123");
+      const payload = JSON.parse(Buffer.from(jwtParts[1], "base64url").toString("utf-8"));
+      // `sub` is namespaced by provider so provider-local ids cannot collide
+      expect(payload.sub).toBe("google:user-123");
       expect(payload.email).toBe("user@example.com");
       expect(payload.provider).toBe("google");
       expect(payload.iss).toBe("test-issuer");
@@ -281,7 +314,7 @@ describe("OAuth2 Routes", () => {
       } as any);
 
       const res = await request(app)
-        .get(`/oauth/google/callback?code=bad-code&state=${state}`)
+        .get(`/oauth/google/callback?provider=google&code=bad-code&state=${state}`)
         .set("Cookie", startCookies);
 
       expect(res.status).toBe(400);
@@ -317,13 +350,18 @@ describe("OAuth2 Routes", () => {
       } as any);
 
       const res = await request(app)
-        .get(`/oauth/github/callback?code=github-code&state=${state}`)
+        .get(`/oauth/github/callback?provider=github&code=github-code&state=${state}`)
         .set("Cookie", startCookies);
 
       expect(res.status).toBe(200);
       expect(res.body.user.id).toBe("123456");
       expect(res.body.user.provider).toBe("github");
       expect(res.body.user.email).toBe("github@example.com");
+
+      // GitHub is plain OAuth2, but the subject is still provider-namespaced
+      const jwtParts = res.body.token.split(".");
+      const payload = JSON.parse(Buffer.from(jwtParts[1], "base64url").toString("utf-8"));
+      expect(payload.sub).toBe("github:123456");
     });
 
     it("validates nonce for OIDC providers", async () => {
@@ -333,24 +371,8 @@ describe("OAuth2 Routes", () => {
       const match = startRes.body.authorization_url.match(/state=([^&]+)/);
       const state = match ? match[1] : "";
 
-      // Extract nonce from URL
-      const nonceMatch = startRes.body.authorization_url.match(/nonce=([^&]+)/);
-      const nonce = nonceMatch ? nonceMatch[1] : "";
-
       // Create ID token with matching nonce
-      const idTokenPayload = {
-        iss: "https://accounts.google.com",
-        sub: "user-123",
-        nonce: nonce,
-      };
-      const idToken = Buffer.from(
-        JSON.stringify({
-          header: { alg: "RS256" },
-          payload: idTokenPayload,
-          signature: "fake",
-        })
-      )
-        .toString("base64");
+      const idToken = makeIdToken({ nonce: nonceFromStart(startRes) });
 
       // Mock token response with ID token
       (global.fetch as jest.Mock).mockResolvedValueOnce({
@@ -372,7 +394,7 @@ describe("OAuth2 Routes", () => {
       } as any);
 
       const res = await request(app)
-        .get(`/oauth/google/callback?code=auth-code&state=${state}`)
+        .get(`/oauth/google/callback?provider=google&code=auth-code&state=${state}`)
         .set("Cookie", startCookies);
 
       expect(res.status).toBe(200);
@@ -387,18 +409,7 @@ describe("OAuth2 Routes", () => {
       const state = match ? match[1] : "";
 
       // Create ID token with WRONG nonce
-      const idToken = Buffer.from(
-        JSON.stringify({
-          header: { alg: "RS256" },
-          payload: {
-            iss: "https://accounts.google.com",
-            sub: "user-123",
-            nonce: "wrong-nonce",
-          },
-          signature: "fake",
-        })
-      )
-        .toString("base64");
+      const idToken = makeIdToken({ nonce: "wrong-nonce" });
 
       // Mock token response with ID token
       (global.fetch as jest.Mock).mockResolvedValueOnce({
@@ -411,11 +422,103 @@ describe("OAuth2 Routes", () => {
       } as any);
 
       const res = await request(app)
-        .get(`/oauth/google/callback?code=auth-code&state=${state}`)
+        .get(`/oauth/google/callback?provider=google&code=auth-code&state=${state}`)
         .set("Cookie", startCookies);
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("nonce_mismatch");
+      // Cookies are cleared on the failure path
+      const setCookies = res.headers["set-cookie"] || [];
+      const cleared = setCookies.filter((c: string) => c.startsWith("oauth2_"));
+      expect(cleared.map((c: string) => c.split("=")[0]).sort()).toEqual([
+        "oauth2_nonce",
+        "oauth2_pkce",
+        "oauth2_state",
+      ]);
+      expect(cleared.every((c: string) => c.includes("Expires=Thu, 01 Jan 1970"))).toBe(true);
+    });
+
+    it("returns 400 when an OIDC provider does not return an ID token", async () => {
+      const startRes = await request(app).get("/oauth/google/start");
+      const startCookies = startRes.headers["set-cookie"];
+      const match = startRes.body.authorization_url.match(/state=([^&]+)/);
+      const state = match ? match[1] : "";
+
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: "test-token",
+          token_type: "Bearer",
+        }),
+      } as any);
+
+      const res = await request(app)
+        .get(`/oauth/google/callback?provider=google&code=auth-code&state=${state}`)
+        .set("Cookie", startCookies);
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe("missing_id_token");
+
+      const setCookies = res.headers["set-cookie"] || [];
+      expect(setCookies.some((c: string) => c.startsWith("oauth2_nonce=;"))).toBe(true);
+    });
+
+    it("returns 400 for a malformed ID token instead of skipping nonce validation", async () => {
+      const startRes = await request(app).get("/oauth/google/start");
+      const startCookies = startRes.headers["set-cookie"];
+      const match = startRes.body.authorization_url.match(/state=([^&]+)/);
+      const state = match ? match[1] : "";
+
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: "test-token",
+          // Not a JWT: previously this threw while decoding and the catch block
+          // skipped nonce validation entirely.
+          id_token: "not-a-jwt",
+          token_type: "Bearer",
+        }),
+      } as any);
+
+      const res = await request(app)
+        .get(`/oauth/google/callback?provider=google&code=auth-code&state=${state}`)
+        .set("Cookie", startCookies);
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe("malformed_id_token");
+
+      const setCookies = res.headers["set-cookie"] || [];
+      expect(setCookies.some((c: string) => c.startsWith("oauth2_state=;"))).toBe(true);
+    });
+
+    it("returns 400 when the OIDC nonce cookie is missing", async () => {
+      const startRes = await request(app).get("/oauth/google/start");
+      const startCookies = startRes.headers["set-cookie"];
+      const match = startRes.body.authorization_url.match(/state=([^&]+)/);
+      const state = match ? match[1] : "";
+
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: "test-token",
+          id_token: makeIdToken({ nonce: "whatever" }),
+          token_type: "Bearer",
+        }),
+      } as any);
+
+      // Simulate a dropped nonce cookie
+      const res = await request(app)
+        .get(`/oauth/google/callback?provider=google&code=auth-code&state=${state}`)
+        .set(
+          "Cookie",
+          startCookies.filter((c: string) => !c.includes("oauth2_nonce")),
+        );
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe("missing_nonce");
     });
   });
 
@@ -431,6 +534,7 @@ describe("OAuth2 Routes", () => {
         json: async () => ({
           access_token: "sensitive-token",
           refresh_token: "refresh-token",
+          id_token: makeIdToken({ nonce: nonceFromStart(startRes) }),
           token_type: "Bearer",
         }),
       } as any);
@@ -444,7 +548,7 @@ describe("OAuth2 Routes", () => {
       } as any);
 
       const res = await request(app)
-        .get(`/oauth/google/callback?code=auth-code&state=${state}`)
+        .get(`/oauth/google/callback?provider=google&code=auth-code&state=${state}`)
         .set("Cookie", startCookies);
 
       // Verify no provider tokens in response
@@ -458,7 +562,7 @@ describe("OAuth2 Routes", () => {
 
       // Missing code
       let res = await request(app)
-        .get("/oauth/google/callback?state=test")
+        .get("/oauth/google/callback?provider=google&state=test")
         .set("Cookie", startCookies);
 
       // Even though cookies may not have been sent with wrong params, verify structure

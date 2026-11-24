@@ -3,6 +3,7 @@ import {
   MfaNotEnrolledError,
   MfaAlreadyEnrolledError,
   MfaInvalidCodeError,
+  MfaLockedError,
   MfaReplayDetectedError,
   MfaChallengeExpiredError,
   MfaChallengeInvalidError,
@@ -65,6 +66,16 @@ describe("MfaErrors", () => {
     });
   });
 
+  describe("MfaLockedError", () => {
+    it("returns a rate-limited error response shape", () => {
+      const error = new MfaLockedError();
+      expect(error.name).toBe("MfaLockedError");
+      expect(error.statusCode).toBe(429);
+      expect(error.errorCode).toBe("MFA_LOCKED");
+      expect(isMfaError(error)).toBe(true);
+    });
+  });
+
   describe("MfaChallengeExpiredError", () => {
     it("should create an error with the correct properties", () => {
       const error = new MfaChallengeExpiredError();
@@ -94,6 +105,7 @@ describe("MfaErrors", () => {
         new MfaNotEnrolledError(),
         new MfaAlreadyEnrolledError(),
         new MfaInvalidCodeError(),
+        new MfaLockedError(),
         new MfaReplayDetectedError(),
         new MfaChallengeExpiredError(),
         new MfaChallengeInvalidError(),

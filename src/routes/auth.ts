@@ -4,6 +4,7 @@ import { verifyJwt } from "../utils/jwt.js";
 import { requireAuth } from "../middleware/auth.js";
 import { mfaService } from "../services/mfaService.js";
 import { isMfaError } from "../errors/mfaErrors.js";
+import { createAuthAwareRateLimiter } from "../middleware/rateLimiter.js";
 
 const router = Router();
 
@@ -54,6 +55,7 @@ function respondMfaError(res: Response, error: unknown): Response {
 router.post(
   "/mfa/enroll",
   requireAuth(),
+  createAuthAwareRateLimiter(),
   async (req: Request, res: Response) => {
     const userId = req.auth!.userId;
     try {
@@ -81,6 +83,7 @@ router.post(
 router.post(
   "/mfa/verify",
   requireAuth(),
+  createAuthAwareRateLimiter(),
   async (req: Request, res: Response) => {
     const { code } = req.body ?? {};
 

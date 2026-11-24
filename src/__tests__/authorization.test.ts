@@ -1,6 +1,7 @@
 import { jest } from "@jest/globals";
 import express from "express";
 import request from "supertest";
+import * as crypto from "node:crypto";
 import { requireAdminToken } from "../middleware/authorization.js";
 import { defaultAuditLogger } from "../services/auditLogger.js";
 
@@ -36,6 +37,19 @@ describe("requireAdminToken", () => {
 
     expect(res.body).toEqual({ success: true });
     expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses crypto.timingSafeEqual when checking the admin token", async () => {
+    process.env.CHRONOPAY_ADMIN_TOKEN = ADMIN_TOKEN;
+    const timingSafeEqualSpy = jest.spyOn(crypto, "timingSafeEqual");
+
+    await request(appWithAdminTokenRoute())
+      .get("/admin-action")
+      .set("x-chronopay-admin-token", ADMIN_TOKEN)
+      .expect(200);
+
+    expect(timingSafeEqualSpy).toHaveBeenCalledTimes(1);
+    timingSafeEqualSpy.mockRestore();
   });
 
   it("returns 401 with an AUTHZ_MISSING audit when the token header is absent", async () => {

@@ -79,6 +79,16 @@ router.post("/wire", requireAuth(), requireFreshMfa({ maxAgeMs: 5 * 60 * 1000 })
 - `403` — invalid signature, wrong subject, or claims malformed
 - `500` — MFA not configured
 
+### Mounted step-up routes
+
+| Route | Identity / subject |
+| --- | --- |
+| `POST /api/v1/admin/refunds` | `x-chronopay-admin-token`; subject from `x-chronopay-user-id` (fallback `admin`) |
+| `POST /api/v1/admin/webhooks/rotate` | `x-chronopay-admin-token`; subject from `x-chronopay-user-id` (fallback `admin`) |
+| `POST /api/v1/admin/payouts/:transactionId/replay/approve` | admin role; subject from `x-chronopay-user-id` |
+| `POST /api/v1/admin/escrow/pause` | admin role; subject from `x-chronopay-user-id` |
+| `POST /api/v1/booking-intents/:id/refund` | subject from `x-chronopay-user-id`; only when `MFA_REQUIRED_FOR_REFUNDS` is enabled (default in production) |
+
 ## Semantics
 
 - **Clock**: TOTP is computed for `Math.floor(nowMs / 1000 / period)`; `MFA_WINDOW_PERIODS`
@@ -107,6 +117,7 @@ router.post("/wire", requireAuth(), requireFreshMfa({ maxAgeMs: 5 * 60 * 1000 })
 | `MFA_FRESHNESS_MS` | Freshness window after a successful verify | No | `900000` (15 min) |
 | `MFA_WINDOW_PERIODS` | Accepted 30s windows (including current) | No | `1` |
 | `MFA_CHALLENGE_TTL_SEC` | Challenge token lifetime | No | `300` |
+| `MFA_REQUIRED_FOR_REFUNDS` | Require step-up MFA on customer booking refunds | No | on in production, off otherwise |
 
 \* Missing secrets fail closed: enroll/verify return `500 MfaConfigurationError` (the routes are
 permissionless beyond authentication, so an unconfigured deployment cannot silently skip MFA).

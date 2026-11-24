@@ -1,6 +1,7 @@
 import request from "supertest";
 import app from "../app.js";
 import { invalidateSlotsCache } from "../cache/slotCache.js";
+import { createInMemorySlotRepository } from "../repositories/slotRepository.js";
 
 describe("GET /api/v1/slots cache contract", () => {
   beforeEach(async () => {
@@ -8,7 +9,7 @@ describe("GET /api/v1/slots cache contract", () => {
   });
 
   it("should return X-Cache: MISS on the first request and X-Cache: HIT on the second", async () => {
-    const expressApp = app();
+    const expressApp = app({ slotRepository: createInMemorySlotRepository() });
     // First request - should be MISS
     const res1 = await request(expressApp)
       .get("/api/v1/slots")

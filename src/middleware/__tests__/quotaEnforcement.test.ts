@@ -24,6 +24,8 @@ import type { Request, Response, NextFunction } from "express";
 const mockCheckAndConsume = jest.fn();
 const mockGetPool = jest.fn();
 const mockLoggerError = jest.fn();
+const mockQuotaCheckFailureInc = jest.fn();
+let mockQuotaFailMode: "open" | "closed" = "open";
 
 // SqlQuotaStore constructor — we capture the args to verify pool is passed in
 let lastStoreArg: unknown = undefined;
@@ -48,6 +50,20 @@ jest.unstable_mockModule("../../utils/logger.js", () => ({
     info: jest.fn(),
     warn: jest.fn(),
     debug: jest.fn(),
+  },
+}));
+
+jest.unstable_mockModule("../../config/config.service.js", () => ({
+  configService: {
+    get quotaFailMode() {
+      return mockQuotaFailMode;
+    },
+  },
+}));
+
+jest.unstable_mockModule("../../metrics.js", () => ({
+  partnerQuotaCheckFailures: {
+    labels: jest.fn(() => ({ inc: mockQuotaCheckFailureInc })),
   },
 }));
 
@@ -114,6 +130,8 @@ describe("enforceQuota middleware", () => {
     mockGetPool.mockReturnValue(fakePool);
     mockCheckAndConsume.mockResolvedValue(makeAllowedResult());
     mockLoggerError.mockReset();
+    mockQuotaFailMode = "open";
+    mockQuotaCheckFailureInc.mockReset();
   });
 
   afterEach(() => {
@@ -398,6 +416,15 @@ describe("enforceQuota middleware", () => {
       expect(next).toHaveBeenCalledWith();
     });
 
+    it("increments the failure counter with mode=open", async () => {
+      mockCheckAndConsume.mockRejectedValue(new Error("DB connection lost"));
+      await enforceQuota(makeReq("tok_abc") as Request, makeRes() as Response, next);
+
+      expect(mockQuotaCheckFailureInc).toHaveBeenCalledTimes(1);
+      expect((await import("../../metrics.js")).partnerQuotaCheckFailures.labels)
+        .toHaveBeenCalledWith("open");
+    });
+
     it("does not send any HTTP response when failing open", async () => {
       mockCheckAndConsume.mockRejectedValue(new Error("DB connection lost"));
       const req = makeReq("tok_abc");
@@ -407,6 +434,37 @@ describe("enforceQuota middleware", () => {
 
       expect(res.status).not.toHaveBeenCalled();
       expect(res.json).not.toHaveBeenCalled();
+    });
+
+    describe("when configured to fail closed", () => {
+      it("returns 503 with the standard error envelope and Retry-After without calling next()", async () => {
+        mockQuotaFailMode = "closed";
+        mockCheckAndConsume.mockRejectedValue(new Error("DB connection lost"));
+        const req = makeReq("tok_abc");
+        const res = makeRes();
+
+        await enforceQuota(req as Request, res as Response, next);
+
+        expect(res.status).toHaveBeenCalledWith(503);
+        expect(res.setHeader).toHaveBeenCalledWith("Retry-After", "30");
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          code: "DEPENDENCY_UNAVAILABLE",
+          error: "Partner quota service is currently unavailable",
+        });
+        expect(next).not.toHaveBeenCalled();
+      });
+
+      it("increments the failure counter with mode=closed", async () => {
+        mockQuotaFailMode = "closed";
+        mockCheckAndConsume.mockRejectedValue(new Error("DB connection lost"));
+
+        await enforceQuota(makeReq("tok_abc") as Request, makeRes() as Response, next);
+
+        expect(mockQuotaCheckFailureInc).toHaveBeenCalledTimes(1);
+        expect((await import("../../metrics.js")).partnerQuotaCheckFailures.labels)
+          .toHaveBeenCalledWith("closed");
+      });
     });
 
     it("calls logger.error once with a quota-related context string", async () => {
