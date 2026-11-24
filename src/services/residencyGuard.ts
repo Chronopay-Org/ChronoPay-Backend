@@ -24,6 +24,7 @@ import { sendErrorResponse } from "../errors/sendError.js";
 import { ForbiddenError } from "../errors/AppError.js";
 import { ERROR_CODES } from "../errors/errorCodes.js";
 import { residencyEgressBreachAttempts } from "../metrics.js";
+import { constantTimeEquals } from "../utils/constantTimeEquals.js";
 import { logger } from "../utils/logger.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -80,22 +81,81 @@ export function getLocalRegions(): string[] {
   return raw.split(",").map((r) => r.trim()).filter(Boolean);
 }
 
+/**
+ * Whether `x-region` and `x-data-region` headers should be trusted.
+ * Defaults to `false` so untrusted callers cannot spoof regions.
+ */
+export function isTrustedRegionHeadersEnabled(): boolean {
+  const raw = process.env.RESIDENCY_TRUST_REGION_HEADERS;
+  if (raw === undefined) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "true" || normalized === "1";
+}
+
+/**
+ * Shared secret required in `x-edge-secret` when trusted region headers are enabled.
+ */
+export function getResidencyEdgeSecret(): string | undefined {
+  const raw = process.env.RESIDENCY_EDGE_SECRET;
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+let ignoredRegionHeadersWarned = false;
+
+/**
+ * Reset the one-time warning flag for ignored region headers (intended for tests).
+ */
+export function resetIgnoredRegionHeadersWarning(): void {
+  ignoredRegionHeadersWarned = false;
+}
+
+function warnIgnoredRegionHeadersOnce(headerName: string): void {
+  if (ignoredRegionHeadersWarned) return;
+  ignoredRegionHeadersWarned = true;
+  logger.warn(
+    { header: headerName },
+    "residency guard: ignoring untrusted region header; set RESIDENCY_TRUST_REGION_HEADERS=true and a matching x-edge-secret to honour region headers",
+  );
+}
+
+/**
+ * Verify that the incoming request is allowed to supply `x-region` / `x-data-region`.
+ * Requires `RESIDENCY_TRUST_REGION_HEADERS=true` and a matching `x-edge-secret`
+ * compared with constant-time equality.
+ */
+function hasTrustedRegionHeaders(req: Request): boolean {
+  if (!isTrustedRegionHeadersEnabled()) return false;
+  const expectedSecret = getResidencyEdgeSecret();
+  if (!expectedSecret) return false;
+  const providedSecret = req.header("x-edge-secret");
+  if (!providedSecret) return false;
+  return constantTimeEquals(providedSecret, expectedSecret);
+}
+
 // ─── Region detection ─────────────────────────────────────────────────────────
 
 /**
  * Detect the request origin region.
  *
  * Priority:
- * 1. `x-region` header (set by edge proxy or client)
+ * 1. `x-region` header (only when `RESIDENCY_TRUST_REGION_HEADERS=true` and
+ *    `x-edge-secret` matches `RESIDENCY_EDGE_SECRET`)
  * 2. `CloudFront-Viewer-Country` header (CloudFront geo-header)
  * 3. `x-forwarded-for` geo lookup (simplified — just logs; full GeoIP
  *    requires a GeoIP database integration)
  * 4. Default data region fallback
  */
 export function detectRequestRegion(req: Request): string {
-  // Explicit region header from edge proxy
+  // Explicit region header from trusted edge proxy only
   const regionHeader = req.header("x-region");
-  if (regionHeader) return regionHeader.trim().toLowerCase();
+  if (regionHeader) {
+    if (hasTrustedRegionHeaders(req)) {
+      return regionHeader.trim().toLowerCase();
+    }
+    warnIgnoredRegionHeadersOnce("x-region");
+  }
 
   // CloudFront geo-header
   const cfCountry = req.header("CloudFront-Viewer-Country");
@@ -117,12 +177,19 @@ export function detectRequestRegion(req: Request): string {
  * Determine the data region for the current request.
  *
  * Priority:
- * 1. `x-data-region` header (authoritative — set by data routing layer)
+ * 1. `x-data-region` header (only when `RESIDENCY_TRUST_REGION_HEADERS=true` and
+ *    `x-edge-secret` matches `RESIDENCY_EDGE_SECRET`)
  * 2. Default data region from environment
  */
 export function detectDataRegion(req: Request): string {
   const dataRegion = req.header("x-data-region");
-  return dataRegion?.trim().toLowerCase() ?? getDefaultDataRegion();
+  if (dataRegion) {
+    if (hasTrustedRegionHeaders(req)) {
+      return dataRegion.trim().toLowerCase();
+    }
+    warnIgnoredRegionHeadersOnce("x-data-region");
+  }
+  return getDefaultDataRegion();
 }
 
 // ─── Waiver store implementations ─────────────────────────────────────────────
