@@ -130,7 +130,7 @@ function resolveConnectionUrl(): string {
     return legacyUrl;
   }
 
-  throw new Error(
+      throw new Error(
     "Database connection URL is not set. " +
       "Set DATABASE_URL to a PostgreSQL connection string, e.g. " +
       "postgresql://user:password@localhost:5432/chronopay",

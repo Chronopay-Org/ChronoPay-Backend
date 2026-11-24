@@ -21,6 +21,8 @@
  * exceedingly rare for a financial system).
  */
 
+import { getRedisClient, type RedisClient } from "../cache/redisClient.js";
+
 export interface IdempotencyStore {
   /**
    * Atomically claim processing rights for `eventKey`. Returns:
@@ -43,11 +45,17 @@ export function idempotencyKey(eventKey: string): string {
 
 const IDEMPOTENCY_TTL_SECONDS = 7 * 24 * 60 * 60;
 
+function requireRedisClient(): RedisClient {
+  const client = getRedisClient();
+  if (!client) {
+    throw new Error("Redis client is not available");
+  }
+  return client;
+}
+
 export class RedisIdempotencyStore implements IdempotencyStore {
   async claim(eventKey: string): Promise<boolean> {
-    // Lazy import via singleton to avoid pulling ioredis into test paths.
-    const { getRedisClient } = await import("../utils/redis.js");
-    const result = await getRedisClient().set(
+    const result = await requireRedisClient().set(
       idempotencyKey(eventKey),
       "1",
       "EX",
@@ -58,8 +66,7 @@ export class RedisIdempotencyStore implements IdempotencyStore {
   }
 
   async release(eventKey: string): Promise<void> {
-    const { getRedisClient } = await import("../utils/redis.js");
-    await getRedisClient().del(idempotencyKey(eventKey));
+    await requireRedisClient().del(idempotencyKey(eventKey));
   }
 }
 

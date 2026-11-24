@@ -8,6 +8,9 @@ import { closePool } from "./db/connection.js";
 import { closePool as closeLegacyPool } from "./db/pool.js";
 import { closeRedisClient } from "./cache/redisClient.js";
 import { stopScheduler } from "./scheduler/reminderScheduler.js";
+import { runRefundableHoldSweeper } from "./scheduler/refundableHoldSweeper.js";
+import { sharedHoldRepository } from "./scheduler/refundableHoldContainer.js";
+import { sharedSchedulingService } from "./services/schedulingContainer.js";
 
 const config = loadEnvConfig();
 const lifecycle = new ApplicationLifecycle(
@@ -19,6 +22,27 @@ const lifecycle = new ApplicationLifecycle(
   Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 30_000),
 );
 lifecycle.registerStop("reminders", stopScheduler);
+
+// ─── Recurrence Occurrence Materializer ──────────────────────────────────────
+// Rolls active recurrence series forward to the configured horizon.
+(async () => {
+  if (process.env.OCCURRENCE_MATERIALIZER_DISABLED === "true") {
+    logger.info("occurrence-materializer disabled via OCCURRENCE_MATERIALIZER_DISABLED");
+    return;
+  }
+
+  const { createOccurrenceMaterializerScheduler } = await import(
+    "./scheduler/occurrenceMaterializerScheduler.js"
+  );
+  if (lifecycle.isShuttingDown) return;
+
+  const scheduler = createOccurrenceMaterializerScheduler({
+    intervalMs: Number(process.env.OCCURRENCE_MATERIALIZER_INTERVAL_MS) || undefined,
+    isShuttingDown: () => lifecycle.isShuttingDown,
+  });
+  lifecycle.registerStop("occurrence-materializer", () => scheduler.stop());
+  scheduler.start();
+})();
 
 // Evaluates supplier tier alerts hourly when the alert service is enabled.
 (async () => {
@@ -49,6 +73,22 @@ lifecycle.registerStop("reminders", stopScheduler);
   lifecycle.registerStop("tier-alert-scheduler", () => scheduler.stop());
   scheduler.start();
   logger.info("tier-alert-scheduler started");
+})();
+
+// Runs the SOC2 access-review worker; set ACCESS_REVIEW_WORKER_DISABLED=true to skip.
+(async () => {
+  if (process.env.ACCESS_REVIEW_WORKER_DISABLED === "true") {
+    logger.info("access-review-worker disabled via ACCESS_REVIEW_WORKER_DISABLED");
+    return;
+  }
+
+  const { startAccessReviewWorker, stopAccessReviewWorker } = await import(
+    "./scheduler/accessReviewWorker.js"
+  );
+  if (lifecycle.isShuttingDown) return;
+  lifecycle.registerStop("access-review", stopAccessReviewWorker);
+  startAccessReviewWorker();
+  logger.info("access-review-worker started");
 })();
 
 // Validate pinned escrow contract hash on startup
@@ -241,6 +281,22 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   );
   const { bookingIntentContainer } = await import(
     "./modules/booking-intents/bookingIntentContainer.js"
+// ─── Expiry Cleanup Worker (#1425) ──────────────────────────────────────────
+// Expires stale pending booking intents and soft-expires / deletes checkout
+// sessions whose TTL has passed.  Set EXPIRY_CLEANUP_DISABLED=true to skip.
+(async () => {
+  if (process.env.EXPIRY_CLEANUP_DISABLED === "true") {
+    logger.info("expiry-cleanup-worker disabled via EXPIRY_CLEANUP_DISABLED");
+    return;
+  }
+
+  const { runExpiryCleanupWorker } = await import("./scheduler/expiryCleanupWorker.js");
+  const { InMemoryBookingIntentRepository } = await import(
+    "./modules/booking-intents/booking-intent-repository.js"
+  );
+  const { InMemorySlotRepository } = await import("./modules/slots/slot-repository.js");
+  const { BookingIntentService } = await import(
+    "./modules/booking-intents/booking-intent-service.js"
   );
 
   if (lifecycle.isShuttingDown) return;
@@ -260,6 +316,23 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   lifecycle.registerStop("hold-auto-refund", () => worker.stop());
   worker.start();
   logger.info("hold-auto-refund worker started");
+  const bookingIntentRepository = new InMemoryBookingIntentRepository();
+  const slotRepository = new InMemorySlotRepository();
+  const bookingIntentService = new BookingIntentService(bookingIntentRepository, slotRepository);
+
+  const controller = new AbortController();
+  const worker = runExpiryCleanupWorker(controller.signal, {
+    bookingIntentService,
+    bookingIntentRepository,
+  }).catch((err: Error) => {
+    logger.error({ err }, "expiry-cleanup-worker exited unexpectedly");
+  });
+
+  lifecycle.registerStop("expiry-cleanup", async () => {
+    controller.abort();
+    await worker;
+  });
+  logger.info("expiry-cleanup-worker started");
 })();
 
 // ─── Settlement Finality Reconciler (#804) ─────────────────────────────────
@@ -296,6 +369,69 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   lifecycle.registerStop("settlement-reconciler", () => reconciler.stop());
 
   logger.info("settlement-reconciler started");
+})();
+
+// ─── Refundable Hold Sweeper (#1426) ─────────────────────────────────────────
+// Periodically scans for expired refundable holds and releases slot capacity
+// back to the marketplace.  Emits hold_released events that invalidate the
+// search cache.  Set REFUNDABLE_HOLD_SWEEPER_DISABLED=true to skip.
+if (process.env.REFUNDABLE_HOLD_SWEEPER_DISABLED === "true") {
+  logger.info("refundable-hold-sweeper disabled via REFUNDABLE_HOLD_SWEEPER_DISABLED");
+} else {
+  const sweepIntervalMs = Number(process.env.REFUNDABLE_HOLD_SWEEPER_INTERVAL_MS) || undefined;
+  const sweepController = new AbortController();
+  const sweepWorker = runRefundableHoldSweeper(
+    sweepController.signal,
+    { holdRepository: sharedHoldRepository, schedulingService: sharedSchedulingService },
+    { intervalMs: sweepIntervalMs },
+  ).catch((err: Error) => {
+    logger.error({ err }, "refundable-hold-sweeper exited unexpectedly");
+  });
+  lifecycle.registerStop("refundable-hold-sweeper", async () => {
+    sweepController.abort();
+    await sweepWorker;
+  });
+  logger.info(
+    { intervalMs: sweepIntervalMs ?? 5_000 },
+    "refundable-hold-sweeper started",
+  );
+}
+// ─── Timezone Drift Monitor (#1427) ─────────────────────────────────────────
+// Scans real slots (shared process-wide slot repository) for ambiguous or
+// missing timezone data and updates the tzDrift* gauges. Set
+// TZ_DRIFT_MONITOR_DISABLED=true to skip.
+(async () => {
+  if (process.env.TZ_DRIFT_MONITOR_DISABLED === "true") {
+    logger.info("tz-drift-monitor disabled via TZ_DRIFT_MONITOR_DISABLED");
+    return;
+  }
+
+  const { startTzDriftMonitor } = await import("./scheduler/tzDriftMonitorWiring.js");
+  const { slotRepository } = await import("./modules/booking-intents/bookingIntentContainer.js");
+
+  if (lifecycle.isShuttingDown) return;
+  startTzDriftMonitor(lifecycle, slotRepository);
+// ─── Escrow Event Listener ───────────────────────────────────────────────────
+// Polls escrow contract events and projects them onto local booking state with
+// Redis-backed cursor and idempotency stores. Starts only when
+// ESCROW_LISTENER_ENABLED=true and ESCROW_CONTRACT_ADDRESSES is non-empty.
+(async () => {
+  if (process.env.ESCROW_LISTENER_ENABLED !== "true") {
+    logger.info("escrow-listener disabled (set ESCROW_LISTENER_ENABLED=true to enable)");
+    return;
+  }
+
+  const { startEscrowListener } = await import("./scheduler/escrowListenerBootstrap.js");
+  if (lifecycle.isShuttingDown) return;
+
+  const listener = startEscrowListener({
+    env: process.env,
+    shouldStop: () => lifecycle.isShuttingDown,
+  });
+  if (!listener) return;
+
+  lifecycle.registerStop("escrow-listener", () => listener.stop());
+  logger.info({ instanceId: listener.instanceId }, "escrow-listener started");
 })();
 
 const PORT = config.port || 3001;

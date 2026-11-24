@@ -21,7 +21,7 @@ describe("Admin payout quarantine endpoints", () => {
   it("lists quarantined payouts and releases one by transaction id", async () => {
     const { getPayoutQuarantineService } = await import("../services/quarantineStore.js");
     const service = getPayoutQuarantineService();
-    service.recordFailure({
+    await service.recordFailure({
       payoutId: "tx-77",
       supplierId: "supplier-alpha",
       errorClass: "NETWORK",

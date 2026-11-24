@@ -1,8 +1,31 @@
-// @ts-nocheck
 import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
-import { queryWithSpan } from "../dbInstrumentation.js";
+import { queryWithSpan, instrumentPool } from "../dbInstrumentation.js";
 import { addSpanExporter, removeSpanExporter } from "../spanExporter.js";
 import type { Span } from "../hooks.js";
+import type { Pool, QueryResult } from "pg";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Build a minimal fake pool whose query method is a jest mock. */
+function makeFakePool(result: Partial<QueryResult> = { rowCount: 1, rows: [] }): Pool & {
+  query: jest.Mock;
+} {
+  const pool = {
+    query: jest.fn().mockResolvedValue(result),
+  } as unknown as Pool & { query: jest.Mock };
+  return pool;
+}
+
+/** Convenience: extract the bound `runQuery` from a fake pool. */
+function runQueryOf(pool: Pool & { query: jest.Mock }) {
+  return pool.query.bind(pool) as (text: string, params?: unknown[]) => Promise<QueryResult>;
+}
+
+// ---------------------------------------------------------------------------
+// Suite
+// ---------------------------------------------------------------------------
 
 describe("DB Instrumentation", () => {
   const collectedSpans: Span[] = [];
@@ -21,13 +44,14 @@ describe("DB Instrumentation", () => {
     collectedSpans.length = 0;
   });
 
+  // -------------------------------------------------------------------------
+  // queryWithSpan
+  // -------------------------------------------------------------------------
   describe("queryWithSpan", () => {
     it("should wrap query execution in a span", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
+      const pool = makeFakePool();
 
-      await queryWithSpan(mockPool, "SELECT 1", []);
+      await queryWithSpan(runQueryOf(pool), "SELECT 1", []);
 
       expect(collectedSpans).toHaveLength(1);
       expect(collectedSpans[0].name).toBe("db.query");
@@ -35,99 +59,90 @@ describe("DB Instrumentation", () => {
     });
 
     it("should strip query parameters from statement", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
+      const pool = makeFakePool();
 
-      await queryWithSpan(mockPool, "SELECT * FROM users WHERE id = $1 AND email = $2", [
-        1,
-        "user@example.com",
-      ]);
+      await queryWithSpan(
+        runQueryOf(pool),
+        "SELECT * FROM users WHERE id = $1 AND email = $2",
+        [1, "user@example.com"],
+      );
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      const statement = span.attributes["db.statement"] as string;
-
-      // Should not contain actual parameter values
+      const statement = collectedSpans[0].attributes["db.statement"] as string;
       expect(statement).not.toContain("user@example.com");
       expect(statement).not.toContain("1");
-      // Should contain parameter placeholders
       expect(statement).toContain("$n");
     });
 
-    it("should record query operation type", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
+    it("should record query operation type for INSERT", async () => {
+      const pool = makeFakePool();
 
-      await queryWithSpan(mockPool, "INSERT INTO users (name) VALUES ($1)", ["Alice"]);
+      await queryWithSpan(
+        runQueryOf(pool),
+        "INSERT INTO users (name) VALUES ($1)",
+        ["Alice"],
+      );
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      expect(span.attributes["db.operation"]).toBe("insert");
+      expect(collectedSpans[0].attributes["db.operation"]).toBe("insert");
     });
 
     it("should handle SELECT operations", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 5, rows: [] }),
-      } as any;
+      const pool = makeFakePool({ rowCount: 5, rows: [] });
 
-      await queryWithSpan(mockPool, "SELECT * FROM users WHERE active = $1", [true]);
+      await queryWithSpan(
+        runQueryOf(pool),
+        "SELECT * FROM users WHERE active = $1",
+        [true],
+      );
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      expect(span.attributes["db.operation"]).toBe("select");
+      expect(collectedSpans[0].attributes["db.operation"]).toBe("select");
     });
 
     it("should handle UPDATE operations", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 2, rows: [] }),
-      } as any;
+      const pool = makeFakePool({ rowCount: 2, rows: [] });
 
-      await queryWithSpan(mockPool, "UPDATE users SET last_login = $1 WHERE id = $2", [
-        new Date(),
-        123,
-      ]);
+      await queryWithSpan(
+        runQueryOf(pool),
+        "UPDATE users SET last_login = $1 WHERE id = $2",
+        [new Date(), 123],
+      );
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      expect(span.attributes["db.operation"]).toBe("update");
+      expect(collectedSpans[0].attributes["db.operation"]).toBe("update");
     });
 
     it("should handle DELETE operations", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
+      const pool = makeFakePool();
 
-      await queryWithSpan(mockPool, "DELETE FROM users WHERE id = $1", [456]);
+      await queryWithSpan(
+        runQueryOf(pool),
+        "DELETE FROM users WHERE id = $1",
+        [456],
+      );
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      expect(span.attributes["db.operation"]).toBe("delete");
+      expect(collectedSpans[0].attributes["db.operation"]).toBe("delete");
     });
 
     it("should record parameter count", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
+      const pool = makeFakePool();
 
       await queryWithSpan(
-        mockPool,
+        runQueryOf(pool),
         "SELECT * FROM users WHERE id = $1 AND email = $2 AND status = $3",
         [1, "test@example.com", "active"],
       );
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      expect(span.attributes["db.param_count"]).toBe(3);
+      expect(collectedSpans[0].attributes["db.param_count"]).toBe(3);
     });
 
     it("should mark span as success", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [{ id: 1 }] }),
-      } as any;
+      const pool = makeFakePool({ rowCount: 1, rows: [{ id: 1 }] });
 
-      await queryWithSpan(mockPool, "SELECT * FROM users WHERE id = $1", [1]);
+      await queryWithSpan(runQueryOf(pool), "SELECT * FROM users WHERE id = $1", [1]);
 
       expect(collectedSpans).toHaveLength(1);
       const span = collectedSpans[0];
@@ -136,13 +151,12 @@ describe("DB Instrumentation", () => {
     });
 
     it("should mark span as error on query failure", async () => {
-      const mockPool = {
-        query: jest.fn().mockRejectedValue(new Error("Connection timeout")),
-      } as any;
+      const pool = makeFakePool();
+      (pool.query as jest.Mock).mockRejectedValue(new Error("Connection timeout"));
 
-      await expect(queryWithSpan(mockPool, "SELECT * FROM users", [])).rejects.toThrow(
-        "Connection timeout",
-      );
+      await expect(
+        queryWithSpan(runQueryOf(pool), "SELECT * FROM users", []),
+      ).rejects.toThrow("Connection timeout");
 
       expect(collectedSpans).toHaveLength(1);
       const span = collectedSpans[0];
@@ -152,23 +166,17 @@ describe("DB Instrumentation", () => {
     });
 
     it("should record query duration", async () => {
-      // Span start and end are both read with Date.now() (createChildContext
-      // and withSpan), so this drives the clock rather than sleeping. A real
-      // setTimeout(50) is not guaranteed to yield a 50ms Date.now() delta —
-      // timers can fire slightly early and Date.now() has millisecond
-      // resolution — so a real sleep made this assertion flaky (49 vs 50).
       let now = 1_000;
       const nowSpy = jest.spyOn(Date, "now").mockImplementation(() => now);
 
       try {
-        const mockPool = {
-          query: jest.fn().mockImplementation(() => {
-            now += 250; // pretend the query took 250ms
-            return Promise.resolve({ rowCount: 1, rows: [] });
-          }),
-        } as any;
+        const pool = makeFakePool();
+        (pool.query as jest.Mock).mockImplementation(() => {
+          now += 250;
+          return Promise.resolve({ rowCount: 1, rows: [] });
+        });
 
-        await queryWithSpan(mockPool, "SELECT 1", []);
+        await queryWithSpan(runQueryOf(pool), "SELECT 1", []);
 
         expect(collectedSpans).toHaveLength(1);
         const span = collectedSpans[0];
@@ -180,93 +188,129 @@ describe("DB Instrumentation", () => {
     });
 
     it("should limit statement length for long queries", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
-
+      const pool = makeFakePool();
       const longQuery = "SELECT " + "column, ".repeat(100);
-      await queryWithSpan(mockPool, longQuery, []);
+
+      await queryWithSpan(runQueryOf(pool), longQuery, []);
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      const statement = span.attributes["db.statement"] as string;
+      const statement = collectedSpans[0].attributes["db.statement"] as string;
       expect(statement.length).toBeLessThanOrEqual(200);
     });
 
     it("should pass through query result", async () => {
       const expectedResult = { rowCount: 3, rows: [{ id: 1 }, { id: 2 }, { id: 3 }] };
-      const mockPool = {
-        query: jest.fn().mockResolvedValue(expectedResult),
-      } as any;
+      const pool = makeFakePool(expectedResult);
 
-      const result = await queryWithSpan(mockPool, "SELECT * FROM users", []);
+      const result = await queryWithSpan(runQueryOf(pool), "SELECT * FROM users", []);
 
       expect(result).toEqual(expectedResult);
     });
 
     it("should handle queries without parameters", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
+      const pool = makeFakePool();
 
-      await queryWithSpan(mockPool, "SELECT COUNT(*) FROM users", undefined);
+      await queryWithSpan(runQueryOf(pool), "SELECT COUNT(*) FROM users", undefined);
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      expect(span.attributes["db.param_count"]).toBe(0);
+      expect(collectedSpans[0].attributes["db.param_count"]).toBe(0);
     });
 
-    it("should handle various SQL statement formats", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
+    it("should handle various SQL statement formats (leading whitespace)", async () => {
+      const pool = makeFakePool();
 
-      // Test with leading/trailing whitespace
-      await queryWithSpan(mockPool, "  SELECT * FROM users WHERE id = $1  ", [1]);
+      await queryWithSpan(
+        runQueryOf(pool),
+        "  SELECT * FROM users WHERE id = $1  ",
+        [1],
+      );
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      expect(span.attributes["db.operation"]).toBe("select");
+      expect(collectedSpans[0].attributes["db.operation"]).toBe("select");
     });
 
     it("should handle case-insensitive SQL operations", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
+      const pool = makeFakePool();
 
-      await queryWithSpan(mockPool, "select * FROM users WHERE id = $1", [1]);
+      await queryWithSpan(
+        runQueryOf(pool),
+        "select * FROM users WHERE id = $1",
+        [1],
+      );
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      expect(span.attributes["db.operation"]).toBe("select");
+      expect(collectedSpans[0].attributes["db.operation"]).toBe("select");
     });
 
     it("should preserve PostgreSQL as db system", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
+      const pool = makeFakePool();
 
-      await queryWithSpan(mockPool, "SELECT 1", []);
+      await queryWithSpan(runQueryOf(pool), "SELECT 1", []);
 
       expect(collectedSpans).toHaveLength(1);
-      const span = collectedSpans[0];
-      expect(span.attributes["db.system"]).toBe("postgresql");
+      expect(collectedSpans[0].attributes["db.system"]).toBe("postgresql");
     });
   });
 
+  // -------------------------------------------------------------------------
+  // nested queries
+  // -------------------------------------------------------------------------
   describe("nested queries", () => {
-    it("should nest query spans under parent span", async () => {
-      const mockPool = {
-        query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }),
-      } as any;
+    it("should produce one span per query call", async () => {
+      const pool = makeFakePool();
 
-      // Simulate parent span context
-      await queryWithSpan(mockPool, "SELECT 1", []);
-      await queryWithSpan(mockPool, "SELECT 2", []);
+      await queryWithSpan(runQueryOf(pool), "SELECT 1", []);
+      await queryWithSpan(runQueryOf(pool), "SELECT 2", []);
 
       expect(collectedSpans).toHaveLength(2);
       expect(collectedSpans[0].name).toBe("db.query");
       expect(collectedSpans[1].name).toBe("db.query");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // instrumentPool — no-recursion and idempotency
+  // -------------------------------------------------------------------------
+  describe("instrumentPool", () => {
+    it("should invoke the underlying query exactly once per wrapped call", async () => {
+      const pool = makeFakePool();
+      // Capture the original mock before instrumentPool replaces pool.query.
+      const originalMock = pool.query as jest.Mock;
+
+      instrumentPool(pool);
+      await pool.query("SELECT 1", []);
+
+      // The original mock must have been called exactly once — not recursively.
+      expect(originalMock.mock.calls.length).toBe(1);
+      expect(collectedSpans).toHaveLength(1);
+    });
+
+    it("double instrumentation does not nest spans", async () => {
+      const pool = makeFakePool();
+
+      instrumentPool(pool);
+      instrumentPool(pool); // second call must be a no-op
+      await pool.query("SELECT 1", []);
+
+      // Still exactly one span, not two.
+      expect(collectedSpans).toHaveLength(1);
+    });
+
+    it("double instrumentation does not cause the original to be called more than once", async () => {
+      // Track calls to the real underlying function separately.
+      let underlyingCalls = 0;
+      const pool = {
+        query: jest.fn().mockImplementation(() => {
+          underlyingCalls++;
+          return Promise.resolve({ rowCount: 1, rows: [] });
+        }),
+      } as unknown as Pool & { query: jest.Mock };
+
+      instrumentPool(pool);
+      instrumentPool(pool);
+      await pool.query("SELECT 1", []);
+
+      expect(underlyingCalls).toBe(1);
     });
   });
 });

@@ -1,6 +1,10 @@
 # Local development override for Docker Compose
 # This file is automatically loaded by docker-compose when running 'docker-compose up'
 # It overrides production settings for local development
+#
+# Dev-only credentials below are NOT production secrets.
+# After first start, run migrations once:
+#   docker compose run --rm api npm run migrate up
 
 services:
   api:
@@ -15,6 +19,15 @@ services:
       - NODE_ENV=development
       - PORT=${PORT:-3001}
       - DEBUG=*
+      - DATABASE_URL=postgres://chronopay:chronopay@postgres:5432/chronopay
+      - POSTGRESQL_URL=postgres://chronopay:chronopay@postgres:5432/chronopay
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=dev-only-insecure-jwt-secret-change-me
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       # Mount source code for hot reload during development
       - ./src:/app/src:ro
@@ -47,3 +60,47 @@ services:
     labels:
       - "com.chronopay.service=api"
       - "com.chronopay.environment=development"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: chronopay-postgres-dev
+    restart: "no"
+    environment:
+      - POSTGRES_USER=chronopay
+      - POSTGRES_PASSWORD=chronopay
+      - POSTGRES_DB=chronopay
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chronopay -d chronopay"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    labels:
+      - "com.chronopay.service=postgres"
+      - "com.chronopay.environment=development"
+
+  redis:
+    image: redis:7-alpine
+    container_name: chronopay-redis-dev
+    restart: "no"
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    labels:
+      - "com.chronopay.service=redis"
+      - "com.chronopay.environment=development"
+
+volumes:
+  postgres-data:
+  redis-data:

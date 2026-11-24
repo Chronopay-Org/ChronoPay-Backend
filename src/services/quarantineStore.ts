@@ -1,8 +1,15 @@
-// src/services/quarantineStore.ts
 import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
+import {
+  InMemoryPayoutQuarantineRepository,
+  type PayoutQuarantineEntry,
+  type PayoutQuarantineRepository,
+  type RecordPayoutFailureInput,
+  type ReleasePayoutQuarantineOptions,
+} from "../repositories/payoutQuarantineRepository.js";
+import { defaultPgPayoutQuarantineRepository } from "../repositories/pgPayoutQuarantineRepository.js";
 
-/** Simple in‑memory store for quarantine intents. */
+/** Simple in-memory store for quarantine intents. */
 export class QuarantineStore {
   private readonly store = new Map<string, any>();
 
@@ -24,35 +31,12 @@ export class QuarantineStore {
   }
 }
 
-export type PayoutQuarantineStatus = "active" | "quarantined" | "released";
-
-export interface PayoutQuarantineEntry {
-  payoutId: string;
-  supplierId?: string;
-  totalFailures: number;
-  threshold: number;
-  status: PayoutQuarantineStatus;
-  lastErrorClass?: string;
-  lastErrorMessage?: string;
-  quarantinedAt?: string;
-  releasedAt?: string;
-  quarantineReason?: string;
-  releaseReason?: string;
-  releasedBy?: string;
-}
-
-export interface RecordPayoutFailureInput {
-  payoutId: string;
-  supplierId?: string;
-  errorClass?: string;
-  errorMessage?: string;
-  threshold?: number;
-}
-
-export interface ReleasePayoutQuarantineOptions {
-  releasedBy?: string;
-  reason?: string;
-}
+export type {
+  PayoutQuarantineEntry,
+  PayoutQuarantineStatus,
+  RecordPayoutFailureInput,
+  ReleasePayoutQuarantineOptions,
+} from "../repositories/payoutQuarantineRepository.js";
 
 export interface RecordPayoutFailureResult extends PayoutQuarantineEntry {
   quarantined: boolean;
@@ -61,94 +45,67 @@ export interface RecordPayoutFailureResult extends PayoutQuarantineEntry {
 export const payoutQuarantineEvents = new EventEmitter();
 
 export class PayoutQuarantineService {
-  private readonly failureCounts = new Map<string, number>();
-  private readonly quarantineEntries = new Map<string, PayoutQuarantineEntry>();
+  private readonly repository: PayoutQuarantineRepository;
 
-  constructor(private readonly options: { defaultThreshold?: number } = {}) {}
+  constructor(
+    private readonly options: {
+      defaultThreshold?: number;
+      repository?: PayoutQuarantineRepository;
+    } = {},
+  ) {
+    this.repository =
+      options.repository ?? new InMemoryPayoutQuarantineRepository();
+  }
 
-  recordFailure(input: RecordPayoutFailureInput): RecordPayoutFailureResult {
-    const threshold = input.threshold ?? this.options.defaultThreshold ?? 3;
-    const totalFailures = (this.failureCounts.get(input.payoutId) ?? 0) + 1;
-    this.failureCounts.set(input.payoutId, totalFailures);
-
-    const existing = this.quarantineEntries.get(input.payoutId);
-    const now = new Date().toISOString();
-    const entry: PayoutQuarantineEntry = {
-      payoutId: input.payoutId,
-      supplierId: input.supplierId ?? existing?.supplierId,
-      totalFailures,
+  async recordFailure(
+    input: RecordPayoutFailureInput,
+  ): Promise<RecordPayoutFailureResult> {
+    const threshold =
+      input.threshold ?? this.options.defaultThreshold ?? 3;
+    const { entry, newlyQuarantined } = await this.repository.upsert({
+      ...input,
       threshold,
-      status: existing?.status === "released" ? "active" : existing?.status ?? "active",
-      lastErrorClass: input.errorClass ?? existing?.lastErrorClass,
-      lastErrorMessage: input.errorMessage ?? existing?.lastErrorMessage,
-      quarantinedAt: existing?.quarantinedAt,
-      releasedAt: existing?.releasedAt,
-      quarantineReason: existing?.quarantineReason,
-      releaseReason: existing?.releaseReason,
-      releasedBy: existing?.releasedBy,
-    };
+      operationId: uuidv4(),
+    });
 
-    const isQuarantined = threshold <= 0 ? true : totalFailures >= threshold;
-    let quarantined = false;
-
-    if (isQuarantined && entry.status !== "quarantined") {
-      entry.status = "quarantined";
-      entry.quarantinedAt = now;
-      entry.quarantineReason = "failure-threshold-reached";
-      entry.releasedAt = undefined;
-      entry.releaseReason = undefined;
-      entry.releasedBy = undefined;
-      quarantined = true;
+    if (newlyQuarantined) {
       payoutQuarantineEvents.emit("alert", {
         type: "PAYOUT_QUARANTINED",
         payoutId: input.payoutId,
         supplierId: input.supplierId,
-        totalFailures,
+        totalFailures: entry.totalFailures,
         threshold,
         quarantineReason: entry.quarantineReason,
       });
     }
 
-    this.quarantineEntries.set(input.payoutId, entry);
-
-    return {
-      ...entry,
-      quarantined,
-    };
+    return { ...entry, quarantined: newlyQuarantined };
   }
 
-  release(payoutId: string, options: ReleasePayoutQuarantineOptions = {}): boolean {
-    const existing = this.quarantineEntries.get(payoutId);
-    if (!existing) {
-      return false;
-    }
-
-    const now = new Date().toISOString();
-    existing.status = "released";
-    existing.releasedAt = now;
-    existing.releaseReason = options.reason;
-    existing.releasedBy = options.releasedBy;
-    this.quarantineEntries.set(payoutId, existing);
-    this.failureCounts.delete(payoutId);
-    return true;
+  async release(
+    payoutId: string,
+    options: ReleasePayoutQuarantineOptions = {},
+  ): Promise<boolean> {
+    return this.repository.release(payoutId, options);
   }
 
-  isQuarantined(payoutId: string): boolean {
-    return this.quarantineEntries.get(payoutId)?.status === "quarantined";
+  async isQuarantined(payoutId: string): Promise<boolean> {
+    return (await this.repository.get(payoutId))?.status === "quarantined";
   }
 
-  get(payoutId: string): PayoutQuarantineEntry | undefined {
-    const entry = this.quarantineEntries.get(payoutId);
-    return entry ? { ...entry } : undefined;
+  get(payoutId: string): Promise<PayoutQuarantineEntry | undefined> {
+    return this.repository.get(payoutId);
   }
 
-  list(): PayoutQuarantineEntry[] {
-    return Array.from(this.quarantineEntries.values()).map((entry) => ({ ...entry }));
+  list(): Promise<PayoutQuarantineEntry[]> {
+    return this.repository.list();
   }
 
   reset(): void {
-    this.failureCounts.clear();
-    this.quarantineEntries.clear();
+    if (!this.repository.reset) {
+      throw new Error("Reset is only supported by the in-memory quarantine repository");
+    }
+    this.repository.reset();
   }
 }
 
@@ -156,11 +113,15 @@ let defaultPayoutQuarantineService: PayoutQuarantineService | null = null;
 
 export function getPayoutQuarantineService(): PayoutQuarantineService {
   if (!defaultPayoutQuarantineService) {
-    defaultPayoutQuarantineService = new PayoutQuarantineService();
+    defaultPayoutQuarantineService = new PayoutQuarantineService({
+      repository: defaultPgPayoutQuarantineRepository,
+    });
   }
   return defaultPayoutQuarantineService;
 }
 
 export function resetPayoutQuarantineState(): void {
-  defaultPayoutQuarantineService = null;
+  defaultPayoutQuarantineService = new PayoutQuarantineService({
+    repository: new InMemoryPayoutQuarantineRepository(),
+  });
 }

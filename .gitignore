@@ -20,3 +20,8 @@ test-full-suite.ipynb
 # Generated SBOM output (produced by `npm run sbom` / CI; not committed)
 sbom*.cyclonedx.json
 branch_structure.json
+
+# Jest --json result dumps (not config; jest.config.cjs is the real config)
+/jest.json
+/jest2.json
+jest-results*.json

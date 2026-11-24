@@ -14,7 +14,7 @@ Node.js (ESM) + TypeScript + Express 4. Entry point `src/index.ts` builds the ap
 | Routers (HTTP surface)                                               | `src/routes/`, `src/buyer-profile/`                                                  |
 | Business logic                                                       | `src/services/`, `src/modules/`, `src/scheduler/`                                    |
 | Persistence                                                          | `src/db/` (pg pool, migration runner, drift detector), `src/repositories/`           |
-| Redis (idempotency, caching, rate limits; three client entry points) | `src/cache/redisClient.ts`, `src/utils/redis.ts`, `src/middleware/rateLimitStore.ts` |
+| Redis (caching, dedup, escrow state, rate limits; two client entry points) | `src/cache/redisClient.ts`, `src/middleware/rateLimitStore.ts` |
 | Stellar / escrow clients                                             | `src/clients/`, `src/stellar/`, `src/lib/`                                           |
 | Cross-cutting middleware                                             | `src/middleware/` (auth, RBAC, CORS, rate limit, validation, error envelope)         |
 | Observability                                                        | `src/metrics/`, `src/tracing/`, pino logging, `ops/` (alert rules, dashboards)       |
@@ -45,7 +45,7 @@ new bookable slot record into `SlotRepository`. This composition fix verifies
 those actual existing effects rather than claiming SQL/on-chain slot creation.
 Persistent/bookable slot insertion and route authentication remain separate work.
 
-All business routes are under `/api/v1`. Interactive docs are served at `/api-docs` and the generated spec is in `openapi-spec.json` (`npm run generate-openapi`). The list below is derived from the router files; consult the OpenAPI spec and `docs/api/` for request/response shapes.
+All business routes are under `/api/v1`. Interactive docs are served at `/api-docs` and the generated spec is in `openapi-spec.json` (`npm run generate-openapi`). The OpenAPI info version follows the `version` in `package.json`. The list below is derived from the router files; consult the OpenAPI spec and `docs/api/` for request/response shapes.
 
 **Operational (unversioned):** `GET /health`, `/health/horizon`, `/health/ready`, `/ready`, `/live`, `/metrics`.
 
@@ -83,6 +83,11 @@ Copy `.env.example` to `.env`. Variables listed there:
 | `MFA_ISSUER`, `MFA_FRESHNESS_MS`, `MFA_WINDOW_PERIODS`, `MFA_CHALLENGE_TTL_SEC`           | Optional MFA tuning                                                                 |
 
 `src/config/env.ts` additionally reads (not all in `.env.example`): `NODE_ENV`, `HORIZON_URL`/`HORIZON_URLS`, `STELLAR_NETWORK_PASSPHRASE`, `ESCROW_CONTRACT_HASH`, `JWT_ISSUER`, `JWT_AUDIENCE`, `WEBHOOK_SECRET`, `INTERNAL_OVERRIDE_SECRET(_PREV)`, `INTERNAL_BYPASS_TOLERANCE_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, `REQUEST_TIMEOUT_MS`, `TRUST_PROXY`. See [docs/environment-validation.md](docs/environment-validation.md) for validation rules. A database connection is configured in `src/db/` (see [docs/database/migrations.md](docs/database/migrations.md)).
+
+The recurrence occurrence materializer runs hourly by default. Set
+`OCCURRENCE_MATERIALIZER_INTERVAL_MS` to change the interval, or set
+`OCCURRENCE_MATERIALIZER_DISABLED=true` to disable it. Shutdown clears the
+interval and waits for an active materialization pass to finish.
 
 ### Checkout redirect destinations (#1325)
 
