@@ -269,6 +269,23 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   logger.info("settlement-reconciler started");
 })();
 
+// ─── Timezone Drift Monitor (#1427) ─────────────────────────────────────────
+// Scans real slots (shared process-wide slot repository) for ambiguous or
+// missing timezone data and updates the tzDrift* gauges. Set
+// TZ_DRIFT_MONITOR_DISABLED=true to skip.
+(async () => {
+  if (process.env.TZ_DRIFT_MONITOR_DISABLED === "true") {
+    logger.info("tz-drift-monitor disabled via TZ_DRIFT_MONITOR_DISABLED");
+    return;
+  }
+
+  const { startTzDriftMonitor } = await import("./scheduler/tzDriftMonitorWiring.js");
+  const { slotRepository } = await import("./modules/booking-intents/bookingIntentContainer.js");
+
+  if (lifecycle.isShuttingDown) return;
+  startTzDriftMonitor(lifecycle, slotRepository);
+})();
+
 const PORT = config.port || 3001;
 
 /**
