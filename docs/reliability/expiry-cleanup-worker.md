@@ -13,10 +13,11 @@ The expiry cleanup worker is a periodic background job that keeps booking intent
 
 Environment variables:
 
+- `EXPIRY_CLEANUP_DISABLED` — set to `true` to prevent the worker from starting at boot (e.g. in single-shot scripts or test harnesses).
 - `BOOKING_INTENT_TTL_MS` — time in milliseconds before a pending booking intent is considered stale and expired. Defaults to `900000` (15 minutes).
 - `EXPIRY_SOFT_EXPIRY_GRACE_MS` — soft-expiry grace window in milliseconds before an expired checkout session can be hard deleted. Defaults to `3600000` (1 hour).
 - `EXPIRY_CLEANUP_BATCH_SIZE` — number of sessions processed per cleanup batch. Defaults to `100`.
-- `EXPIRY_CLEANUP_SAFETY_THRESHOLD` — maximum total candidate rows allowed in a single sweep before the worker skips the cleanup. Defaults to `1000`.
+- `EXPIRY_CLEANUP_SAFETY_THRESHOLD` — maximum total candidate rows allowed in a single sweep before the worker skips the cleanup and increments `expiry_cleanup_safety_brake_triggers_total`. Defaults to `1000`.
 - `EXPIRY_CLEANUP_INTERVAL_MS` — interval between periodic cleanup runs. Defaults to `300000` (5 minutes).
 
 ## Metrics

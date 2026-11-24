@@ -249,6 +249,22 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   );
   const { bookingIntentContainer } = await import(
     "./modules/booking-intents/bookingIntentContainer.js"
+// ─── Expiry Cleanup Worker (#1425) ──────────────────────────────────────────
+// Expires stale pending booking intents and soft-expires / deletes checkout
+// sessions whose TTL has passed.  Set EXPIRY_CLEANUP_DISABLED=true to skip.
+(async () => {
+  if (process.env.EXPIRY_CLEANUP_DISABLED === "true") {
+    logger.info("expiry-cleanup-worker disabled via EXPIRY_CLEANUP_DISABLED");
+    return;
+  }
+
+  const { runExpiryCleanupWorker } = await import("./scheduler/expiryCleanupWorker.js");
+  const { InMemoryBookingIntentRepository } = await import(
+    "./modules/booking-intents/booking-intent-repository.js"
+  );
+  const { InMemorySlotRepository } = await import("./modules/slots/slot-repository.js");
+  const { BookingIntentService } = await import(
+    "./modules/booking-intents/booking-intent-service.js"
   );
 
   if (lifecycle.isShuttingDown) return;
@@ -268,6 +284,23 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   lifecycle.registerStop("hold-auto-refund", () => worker.stop());
   worker.start();
   logger.info("hold-auto-refund worker started");
+  const bookingIntentRepository = new InMemoryBookingIntentRepository();
+  const slotRepository = new InMemorySlotRepository();
+  const bookingIntentService = new BookingIntentService(bookingIntentRepository, slotRepository);
+
+  const controller = new AbortController();
+  const worker = runExpiryCleanupWorker(controller.signal, {
+    bookingIntentService,
+    bookingIntentRepository,
+  }).catch((err: Error) => {
+    logger.error({ err }, "expiry-cleanup-worker exited unexpectedly");
+  });
+
+  lifecycle.registerStop("expiry-cleanup", async () => {
+    controller.abort();
+    await worker;
+  });
+  logger.info("expiry-cleanup-worker started");
 })();
 
 // ─── Settlement Finality Reconciler (#804) ─────────────────────────────────
