@@ -1,4 +1,5 @@
 import type { AuthContext } from "../../middleware/auth.js";
+import type { RefundableHoldRepository } from "../../scheduler/refundableHoldSweeper.js";
 import type { SlotRepository } from "../slots/slot-repository.js";
 import type {
   BookingIntentRecord,
@@ -116,6 +117,14 @@ export interface BookingIntentServiceOptions {
    * `cancellationPolicySnapshot`; defaults to the application singleton.
    */
   supplierOverrideStore?: SupplierCancellationOverrideStore;
+  /**
+   * Shared hold repository written to when a refundable_hold intent is
+   * created.  The sweeper loop reads from the same instance to find expired
+   * holds and release slot capacity.  When omitted no hold record is
+   * persisted (backward-compatible with tests that don't need sweep
+   * integration).
+   */
+  holdRepository?: RefundableHoldRepository;
 }
 
 export class BookingIntentError extends AppError {
@@ -150,6 +159,7 @@ export class BookingIntentService {
   private readonly strikeService: NoShowStrikeService;
   private readonly noShowGraceMsOption: number | undefined = undefined;
   private readonly graceWindowService: Pick<GraceWindowService, "resolve">;
+  private readonly holdRepository: RefundableHoldRepository | undefined;
 
   constructor(
     private readonly bookingIntentRepository: BookingIntentRepository,
@@ -183,6 +193,7 @@ export class BookingIntentService {
       }
       this.noShowGraceMsOption = Math.floor(options.noShowGraceMs);
     }
+    this.holdRepository = options.holdRepository;
   }
 
   /**
@@ -341,6 +352,19 @@ export class BookingIntentService {
     });
 
     this.schedulingService.reserveSlot(input.slotId);
+
+    // Register the hold in the shared repository so the sweeper can release
+    // expired holds and restore slot inventory automatically.
+    if (bookingType === "refundable_hold" && holdUntilMs !== undefined && this.holdRepository) {
+      this.holdRepository.create({
+        slotId: intent.slotId,
+        tenantId: (slot as { tenantId?: string }).tenantId,
+        customerId: actor.userId,
+        status: "active",
+        createdAt: this.nowMs(),
+        expiresAt: holdUntilMs,
+      });
+    }
 
     return intent;
   }
