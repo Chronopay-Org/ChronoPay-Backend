@@ -1,31 +1,31 @@
-// @ts-nocheck
 import type { Pool, QueryResult } from "pg";
 import { withSpan } from "./hooks.js";
 
+/** Symbol used to mark an already-instrumented pool so double-wrapping is a no-op. */
+const INSTRUMENTED = Symbol("chronopay.instrumented");
+
 /**
  * Strip sensitive information from SQL statements for safe logging.
- * Removes parameter values to prevent leaking PII or secrets.
+ * Replaces positional parameters ($1, $2, …) with $n and caps at 200 chars.
  */
 function stripQueryParameters(sql: string): string {
-  // Remove actual parameter values but keep structure
-  // Replace $1, $2, etc. with placeholders but keep the query shape
-  return sql.replace(/\$\d+/g, "$n").substring(0, 200); // limit to 200 chars
+  return sql.replace(/\$\d+/g, "$n").substring(0, 200);
 }
 
 /**
- * Wrap a PostgreSQL pool query in a span for distributed tracing.
- * @param pool - The PostgreSQL connection pool
- * @param text - The SQL query text
- * @param params - Optional query parameters
- * @returns The query result
+ * Wrap a single pool query call in a tracing span.
+ *
+ * @param runQuery - The bound original `pool.query` to invoke.
+ * @param text     - SQL query text.
+ * @param params   - Optional positional parameters.
  */
 export async function queryWithSpan(
-  pool: Pool,
+  runQuery: (text: string, params?: unknown[]) => Promise<QueryResult>,
   text: string,
   params?: unknown[],
 ): Promise<QueryResult> {
   const strippedQuery = stripQueryParameters(text);
-  const rowCount = (params?.length ?? 0) > 0 ? params?.length : 0;
+  const paramCount = params?.length ?? 0;
 
   return withSpan(
     "db.query",
@@ -33,23 +33,37 @@ export async function queryWithSpan(
       "db.system": "postgresql",
       "db.statement": strippedQuery,
       "db.operation": text.trim().split(/\s+/)[0].toLowerCase(),
-      "db.param_count": rowCount,
+      "db.param_count": paramCount,
     },
-    async () => {
-      return pool.query(text, params);
-    },
+    async () => runQuery(text, params),
   );
 }
 
+/** Narrow augmentation so TypeScript knows our symbol property exists on Pool. */
+interface InstrumentedPool extends Pool {
+  [INSTRUMENTED]?: true;
+}
+
 /**
- * Instrument a PostgreSQL pool to automatically wrap queries in spans.
- * This wraps the pool.query method.
+ * Monkey-patch `pool.query` to wrap every call in a tracing span.
+ *
+ * Idempotent: calling this twice on the same pool is a no-op — the second
+ * call returns immediately without adding another layer of wrapping.
  */
 export function instrumentPool(pool: Pool): void {
+  const p = pool as InstrumentedPool;
+  if (p[INSTRUMENTED]) return;
+
+  // Capture the original before we overwrite it.
+  const original = pool.query.bind(pool) as (
+    text: string,
+    params?: unknown[],
+  ) => Promise<QueryResult>;
+
   pool.query = (async (
     text: string,
     params?: unknown[],
-  ): Promise<QueryResult> => {
-    return queryWithSpan(pool, text, params);
-  }) as any;
+  ): Promise<QueryResult> => queryWithSpan(original, text, params)) as typeof pool.query;
+
+  p[INSTRUMENTED] = true;
 }
