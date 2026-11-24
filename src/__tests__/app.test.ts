@@ -298,7 +298,7 @@ describe("createApp", () => {
 
   describe("notFoundHandler and 404 envelope consistency", () => {
     it("returns 404 with JSON envelope for unknown paths", async () => {
-      const { notFoundHandler } = await import("../middleware/errorHandling.js");
+      const { notFoundHandler } = await import("../middleware/errorHandler.js");
       const express = (await import("express")).default;
       const request = (await import("supertest")).default;
 
@@ -318,7 +318,7 @@ describe("createApp", () => {
     });
 
     it("returns application/json Content-Type for 404 responses", async () => {
-      const { notFoundHandler } = await import("../middleware/errorHandling.js");
+      const { notFoundHandler } = await import("../middleware/errorHandler.js");
       const express = (await import("express")).default;
       const request = (await import("supertest")).default;
 
@@ -332,7 +332,7 @@ describe("createApp", () => {
     });
 
     it("returns success:false in 404 response body", async () => {
-      const { notFoundHandler } = await import("../middleware/errorHandling.js");
+      const { notFoundHandler } = await import("../middleware/errorHandler.js");
       const express = (await import("express")).default;
       const request = (await import("supertest")).default;
 
@@ -348,7 +348,7 @@ describe("createApp", () => {
     });
 
     it("includes HTTP method in 404 error message", async () => {
-      const { notFoundHandler } = await import("../middleware/errorHandling.js");
+      const { notFoundHandler } = await import("../middleware/errorHandler.js");
       const express = (await import("express")).default;
       const request = (await import("supertest")).default;
 
@@ -363,7 +363,7 @@ describe("createApp", () => {
     });
 
     it("does not leak stack traces in 404 responses", async () => {
-      const { notFoundHandler } = await import("../middleware/errorHandling.js");
+      const { notFoundHandler } = await import("../middleware/errorHandler.js");
       const express = (await import("express")).default;
       const request = (await import("supertest")).default;
 
@@ -378,7 +378,7 @@ describe("createApp", () => {
     });
 
     it("returns consistent envelope structure for all 404s", async () => {
-      const { notFoundHandler } = await import("../middleware/errorHandling.js");
+      const { notFoundHandler } = await import("../middleware/errorHandler.js");
       const express = (await import("express")).default;
       const request = (await import("supertest")).default;
 

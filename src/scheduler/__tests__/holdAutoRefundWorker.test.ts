@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
 import {
+  createHoldAutoRefundWorker,
   processHoldAutoRefundOnce,
   HoldAutoRefundWorkerConfig,
+  HoldAutoRefundResult,
 } from "../holdAutoRefundWorker.js";
 import type {
   BookingIntentRecord,
@@ -368,5 +370,53 @@ describe("processHoldAutoRefundOnce", () => {
       expect(result.skippedBecauseThreshold).toBeUndefined();
       expect(service.autoRefundHold).toHaveBeenCalledTimes(4);
     });
+  });
+});
+
+describe("createHoldAutoRefundWorker last result", () => {
+  async function waitForResult(
+    worker: ReturnType<typeof createHoldAutoRefundWorker>,
+  ): Promise<HoldAutoRefundResult> {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const result = worker.getLastResult();
+      if (result !== null) return result;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error("worker did not publish a result");
+  }
+
+  it("is null before the first cycle", () => {
+    const worker = createHoldAutoRefundWorker(
+      dependencies(makeRepository([]), makeService()),
+      { intervalMs: 60_000 },
+    );
+
+    expect(worker.getLastResult()).toBeNull();
+    worker.stop();
+  });
+
+  it("publishes the cycle result and keeps it readable after stop", async () => {
+    const repository = makeRepository([makeHold("h0")]);
+    const service = makeService({ refundAmounts: { h0: 500 } });
+    const worker = createHoldAutoRefundWorker(dependencies(repository, service), {
+      intervalMs: 60_000,
+    });
+    const expected: HoldAutoRefundResult = {
+      refundedCount: 1,
+      totalRefundedAmountCents: 500,
+      failedCount: 0,
+      failures: [],
+    };
+
+    worker.start();
+    try {
+      expect(await waitForResult(worker)).toEqual(expected);
+    } finally {
+      worker.stop();
+    }
+
+    expect(worker.getLastResult()).toEqual(expected);
+    expect(service.autoRefundHold).toHaveBeenCalledTimes(1);
   });
 });

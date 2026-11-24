@@ -51,6 +51,17 @@ IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY=<32-byte-base64>
 IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS=previous-2026-03:<32-byte-base64>
 ```
 
+## Startup validation
+
+These variables are parsed and validated when the configuration loads (`loadEnvConfig` in `src/config/env.ts`). Invalid values abort startup with an `EnvValidationError` that lists every problem. Error messages never contain key material.
+
+- `IDEMPOTENCY_REDIS_ENCRYPTION_ENABLED` accepts `true`, `false`, `1` or `0` (default `false`).
+- When enabled, both `IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY_ID` and `IDEMPOTENCY_REDIS_ENCRYPTION_ACTIVE_KEY` are required.
+- Every key must be valid base64 that decodes to exactly 32 bytes.
+- Each `IDEMPOTENCY_REDIS_ENCRYPTION_PREVIOUS_KEYS` entry must be `key-id:base64-key`. Duplicate key ids, including a previous key that reuses the active key id, are rejected.
+- Keys that are provided while encryption is disabled are still validated, and they remain available for decryption so existing encrypted records stay readable.
+- The active key is always included in the decryption set together with the previous keys.
+
 ## Rollout
 
 1. Generate a new 32-byte base64 key and store it in your secret manager.

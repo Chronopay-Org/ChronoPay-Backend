@@ -1,7 +1,7 @@
 // @ts-nocheck
 // src/utils/logValidator.test.ts
 import { validateLog, getLogValidatorErrors, validateLogEvent, getLogEventValidatorErrors, validateLogEventWithSchema } from "./logValidator";
-import { getLogSchemaRegistry, collectLogSchemaDrift } from "./logSchemaRegistry";
+import { getLogSchemaRegistry, collectLogSchemaDrift, EMITTED_LOG_EVENTS } from "./logSchemaRegistry";
 import { Writable } from "stream";
 import pino from "pino";
 import { readFileSync } from "node:fs";
@@ -470,6 +470,14 @@ describe("Log schema validation", () => {
       
       // With current implementation, drift should be empty since all emitted events are documented
       expect(drift).toEqual([]);
+    });
+
+    test("collectLogSchemaDrift reports emitted events missing from docs/log-schema.json", () => {
+      const drift = collectLogSchemaDrift([...EMITTED_LOG_EVENTS, "unregistered_event"]);
+
+      expect(drift).toEqual([
+        "Missing schema documentation for event: unregistered_event",
+      ]);
     });
 
     test("collectLogSchemaDrift handles undocumented events", () => {

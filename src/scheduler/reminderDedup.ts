@@ -1,4 +1,4 @@
-import { getRedisClient } from "../utils/redis.js";
+import { getRedisClient } from "../cache/redisClient.js";
 
 /** TTL for a dedup key: 25 hours covers any reasonable retry window. */
 const DEDUP_TTL_SECONDS = 25 * 60 * 60;
@@ -18,6 +18,9 @@ export function dedupKey(reminderId: string | number, triggerAt: number): string
  */
 export async function claimDelivery(reminderId: string | number, triggerAt: number): Promise<boolean> {
   const redis = getRedisClient();
+  if (!redis) {
+    throw new Error("Redis client is not available");
+  }
   const key = dedupKey(reminderId, triggerAt);
   // SET key "1" EX <ttl> NX — returns "OK" on success, null if key exists
   const result = await redis.set(key, "1", "EX", DEDUP_TTL_SECONDS, "NX");

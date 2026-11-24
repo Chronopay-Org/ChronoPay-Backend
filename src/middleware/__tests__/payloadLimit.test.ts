@@ -2,7 +2,7 @@ import { jest } from "@jest/globals";
 import express from "express";
 import request from "supertest";
 import { payloadLimit, ROUTE_PAYLOAD_LIMITS } from "../payloadLimit.js";
-import { jsonParseErrorHandler } from "../errorHandling.js";
+import { jsonParseErrorHandler } from "../errorHandler.js";
 
 jest.unstable_mockModule("../rateLimitStore.js", () => ({
   rateLimitRedisStore: {
