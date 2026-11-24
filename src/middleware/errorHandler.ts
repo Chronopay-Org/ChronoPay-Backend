@@ -75,6 +75,11 @@ export function createErrorHandler(
   ): void => {
     logError(err, req);
 
+    const requestId =
+      req.requestId ?? (typeof req.id === "string" ? req.id : undefined);
+    const statusCode = getStatusCode(err);
+
+    let envelope: AppErrorEnvelope;
     const requestId = getRequestId(req);
     const statusCode = getStatusCode(err);
 
@@ -86,6 +91,7 @@ export function createErrorHandler(
       envelope = {
         success: false,
         code: ERROR_CODES.INTERNAL_ERROR.code,
+        message: unknownErrorMessage,
         error: unknownErrorMessage,
         timestamp: new Date().toISOString(),
       };

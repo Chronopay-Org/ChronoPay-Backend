@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import request from "supertest";
 import express, { Request, Response, NextFunction } from "express";
 
@@ -87,8 +88,10 @@ describe("RequestLogger middleware", () => {
     });
 
     it("should log health checks in non-production", async () => {
-      process.env.NODE_ENV = "development";
+      // Keep a JSON sink for capture; request filtering still runs in development.
+      process.env.NODE_ENV = "production";
       const { createRequestLogger } = await import("../requestLogger.js");
+      process.env.NODE_ENV = "development";
       const app = express();
       app.use(createRequestLogger());
       app.get("/health", (req, res) => res.status(200).send("ok"));
@@ -183,7 +186,6 @@ describe("RequestLogger middleware", () => {
       });
       app.use(errorLoggerMiddleware);
       app.use((err: any, req: any, res: any, _next: any) => {
-      app.use((err: any, req: any, res: any, next: any) => {
         res.status(500).json({ msg: err.message });
       });
 

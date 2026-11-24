@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Request, Response, NextFunction } from "express";
 import {
   runWithQueryBudget,
@@ -85,26 +84,51 @@ function resolveBudgetMs(path: string, explicitBudgetMs?: number): number {
  *   connection is returned to the pool in a clean state (PostgreSQL rolls
  *   back the current sub-transaction automatically).
  */
+/**
+ * Build a bounded Prometheus route label from the matched Express route pattern.
+ * Must be called after route matching (e.g. inside `res.on("finish")`).
+ */
+function resolveRouteLabel(req: Request): string {
+  const routePath: unknown = req.route?.path;
+  const baseUrl = req.baseUrl ?? "";
+
+  if (typeof routePath === "string") {
+    return `${baseUrl}${routePath}` || "/";
+  }
+
+  if (routePath instanceof RegExp) {
+    return `${baseUrl}${routePath.source}`;
+  }
+
+  if (Array.isArray(routePath) && routePath.length > 0) {
+    const first: unknown = routePath[0];
+    return `${baseUrl}${first instanceof RegExp ? first.source : String(first)}`;
+  }
+
+  return "unmatched";
+}
+
 export function createQueryBudgetMiddleware(
   options: QueryBudgetOptions = {},
 ) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const route = req.route?.path ?? req.path ?? "/";
-    const budgetMs = resolveBudgetMs(route, options.budgetMs);
+    const requestPath = req.path || "/";
+    const budgetMs = resolveBudgetMs(requestPath, options.budgetMs);
 
     const context: QueryBudgetContext = {
       budgetMs,
       totalSqlTimeMs: 0,
-      route,
+      route: requestPath,
       breached: false,
     };
 
     // Wrap response finish to record telemetry
     res.on("finish", () => {
       const outcome = context.breached ? "breached" : "ok";
+      const routeLabel = resolveRouteLabel(req);
 
       queryBudgetSqlTimeMs
-        .labels(route, outcome)
+        .labels(routeLabel, outcome)
         .observe(context.totalSqlTimeMs);
 
       // Stamp total SQL time on the active trace context for downstream consumers
@@ -114,7 +138,7 @@ export function createQueryBudgetMiddleware(
           {
             traceId: traceCtx.traceId,
             spanId: traceCtx.spanId,
-            route,
+            route: routeLabel,
             totalSqlTimeMs: context.totalSqlTimeMs,
             budgetMs,
             outcome,

@@ -1,6 +1,7 @@
 import os from "os";
 
 export type NodeEnv = "development" | "test" | "production";
+export type QuotaFailMode = "open" | "closed";
 
 export interface EncryptionKey {
   id: string;
@@ -27,6 +28,7 @@ export interface EnvConfig {
   redisUrl: string;
   rateLimitWindowMs: number;
   rateLimitMax: number;
+  quotaFailMode: QuotaFailMode;
   trustProxy: boolean;
   /**
    * Explicit opt-in for test-only routes (e.g. /__test__/explode, /api/v1/test/auth).
@@ -37,7 +39,7 @@ export interface EnvConfig {
   webhookSecret?: string;
   jwtIssuer?: string;
   jwtAudience?: string;
-  corsAllowedOrigins?: string[];
+  corsAllowedOrigins: readonly string[];
   /** Stellar Horizon base URLs (comma-separated, first is primary) */
   horizonUrls?: string[];
   /** Stellar network passphrase used to identify the target network */
@@ -65,6 +67,16 @@ export interface EnvConfig {
    * Default: enabled when NODE_ENV=production, disabled otherwise.
    */
   mfaRequiredForRefunds: boolean;
+  /**
+   * Static bearer token required to scrape /metrics. When unset, /metrics is
+   * unauthenticated outside production.
+   */
+  metricsAuthToken?: string;
+  /**
+   * Explicit opt-out allowing an unauthenticated /metrics endpoint in production.
+   * Must be set to true when METRICS_AUTH_TOKEN is not configured in production.
+   */
+  metricsPublic: boolean;
 }
 
 export class EnvValidationError extends Error {
@@ -92,6 +104,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
   const rateLimitMax = parsePositiveInteger(env.RATE_LIMIT_MAX, "RATE_LIMIT_MAX", 100, issues);
+  const quotaFailMode = parseQuotaFailMode(env.QUOTA_FAIL_MODE, issues);
   const trustProxy = parseBoolean(env.TRUST_PROXY, "TRUST_PROXY", false, issues);
   const enableTestRoutes = parseBoolean(
     env.ENABLE_TEST_ROUTES,
@@ -154,6 +167,14 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     issues,
   );
 
+  const metricsAuthToken = parseOptionalString(env.METRICS_AUTH_TOKEN);
+  const metricsPublic = parseBoolean(env.METRICS_PUBLIC, "METRICS_PUBLIC", false, issues);
+  if (nodeEnv === "production" && metricsAuthToken === undefined && !metricsPublic) {
+    issues.push(
+      "METRICS_AUTH_TOKEN must be set in production. Set METRICS_PUBLIC=true to explicitly allow an unauthenticated /metrics endpoint.",
+    );
+  }
+
   const idempotencyProcessingLockTtlSeconds = parseOptionalPositiveInteger(
     env.IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS,
     "IDEMPOTENCY_PROCESSING_LOCK_TTL_SECONDS",
@@ -170,6 +191,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     redisUrl,
     rateLimitWindowMs,
     rateLimitMax,
+    quotaFailMode,
     trustProxy,
     enableTestRoutes,
     timeoutMs,
@@ -189,7 +211,19 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): EnvConfig {
     mfaWindowPeriods,
     mfaChallengeTtlSec,
     mfaRequiredForRefunds,
+    metricsAuthToken,
+    metricsPublic,
   };
+}
+
+function parseQuotaFailMode(rawValue: string | undefined, issues: string[]): QuotaFailMode {
+  if (rawValue === undefined) return "open";
+
+  const value = rawValue.trim();
+  if (value === "open" || value === "closed") return value;
+
+  issues.push("QUOTA_FAIL_MODE must be one of: open, closed.");
+  return "open";
 }
 
 function parseNodeEnv(rawValue: string | undefined, issues: string[]): NodeEnv {

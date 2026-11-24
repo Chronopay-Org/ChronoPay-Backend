@@ -17,6 +17,7 @@ import {
   type UserRole,
 } from "./rbac.js";
 
+export type ChronoPayRole = "customer" | "admin" | "professional" | "supplier";
 export type ChronoPayRole = UserRole;
 
 export interface AuthContext {
@@ -147,6 +148,15 @@ export function optionalAuth(expectedIssuer?: string) {
         return;
       }
 
+  const normalized = rawRole.trim().toLowerCase();
+  if (
+    normalized === "customer" ||
+    normalized === "admin" ||
+    normalized === "professional" ||
+    normalized === "supplier"
+  ) {
+    return normalized;
+  }
       const payload = await verifyJwt(token, {
         issuer: expectedIssuer ?? configService.jwtIssuer ?? undefined,
       });

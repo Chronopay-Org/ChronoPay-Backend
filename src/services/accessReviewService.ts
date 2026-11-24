@@ -34,11 +34,11 @@ import type {
   ReportFormat,
   SnapshotSummary,
 } from "../types/accessReview.js";
+import { ACCESS_REVIEW_MAX_LIMIT as MAX_LIST_LIMIT } from "../constants/accessReview.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEFAULT_LIST_LIMIT = 50;
-const MAX_LIST_LIMIT = 200;
 const ROLES_CONFIG_URL = new URL("../config/roles.json", import.meta.url);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -52,8 +52,8 @@ function generateId(): string {
  * Returns e.g. "2026-Q2" for April-June 2026.
  */
 export function computeQuarterLabel(date: Date = new Date()): QuarterLabel {
-  const year = date.getFullYear();
-  const month = date.getMonth(); // 0-indexed
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth(); // 0-indexed
   const quarter = Math.floor(month / 3) + 1;
   return `${year}-Q${quarter}`;
 }
@@ -69,8 +69,8 @@ export function computeQuarterRange(quarterLabel: QuarterLabel): { start: Date; 
     throw new Error(`Invalid quarter label: ${quarterLabel}`);
   }
   const startMonth = (quarter - 1) * 3;
-  const start = new Date(year, startMonth, 1, 0, 0, 0, 0);
-  const end = new Date(year, startMonth + 3, 0, 23, 59, 59, 999);
+  const start = new Date(Date.UTC(year, startMonth, 1, 0, 0, 0, 0));
+  const end = new Date(Date.UTC(year, startMonth + 3, 0, 23, 59, 59, 999));
   return { start, end };
 }
 
@@ -705,3 +705,4 @@ export const accessReviewService = new AccessReviewService();
 export function resetAccessReviewService(): void {
   accessReviewService.clear();
 }
+

@@ -15,7 +15,12 @@
  * SlotService can return a fast 409 before attempting the INSERT/UPDATE.
  */
 
-import { Slot } from "../types.js";
+import type { SlotRecord } from "../modules/slots/slot-repository.js";
+
+export type {
+  SlotInput,
+  SlotRecord,
+} from "../modules/slots/slot-repository.js";
 
 export interface SecondaryListingInput {
   priceFloorCents: number;
@@ -35,11 +40,11 @@ export interface SecondaryListingRecord {
   updatedAt: string;
 }
 
-const _legacySlots: Slot[] = Array.from({ length: 125 }, (_, idx) => ({
+const _legacySlots: SlotRecord[] = Array.from({ length: 125 }, (_, idx) => ({
   id: idx + 1,
   professional: `Professional ${idx + 1}`,
-  startTime: new Date(Date.UTC(2026, 0, 1, 8, 0, 0) + idx * 60 * 60 * 1000).toISOString(),
-  endTime: new Date(Date.UTC(2026, 0, 1, 9, 0, 0) + idx * 60 * 60 * 1000).toISOString(),
+  startTime: Date.UTC(2026, 0, 1, 8, 0, 0) + idx * 60 * 60 * 1000,
+  endTime: Date.UTC(2026, 0, 1, 9, 0, 0) + idx * 60 * 60 * 1000,
   _internalNote: "do not expose",
 }));
 
@@ -168,7 +173,7 @@ export const __test__clearSlots = (): void => {
 
 export const getSlotsCount = async (): Promise<number> => _legacySlots.length;
 
-export const getSlotsPage = async (offset: number, limit: number): Promise<Slot[]> => {
+export const getSlotsPage = async (offset: number, limit: number): Promise<SlotRecord[]> => {
   if (offset < 0 || limit < 0) throw new Error("Invalid pagination parameters");
   return _legacySlots.slice(offset, offset + limit);
 };

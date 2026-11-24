@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createBudgetedGauge } from "../metrics.js";
 
 export type RouteName = "booking_intent" | "slots_list" | "checkout" | "escrow_listener";
@@ -32,13 +31,20 @@ interface EventBucket {
 }
 
 const BUCKET_SIZE_MS = 60 * 1000; // 1 min
+const ROUTE_NAMES: readonly RouteName[] = [
+  "booking_intent",
+  "slots_list",
+  "checkout",
+  "escrow_listener",
+];
+const WINDOW_NAMES: readonly WindowName[] = ["5m", "1h", "6h"];
 
 export class RouteMetrics {
   private buckets: EventBucket[] = [];
   
   constructor(public readonly route: RouteName) {}
   
-  record(error: boolean, now: number = Date.now()) {
+  record(error: boolean, now: number = Date.now()): void {
     const bucketTime = Math.floor(now / BUCKET_SIZE_MS) * BUCKET_SIZE_MS;
     
     let currentBucket = this.buckets.length > 0 ? this.buckets[this.buckets.length - 1] : null;
@@ -77,26 +83,26 @@ export class RouteMetrics {
     return errorRatio / errorBudget;
   }
   
-  updateGauges(now: number = Date.now()) {
-    for (const w of Object.keys(WINDOWS_MS) as WindowName[]) {
+  updateGauges(now: number = Date.now()): void {
+    for (const w of WINDOW_NAMES) {
       sloBurnRateGauge.labels(this.route, w).set(this.getBurnRate(w, now));
     }
   }
 
   // For testing
-  _getBuckets() {
+  _getBuckets(): EventBucket[] {
     return this.buckets;
   }
 }
 
-const routeMetrics: Record<string, RouteMetrics> = {
+const routeMetrics: Record<RouteName, RouteMetrics> = {
   booking_intent: new RouteMetrics("booking_intent"),
   slots_list: new RouteMetrics("slots_list"),
   checkout: new RouteMetrics("checkout"),
   escrow_listener: new RouteMetrics("escrow_listener"),
 };
 
-export function recordRouteTraffic(route: RouteName, isError: boolean, now: number = Date.now()) {
+export function recordRouteTraffic(route: RouteName, isError: boolean, now: number = Date.now()): void {
   const rm = routeMetrics[route];
   if (rm) {
     rm.record(isError, now);
@@ -104,8 +110,9 @@ export function recordRouteTraffic(route: RouteName, isError: boolean, now: numb
   }
 }
 
-export function resetSloMetrics() {
-  for (const route of Object.keys(routeMetrics) as RouteName[]) {
+export function resetSloMetrics(): void {
+  for (const route of ROUTE_NAMES) {
     routeMetrics[route] = new RouteMetrics(route);
+    routeMetrics[route].updateGauges();
   }
 }

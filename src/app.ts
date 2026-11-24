@@ -1,10 +1,12 @@
 import { createRequire } from "node:module";
+import { constantTimeEquals } from "./utils/constantTimeEquals.js";
 import fs from "node:fs";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
 import { getCORSConfig, validateCORSConfig } from "./config/cors.js";
 import { createCORSMiddleware } from "./middleware/cors.js";
 import { requireApiKey } from "./middleware/apiKeyAuth.js";
+import { requestIdMiddleware } from "./middleware/requestId.js";
 import { parseCookies } from "./middleware/cookieParser.js";
 import { authenticateTokenIfPresent } from "./middleware/auth.middleware.js";
 import {
@@ -16,6 +18,14 @@ import {
 import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
+import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
+import { createRequestLogger } from "./middleware/requestLogger.js";
+import { featureFlagContextMiddleware, initializeFeatureFlagsFromEnv } from "./middleware/featureFlags.js";
+import { configService } from "./config/config.service.js";
+import { createBookingIntentsRouter } from "./routes/booking-intents.js";
+import { AmountUtils } from "./utils/amount.js";
+import checkoutRouter from "./routes/checkout.js";
+import discountCurvesRouter from "./routes/discountCurves.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
 import type { Pool } from "pg";
@@ -248,6 +258,8 @@ export function createApp(options: AppFactoryOptions = {}) {
   }
 
   // 0. Global Middleware
+  // Request ids must be resolved before anything that logs or echoes them.
+  app.use(requestIdMiddleware);
   app.use(tracingMiddleware);
   app.use(metricsMiddleware);
   app.use(featureFlagContextMiddleware);
@@ -352,7 +364,23 @@ export function createApp(options: AppFactoryOptions = {}) {
   });
 
   // Metrics
-  app.get("/metrics", async (_req, res) => {
+  const metricsAuthToken = process.env.METRICS_AUTH_TOKEN;
+  const metricsPublic = isTruthyEnvValue(process.env.METRICS_PUBLIC);
+  if (nodeEnv === "production" && !metricsAuthToken && !metricsPublic) {
+    throw new Error(
+      "METRICS_AUTH_TOKEN must be set in production unless METRICS_PUBLIC=true is set explicitly.",
+    );
+  }
+
+  app.get("/metrics", async (req, res) => {
+    if (metricsAuthToken) {
+      const header = req.header("authorization") ?? "";
+      const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
+      if (!presented || !constantTimeEquals(presented, metricsAuthToken)) {
+        res.set("WWW-Authenticate", "Bearer");
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+    }
     try {
       res.set("Content-Type", register.contentType);
       res.end(await register.metrics());
@@ -500,6 +528,10 @@ export function createApp(options: AppFactoryOptions = {}) {
   registerWebhookRoutes(app);
   app.use("/api/v1", webhookRoutes);
 
+  // ── Booking intents routes ─────────────────────────────────────────────────
+  app.use("/api/v1/booking-intents", createBookingIntentsRouter());
+  app.use("/api/v1/checkout", checkoutRouter);
+  app.use("/api/v1/discount-curves", discountCurvesRouter);
   // 6. Notification Routes (SMS)
   // The router enforces its own authentication (requireAuthenticatedActor),
   // feature flag, rate limiting and validation — never bypass it with an

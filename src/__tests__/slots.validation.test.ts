@@ -10,11 +10,13 @@
  * - Valid ISO-8601 strings
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
+import { describe, it, expect, beforeAll, afterAll, jest } from "@jest/globals";
 import request from "supertest";
 import express from "express";
 import slotsRouter from "../routes/slots.js";
 import { slotService } from "../services/slotService.js";
+import { createTestAuthorization } from "../../test/auth.js";
+import { createErrorHandler } from "../middleware/errorHandler.js";
 
 describe("POST /api/v1/slots - Time Validation", () => {
   let app: express.Application;
@@ -23,6 +25,7 @@ describe("POST /api/v1/slots - Time Validation", () => {
     app = express();
     app.use(express.json());
     app.use("/api/v1/slots", slotsRouter);
+    app.use(createErrorHandler({ includeStackTrace: false }));
     slotService.reset();
   });
 
@@ -95,6 +98,83 @@ describe("POST /api/v1/slots - Time Validation", () => {
 
       expect(response.status).toBe(201);
       expect(response.body.success).toBe(true);
+    });
+  });
+
+  describe("PATCH /api/v1/slots/:id validation and errors", () => {
+    const adminAuthorization = createTestAuthorization("test-admin", "admin");
+
+    beforeAll(() => {
+      slotService.reset();
+    });
+
+    afterAll(() => {
+      slotService.reset();
+    });
+
+    it("rejects unknown fields without updating the slot", async () => {
+      const slot = slotService.createSlot({
+        professional: "dr-smith",
+        startTime: 1_000_000,
+        endTime: 2_000_000,
+      });
+
+      const response = await request(app)
+        .patch(`/api/v1/slots/${slot.id}`)
+        .set("Authorization", adminAuthorization)
+        .send({ professional: "dr-jones", internalFlag: true });
+
+      expect(response.status).toBe(400);
+      expect(response.body.success).toBe(false);
+      expect((await slotService.findById(slot.id)).professional).toBe("dr-smith");
+    });
+
+    it("uses the GET invalid-id response for PATCH and DELETE", async () => {
+      const getResponse = await request(app).get("/api/v1/slots/not-a-slot");
+      const patchResponse = await request(app)
+        .patch("/api/v1/slots/not-a-slot")
+        .set("Authorization", adminAuthorization)
+        .send({ professional: "dr-jones" });
+      const deleteResponse = await request(app).delete("/api/v1/slots/not-a-slot");
+
+      expect(patchResponse.status).toBe(getResponse.status);
+      expect(patchResponse.body).toMatchObject({
+        success: getResponse.body.success,
+        code: getResponse.body.code,
+        error: getResponse.body.error,
+        message: getResponse.body.message,
+      });
+      expect(deleteResponse.status).toBe(getResponse.status);
+      expect(deleteResponse.body).toMatchObject({
+        success: getResponse.body.success,
+        code: getResponse.body.code,
+        error: getResponse.body.error,
+        message: getResponse.body.message,
+      });
+    });
+
+    it("forwards unexpected errors to the generic error handler", async () => {
+      const slot = slotService.createSlot({
+        professional: "dr-smith",
+        startTime: 1_000_000,
+        endTime: 2_000_000,
+      });
+      const updateSpy = jest.spyOn(slotService, "updateSlot").mockImplementation(() => {
+        throw new Error("database credentials leaked");
+      });
+
+      try {
+        const response = await request(app)
+          .patch(`/api/v1/slots/${slot.id}`)
+          .set("Authorization", adminAuthorization)
+          .send({ professional: "dr-jones" });
+
+        expect(response.status).toBe(500);
+        expect(response.body.error).toBe("An unexpected error occurred");
+        expect(JSON.stringify(response.body)).not.toContain("database credentials leaked");
+      } finally {
+        updateSpy.mockRestore();
+      }
     });
   });
 

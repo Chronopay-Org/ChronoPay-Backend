@@ -106,7 +106,7 @@ const makeNext = () =>
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /** Keys the unknown-error envelope must never carry. */
-const UNKNOWN_ENVELOPE_ABSENT_KEYS = Object.freeze(["message", "details", "requestId", "stack"]);
+const UNKNOWN_ENVELOPE_ABSENT_KEYS = Object.freeze(["details", "stack"]);
 
 function restoreNodeEnv(value: string | undefined): void {
   if (value === undefined) {
@@ -169,6 +169,7 @@ describe("ErrorHandlerOptions", () => {
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.INTERNAL_ERROR.code,
+      message: "An unexpected error occurred",
       error: "An unexpected error occurred",
       timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       ...(process.env.NODE_ENV !== "production" ? { stack: err.stack } : {}),
@@ -555,14 +556,21 @@ describe("createErrorHandler — unknown error transitions", () => {
     const err = new Error("kaboom");
     const res = makeRes();
 
-    createErrorHandler({ includeStackTrace: false })(err, makeReq(), res, makeNext());
+    createErrorHandler({ includeStackTrace: false })(
+      err,
+      makeReq({ requestId: "req_unknown" }),
+      res,
+      makeNext(),
+    );
 
     expect(res.statusCode).toBe(500);
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.INTERNAL_ERROR.code,
+      message: "An unexpected error occurred",
       error: "An unexpected error occurred",
       timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+      requestId: "req_unknown",
     });
     for (const key of UNKNOWN_ENVELOPE_ABSENT_KEYS) {
       expect(res.body).not.toHaveProperty(key);
@@ -693,6 +701,7 @@ describe("createErrorHandler — invalid and boundary inputs", () => {
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.INTERNAL_ERROR.code,
+      message: "An unexpected error occurred",
       error: "An unexpected error occurred",
       timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
     });
@@ -1082,6 +1091,7 @@ describe("errorHandler + notFoundMiddleware over Express", () => {
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.INTERNAL_ERROR.code,
+      message: "An unexpected error occurred",
       error: "An unexpected error occurred",
       timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       requestId: expect.any(String),
@@ -1152,6 +1162,7 @@ describe("createErrorHandler — deterministic timestamps", () => {
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.INTERNAL_ERROR.code,
+      message: "An unexpected error occurred",
       error: "An unexpected error occurred",
       timestamp: "2024-01-02T03:04:05.678Z",
     });

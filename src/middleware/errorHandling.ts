@@ -1,0 +1,81 @@
+import { NextFunction, Request, Response } from "express";
+import { AppError, MalformedJsonError, type AppErrorEnvelope } from "../errors/AppError.js";
+import { ERROR_CODES } from "../errors/errorCodes.js";
+import { logger } from "../utils/logger.js";
+
+function withRequestContext(envelope: AppErrorEnvelope, req: Request): AppErrorEnvelope {
+  const requestId =
+    req.requestId ?? (typeof req.id === "string" ? req.id : undefined);
+  if (requestId !== undefined) {
+    envelope.requestId = requestId;
+  }
+  return envelope;
+}
+
+export function notFoundHandler(req: Request, res: Response) {
+  const err = new AppError(
+    `Route not found: ${req.method} ${req.path}`,
+    ERROR_CODES.NOT_FOUND.status,
+    ERROR_CODES.NOT_FOUND.code,
+    true,
+  );
+  return res.status(err.statusCode).json(withRequestContext(err.toJSON(), req));
+}
+
+export function jsonParseErrorHandler(
+  err: Error & { status?: number; type?: string },
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  if (err.type === "entity.parse.failed") {
+    const wrapped = new MalformedJsonError();
+    return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
+  }
+
+  if (err.type === "entity.too.large") {
+    const wrapped = new AppError(
+      "Request body exceeds the maximum allowed size.",
+      413,
+      "PAYLOAD_TOO_LARGE",
+      true,
+    );
+    return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
+  }
+
+  if (err.type === "charset.unsupported" || err.type === "encoding.unsupported") {
+    const wrapped = new AppError(
+      "Unsupported request body encoding.",
+      ERROR_CODES.UNSUPPORTED_MEDIA_TYPE.status,
+      ERROR_CODES.UNSUPPORTED_MEDIA_TYPE.code,
+      true,
+    );
+    return res.status(wrapped.statusCode).json(withRequestContext(wrapped.toJSON(), req));
+  }
+
+  return next(err);
+}
+
+export function genericErrorHandler(
+  err: unknown,
+  req: Request,
+  res: Response,
+  _next: NextFunction,
+) {
+  logger.error({ err, requestId: req.requestId ?? req.id }, "unhandled error");
+  if (err instanceof Error && "statusCode" in err && "code" in err) {
+    const e = err as any;
+    if (typeof e.statusCode === "number" && typeof e.code === "string") {
+      return res.status(e.statusCode).json(withRequestContext(e.toJSON(), req));
+    }
+  }
+
+  const fallback: AppErrorEnvelope = {
+    success: false,
+    code: ERROR_CODES.INTERNAL_ERROR.code,
+    message: "Internal server error",
+    error: "Internal server error",
+    timestamp: new Date().toISOString(),
+  };
+  return res.status(500).json(withRequestContext(fallback, req));
+}

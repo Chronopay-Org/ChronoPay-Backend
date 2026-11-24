@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install all dependencies (including devDependencies for build)
-RUN npm install
+RUN npm ci
 
 # Copy source code and config
 COPY tsconfig.json ./
@@ -17,10 +17,10 @@ COPY src ./src
 RUN npm run build
 
 # Remove development dependencies
-RUN npm prune --production
+RUN npm prune --omit=dev
 
 # Stage 2: Production
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 
