@@ -3,6 +3,7 @@ import {
   AutoRefundResult,
 } from "../modules/booking-intents/booking-intent-service.js";
 import type { BookingIntentRepository } from "../modules/booking-intents/booking-intent-repository.js";
+import { logger } from "../utils/logger.js";
 
 export interface HoldAutoRefundWorkerConfig {
   intervalMs?: number;
@@ -127,11 +128,17 @@ export async function runHoldAutoRefundWorker(
   signal: AbortSignal,
   dependencies: HoldAutoRefundDependencies,
   configOverrides: HoldAutoRefundWorkerConfig = {},
+  onResult?: (result: HoldAutoRefundResult) => void,
 ): Promise<void> {
   const config = resolveConfig(configOverrides);
 
   while (!signal.aborted) {
-    await processHoldAutoRefundOnce(dependencies, configOverrides);
+    try {
+      const result = await processHoldAutoRefundOnce(dependencies, configOverrides);
+      onResult?.(result);
+    } catch (err) {
+      logger.error({ err }, "[hold-auto-refund] cycle failed");
+    }
     if (signal.aborted) break;
     await sleep(config.intervalMs, signal);
   }
@@ -149,9 +156,15 @@ export function createHoldAutoRefundWorker(
     start() {
       if (running) return;
       running = true;
-      runHoldAutoRefundWorker(controller.signal, dependencies, configOverrides).finally(() => {
-        running = false;
-      });
+      void runHoldAutoRefundWorker(controller.signal, dependencies, configOverrides, (result) => {
+        lastResult = result;
+      })
+        .catch((err) => {
+          logger.error({ err }, "[hold-auto-refund] worker failed");
+        })
+        .finally(() => {
+          running = false;
+        });
     },
     stop() {
       controller.abort();

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Impersonation Recorder Middleware
  *
@@ -174,17 +173,58 @@ export function computeDiff(
 }
 
 /**
- * Compute SHA-256 hex digest of a string.
+ * Recursively canonicalize a value so that object key order never affects the
+ * serialized representation. Array order is preserved. `undefined` entries are
+ * dropped from objects (as `JSON.stringify` does) and rendered as `null` inside
+ * arrays. Values with a `toJSON` method (e.g. `Date`) are serialized via it.
  */
-export function hashBody(body: string | null | undefined | Record<string, unknown> | number | boolean): string {
-  const normalized =
-    body === null || body === undefined
-      ? ""
-      : typeof body === "string"
-        ? body
-        : typeof body === "object"
-          ? JSON.stringify(body)
-          : String(body);
+function canonicalize(value: unknown): unknown {
+  if (value === null || typeof value !== "object") {
+    if (typeof value === "undefined" || typeof value === "function" || typeof value === "symbol") {
+      return undefined;
+    }
+    return typeof value === "bigint" ? value.toString() : value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const canonical = canonicalize(item);
+      return canonical === undefined ? null : canonical;
+    });
+  }
+
+  const withToJson = value as { toJSON?: () => unknown };
+  if (typeof withToJson.toJSON === "function") {
+    return canonicalize(withToJson.toJSON());
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    const canonical = canonicalize((value as Record<string, unknown>)[key]);
+    if (canonical !== undefined) {
+      result[key] = canonical;
+    }
+  }
+  return result;
+}
+
+/**
+ * Compute SHA-256 hex digest of a request/response body.
+ *
+ * Strings are hashed verbatim. Objects (including arrays) are serialized to
+ * canonical JSON with recursively sorted keys so that semantically identical
+ * payloads always produce the same digest. `null` / `undefined` hash as the
+ * empty string and other primitives fall back to `String()`.
+ */
+export function hashBody(body: unknown): string {
+  const normalized = (() => {
+    if (body === null || body === undefined) return "";
+    if (typeof body === "string") return body;
+    if (typeof body === "object") {
+      return JSON.stringify(canonicalize(body)) ?? "";
+    }
+    return String(body);
+  })();
 
   return crypto.createHash("sha256").update(normalized, "utf8").digest("hex");
 }
@@ -207,6 +247,20 @@ interface BodyCapture {
   truncated: boolean;
 }
 
+type WriteCallback = (error: Error | null | undefined) => void;
+
+type BoundWrite = (
+  chunk: unknown,
+  encodingOrCallback?: BufferEncoding | WriteCallback,
+  callback?: WriteCallback,
+) => boolean;
+
+type BoundEnd = (
+  chunkOrCallback?: unknown,
+  encodingOrCallback?: BufferEncoding | (() => void),
+  callback?: () => void,
+) => Response;
+
 function interceptResponseBody(res: Response): BodyCapture {
   const capture: BodyCapture = {
     chunks: [],
@@ -214,8 +268,8 @@ function interceptResponseBody(res: Response): BodyCapture {
     truncated: false,
   };
 
-  const originalWrite = res.write.bind(res);
-  const originalEnd = res.end.bind(res);
+  const originalWrite = res.write.bind(res) as BoundWrite;
+  const originalEnd = res.end.bind(res) as BoundEnd;
 
   const accumulate = (chunk: unknown): void => {
     if (capture.truncated) return;
@@ -236,17 +290,37 @@ function interceptResponseBody(res: Response): BodyCapture {
     capture.chunks.push(buf);
   };
 
-  // @ts-expect-error – overriding overloaded method
-  res.write = (chunk: unknown, ...args: unknown[]) => {
+  function writeProxy(chunk: unknown, callback?: WriteCallback): boolean;
+  function writeProxy(chunk: unknown, encoding: BufferEncoding, callback?: WriteCallback): boolean;
+  function writeProxy(
+    chunk: unknown,
+    encodingOrCallback?: BufferEncoding | WriteCallback,
+    callback?: WriteCallback,
+  ): boolean {
     accumulate(chunk);
-    return (originalWrite as (...a: unknown[]) => boolean)(chunk, ...args);
-  };
+    if (typeof encodingOrCallback === "function") {
+      return originalWrite(chunk, encodingOrCallback);
+    }
+    if (encodingOrCallback === undefined) {
+      return originalWrite(chunk);
+    }
+    return originalWrite(chunk, encodingOrCallback, callback);
+  }
 
-  // @ts-expect-error – overriding overloaded method
-  res.end = (chunk?: unknown, ...args: unknown[]) => {
-    if (chunk) accumulate(chunk);
-    return (originalEnd as (...a: unknown[]) => Response)(chunk, ...args);
-  };
+  function endProxy(callback?: () => void): Response;
+  function endProxy(chunk: unknown, callback?: () => void): Response;
+  function endProxy(chunk: unknown, encoding: BufferEncoding, callback?: () => void): Response;
+  function endProxy(
+    chunkOrCallback?: unknown,
+    encodingOrCallback?: BufferEncoding | (() => void),
+    callback?: () => void,
+  ): Response {
+    if (chunkOrCallback) accumulate(chunkOrCallback);
+    return originalEnd(chunkOrCallback, encodingOrCallback, callback);
+  }
+
+  res.write = writeProxy;
+  res.end = endProxy;
 
   return capture;
 }

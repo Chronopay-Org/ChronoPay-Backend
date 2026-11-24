@@ -76,11 +76,14 @@ export interface TimezoneResolutionAuditEvent {
 }
 
 export interface SlotRecord {
-  id: string;
+  id: string | number;
   professional: string;
   startTime: number;
   endTime: number;
-  bookable: boolean;
+  bookable?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  _internalNote?: string;
   /** Optional dynamic pricing configuration set by the supplier. */
   pricingStrategy?: SlotPricingStrategy;
   /**
@@ -101,6 +104,22 @@ export interface SlotRecord {
    */
   category?: string;
   /** Whether bundle is transferable */
+  transferable?: boolean;
+  currency?: import("../../utils/amount.js").SupportedCurrencies;
+  amount_minor?: number;
+}
+
+export interface SlotInput {
+  professional: string;
+  startTime: number;
+  endTime: number;
+  validUntil?: number;
+  bookable?: boolean;
+  category?: string;
+  pricingStrategy?: SlotPricingStrategy;
+  supplierId?: string;
+  storeId?: string;
+  tenantId?: string;
   transferable?: boolean;
   currency?: import("../../utils/amount.js").SupportedCurrencies;
   amount_minor?: number;

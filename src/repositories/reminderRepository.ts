@@ -1,5 +1,11 @@
 import type { QueryResult } from "pg";
-import type { CreateReminderInput, Reminder, ReminderRepository } from "../models/reminder.js";
+import {
+  normalizeReminderSlotId,
+  type CreateReminderInput,
+  type Reminder,
+  type ReminderRepository,
+  type ReminderSlotId,
+} from "../models/reminder.js";
 
 type DbQuery = (text: string, params?: unknown[]) => Promise<QueryResult>;
 
@@ -54,6 +60,27 @@ export class PgReminderRepository implements ReminderRepository {
         LIMIT 1
       `,
       [id],
+    );
+
+    return result.rows[0] ? this.mapRow(result.rows[0]) : null;
+  }
+
+  async findBySlotAndTrigger(
+    slotId: ReminderSlotId,
+    triggerAt: number,
+  ): Promise<Reminder | null> {
+    // trigger_at is compared with the same to_timestamp(ms / 1000.0)
+    // expression used by create(), so identical inputs yield identical values.
+    const result = await this.dbQuery(
+      `
+        SELECT *
+        FROM reminders
+        WHERE slot_id = $1
+          AND trigger_at = to_timestamp($2 / 1000.0)
+        ORDER BY created_at ASC
+        LIMIT 1
+      `,
+      [String(slotId), triggerAt],
     );
 
     return result.rows[0] ? this.mapRow(result.rows[0]) : null;
@@ -126,7 +153,7 @@ export class PgReminderRepository implements ReminderRepository {
   private mapRow(row: any): Reminder {
     return {
       id: row.id,
-      slotId: Number(row.slot_id),
+      slotId: normalizeReminderSlotId(row.slot_id),
       triggerAt: new Date(row.trigger_at).getTime(),
       status: row.status,
       attempts: Number(row.attempts),

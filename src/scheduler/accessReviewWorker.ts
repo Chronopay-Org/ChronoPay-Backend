@@ -19,12 +19,17 @@
  *   ACCESS_REVIEW_LOOKBACK   – How many quarters to check for gaps (default: 8)
  */
 
-import { accessReviewService } from "../services/accessReviewService.js";
+import {
+  ACCESS_REVIEW_LOOKBACK_DEFAULT,
+  ACCESS_REVIEW_LOOKBACK_MAX,
+  ACCESS_REVIEW_LOOKBACK_MIN,
+} from "../constants/accessReview.js";
+import { logger } from "../utils/logger.js";
+import { accessReviewService, computeQuarterLabel } from "../services/accessReviewService.js";
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const DEFAULT_LOOKBACK = 8;
 
 function resolveInterval(): number {
   const raw = process.env.ACCESS_REVIEW_INTERVAL_MS;
@@ -35,15 +40,20 @@ function resolveInterval(): number {
 
 function resolveLookback(): number {
   const raw = process.env.ACCESS_REVIEW_LOOKBACK;
-  if (!raw) return DEFAULT_LOOKBACK;
+  if (!raw) return ACCESS_REVIEW_LOOKBACK_DEFAULT;
   const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 40 ? parsed : DEFAULT_LOOKBACK;
+  return Number.isInteger(parsed) &&
+    parsed >= ACCESS_REVIEW_LOOKBACK_MIN &&
+    parsed <= ACCESS_REVIEW_LOOKBACK_MAX
+    ? parsed
+    : ACCESS_REVIEW_LOOKBACK_DEFAULT;
 }
 
 // ─── Worker State ─────────────────────────────────────────────────────────────
 
 let intervalTimer: NodeJS.Timeout | null = null;
 let running = false;
+let inFlight = false;
 
 // ─── Core Logic ───────────────────────────────────────────────────────────────
 
@@ -77,14 +87,19 @@ export async function runAccessReviewCheck(): Promise<{
   };
 }
 
-function computeQuarterLabel(date: Date = new Date()): string {
-  const year = date.getFullYear();
-  const month = date.getMonth();
-  const quarter = Math.floor(month / 3) + 1;
-  return `${year}-Q${quarter}`;
-}
-
 // ─── Scheduler Lifecycle ──────────────────────────────────────────────────────
+
+async function safeRun(): Promise<void> {
+  if (inFlight) return;
+  inFlight = true;
+  try {
+    await runAccessReviewCheck();
+  } catch (err) {
+    logger.error({ err }, "[access-review] check failed");
+  } finally {
+    inFlight = false;
+  }
+}
 
 /**
  * Start the access review worker.
@@ -97,11 +112,11 @@ export function startAccessReviewWorker(intervalMs?: number): void {
   const ms = intervalMs ?? resolveInterval();
 
   // Run one check immediately on startup
-  void runAccessReviewCheck();
+  void safeRun();
 
   // Then run at the configured interval
   intervalTimer = setInterval(() => {
-    void runAccessReviewCheck();
+    void safeRun();
   }, ms);
 
   // Allow the process to exit even if this timer is still active
@@ -127,3 +142,4 @@ export function stopAccessReviewWorker(): void {
 export function isAccessReviewWorkerRunning(): boolean {
   return running;
 }
+

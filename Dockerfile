@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install all dependencies (including devDependencies for build)
-RUN npm install
+RUN npm ci
 
 # Copy source code and config
 COPY tsconfig.json ./
@@ -17,10 +17,10 @@ COPY src ./src
 RUN npm run build
 
 # Remove development dependencies
-RUN npm prune --production
+RUN npm prune --omit=dev
 
 # Stage 2: Production
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 
@@ -38,6 +38,9 @@ EXPOSE 3001
 
 # Use a non-root user for security
 USER node
+
+# Probe /live rather than /health/ready so external dependencies do not affect liveness
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3001)+'/live',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
 # Start the application
 CMD ["node", "dist/index.js"]

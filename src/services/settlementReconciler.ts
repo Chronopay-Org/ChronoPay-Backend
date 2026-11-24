@@ -199,9 +199,16 @@ export class SettlementReconciler {
         return;
       }
       this.inFlight = true;
-      void this.reconcile().finally(() => {
-        this.inFlight = false;
-      });
+      void this.reconcile()
+        .catch((error: unknown) => {
+          logger.error(
+            { error: error instanceof Error ? error.message : String(error) },
+            "SettlementReconciler failed to persist or reconcile settlement state.",
+          );
+        })
+        .finally(() => {
+          this.inFlight = false;
+        });
     }, this.pollIntervalMs);
   }
 
@@ -273,6 +280,7 @@ export class SettlementReconciler {
       }
 
       settlement.lastPolledAt = this._now();
+      let persistingQuarantine = false;
 
       try {
         // Query chain finality for the settlement transaction
@@ -342,14 +350,16 @@ export class SettlementReconciler {
             settlement.attempts = nextAttempt;
 
             if (exhausted) {
-              settlement.status = "failed";
-              getPayoutQuarantineService().recordFailure({
+              persistingQuarantine = true;
+              await getPayoutQuarantineService().recordFailure({
                 payoutId: settlement.transactionId,
                 errorClass: "SETTLEMENT",
                 errorMessage:
                   "Settlement failed after reaching the maximum reconciliation attempts",
                 threshold: Number(process.env.PAYOUT_QUARANTINE_THRESHOLD ?? 3),
               });
+              persistingQuarantine = false;
+              settlement.status = "failed";
             }
 
             _settlements.set(settlement.transactionId, settlement);
@@ -360,13 +370,15 @@ export class SettlementReconciler {
         if (status.successful !== true) {
           // Transaction exists but failed on-chain (or its success status is
           // unknown) — mark as failed immediately.
-          settlement.status = "failed";
-          getPayoutQuarantineService().recordFailure({
+          persistingQuarantine = true;
+          await getPayoutQuarantineService().recordFailure({
             payoutId: settlement.transactionId,
             errorClass: "SETTLEMENT",
             errorMessage: "Settlement transaction was rejected by the network",
             threshold: Number(process.env.PAYOUT_QUARANTINE_THRESHOLD ?? 3),
           });
+          persistingQuarantine = false;
+          settlement.status = "failed";
           _settlements.set(settlement.transactionId, settlement);
           continue;
         }
@@ -394,6 +406,13 @@ export class SettlementReconciler {
 
         _settlements.set(settlement.transactionId, settlement);
       } catch (error: any) {
+        if (persistingQuarantine) {
+          logger.error(
+            { transactionId: settlement.transactionId, error: error?.message },
+            "Failed to persist payout quarantine failure.",
+          );
+          throw error;
+        }
         logger.warn(
           { transactionId: settlement.transactionId, error: error?.message },
           "Transient error querying transaction from Horizon. Retrying next loop.",

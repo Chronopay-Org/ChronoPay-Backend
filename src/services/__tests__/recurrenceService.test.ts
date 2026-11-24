@@ -1,6 +1,67 @@
+import { jest } from "@jest/globals";
 import { expandRRule, RecurrenceError } from "../recurrenceService.js";
 
 describe("RecurrenceService", () => {
+  describe("expandRRule() dtstartIso handling", () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("uses dtstartIso as DTSTART when the text has none", () => {
+      const rrule = "FREQ=WEEKLY;COUNT=3;BYDAY=MO";
+      const occ = expandRRule(rrule, "2026-07-06T10:00:00.000Z");
+
+      expect(occ).toHaveLength(3);
+      expect(occ[0].toISOString()).toBe("2026-07-06T10:00:00.000Z");
+      expect(occ[1].toISOString()).toBe("2026-07-13T10:00:00.000Z");
+      expect(occ[2].toISOString()).toBe("2026-07-20T10:00:00.000Z");
+    });
+
+    it("honours an existing DTSTART instead of dtstartIso", () => {
+      const rrule =
+        "DTSTART:20260101T090000Z\nRRULE:FREQ=DAILY;COUNT=2";
+      const occ = expandRRule(rrule, "2026-07-06T10:00:00.000Z");
+
+      expect(occ[0].toISOString()).toBe("2026-01-01T09:00:00.000Z");
+      expect(occ[1].toISOString()).toBe("2026-01-02T09:00:00.000Z");
+    });
+
+    it("detects an existing DTSTART with parameters case-insensitively", () => {
+      const rrule =
+        "dtstart;tzid=UTC:20260201T120000Z\nRRULE:FREQ=DAILY;COUNT=1";
+      const occ = expandRRule(rrule, "2026-07-06T10:00:00.000Z");
+
+      expect(occ[0].toISOString()).toBe("2026-02-01T12:00:00.000Z");
+    });
+
+    it("throws RecurrenceError for invalid dtstartIso", () => {
+      const rrule = "FREQ=WEEKLY;COUNT=3;BYDAY=MO";
+      expect(() => expandRRule(rrule, "")).toThrow(RecurrenceError);
+      expect(() => expandRRule(rrule, "   ")).toThrow(RecurrenceError);
+      expect(() => expandRRule(rrule, "not-a-date")).toThrow(RecurrenceError);
+      expect(() => expandRRule(rrule, "2026-13-45T99:99:99Z")).toThrow(
+        RecurrenceError,
+      );
+    });
+
+    it("is deterministic across different system clocks", () => {
+      const rrule = "FREQ=WEEKLY;COUNT=3;BYDAY=MO";
+      const dtstartIso = "2026-07-06T10:00:00.000Z";
+
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+      const first = expandRRule(rrule, dtstartIso);
+
+      jest.setSystemTime(new Date("1990-06-15T23:59:59.000Z"));
+      const second = expandRRule(rrule, dtstartIso);
+
+      expect(second.map((d) => d.toISOString())).toEqual(
+        first.map((d) => d.toISOString()),
+      );
+      expect(first[0].toISOString()).toBe("2026-07-06T10:00:00.000Z");
+    });
+  });
+
   describe("Basic limitations", () => {
     it("rejects unbounded rrule", () => {
       const rrule = "FREQ=WEEKLY;BYDAY=MO"; // no COUNT or UNTIL
@@ -98,6 +159,43 @@ describe("RecurrenceService", () => {
       expect(occ.length).toBe(2);
       expect(occ[0].toISOString()).toBe("2024-02-29T10:00:00.000Z");
       expect(occ[1].toISOString()).toBe("2028-02-29T10:00:00.000Z");
+    });
+  });
+
+  describe("DST golden tests", () => {
+    // Europe/London springs forward on the last Sunday of March 2026
+    // (2026-03-29, 01:00 UTC): clocks jump from GMT to BST (UTC+1), so the
+    // wall-clock time 01:00 does not exist that day. A daily 01:00
+    // occurrence on the gap day resolves to 00:00Z (the last pre-jump
+    // instant, i.e. 01:00 GMT), and from 2026-03-30 on the local 01:00 maps
+    // to 00:00Z (BST).
+    it("expands Europe/London spring-forward occurrences deterministically", () => {
+      const rrule =
+        "DTSTART;TZID=Europe/London:20260328T010000\nRRULE:FREQ=DAILY;COUNT=4";
+      const occ = expandRRule(rrule);
+      expect(occ.map((d) => d.toISOString())).toEqual([
+        "2026-03-28T01:00:00.000Z", // Mon 2026-03-28 01:00 GMT
+        "2026-03-29T00:00:00.000Z", // Tue 2026-03-29 gap day (01:00 GMT -> 02:00 BST)
+        "2026-03-30T00:00:00.000Z", // Wed 2026-03-30 01:00 BST
+        "2026-03-31T00:00:00.000Z", // Thu 2026-03-31 01:00 BST
+      ]);
+    });
+
+    // America/New_York falls back on the first Sunday of November 2026
+    // (2026-11-01, 06:00 UTC): clocks fall from EDT to EST (UTC-5), so
+    // wall times 01:00–02:00 occur twice that day. rrule resolves the fold
+    // day occurrence to the EDT interpretation (05:30Z) and the following
+    // days to EST (06:30Z).
+    it("expands America/New_York fall-back occurrences deterministically", () => {
+      const rrule =
+        "DTSTART;TZID=America/New_York:20261031T013000\nRRULE:FREQ=DAILY;COUNT=4";
+      const occ = expandRRule(rrule);
+      expect(occ.map((d) => d.toISOString())).toEqual([
+        "2026-10-31T05:30:00.000Z", // Sat 2026-10-31 01:30 EDT
+        "2026-11-01T05:30:00.000Z", // Sun 2026-11-01 01:30 EDT (fold day)
+        "2026-11-02T06:30:00.000Z", // Mon 2026-11-02 01:30 EST
+        "2026-11-03T06:30:00.000Z", // Tue 2026-11-03 01:30 EST
+      ]);
     });
   });
 });

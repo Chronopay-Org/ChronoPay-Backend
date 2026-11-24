@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals";
 /**
- * Focused behavior coverage for `src/middleware/errorHandling.ts`.
+ * Focused behavior coverage for the canonical `src/middleware/errorHandler.ts`.
  *
  * Covers:
  *   - notFoundHandler       — 404 envelope, method/path in message, request-id propagation
@@ -17,7 +17,7 @@ import {
   genericErrorHandler,
   jsonParseErrorHandler,
   notFoundHandler,
-} from "../errorHandling.js";
+} from "../errorHandler.js";
 import { AppError, MalformedJsonError } from "../../errors/AppError.js";
 import { ERROR_CODES } from "../../errors/errorCodes.js";
 import { logger } from "../../utils/logger.js";
@@ -44,7 +44,7 @@ function unfreezeTime() {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("errorHandling middleware", () => {
+describe("error handling middleware", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     freezeTime();
@@ -193,13 +193,13 @@ describe("errorHandling middleware", () => {
 
       expect(next).not.toHaveBeenCalled();
       expect(status).toHaveBeenCalledWith(413);
-      expect(json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          code: "PAYLOAD_TOO_LARGE",
-          message: "Request body exceeds the maximum allowed size.",
-        }),
-      );
+      expect(json).toHaveBeenCalledWith({
+        success: false,
+        code: "PAYLOAD_TOO_LARGE",
+        message: "Request body exceeds the maximum allowed size.",
+        error: "Request body exceeds the maximum allowed size.",
+        timestamp: FIXED_TIME,
+      });
     });
 
     it.each(["charset.unsupported", "encoding.unsupported"])(
@@ -395,7 +395,7 @@ describe("errorHandling middleware", () => {
   });
 
   // =========================================================================
-  // End-to-end sanity: full errorHandling chain via Express
+  // End-to-end sanity: full error handler chain via Express
   // =========================================================================
   describe("integrated chain (express)", () => {
     it("a thrown AppError reaches genericErrorHandler and produces the envelope", async () => {

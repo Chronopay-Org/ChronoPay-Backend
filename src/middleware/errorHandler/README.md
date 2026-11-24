@@ -1,6 +1,8 @@
 # Global Error Handling Middleware
 
-Production-grade error handling for ChronoPay API with secure, tested, and documented implementations.
+The canonical error-handling API is implemented in
+`src/middleware/errorHandler.ts`. The application uses its 404 handler, body
+parser handler, and generic error handler.
 
 ## Features
 
@@ -11,6 +13,7 @@ Production-grade error handling for ChronoPay API with secure, tested, and docum
 - **Type Safety**: Full TypeScript support with type guards
 - **Async Handler**: Wrapper for async route handlers to automatically catch errors
 - **404 Handling**: Automatic handling of unmatched routes
+- **Body Parser Errors**: Consistent handling for malformed and oversized JSON
 
 ## Installation
 
@@ -22,17 +25,20 @@ The middleware is part of the ChronoPay backend codebase. No additional installa
 
 ```typescript
 import express from "express";
-import { errorHandler, notFoundMiddleware } from "./middleware/errorHandler.js";
+import {
+  genericErrorHandler,
+  jsonParseErrorHandler,
+  notFoundHandler,
+} from "./middleware/errorHandler.js";
 
 const app = express();
+app.use(express.json());
 
 // ... your routes ...
 
-// Add 404 handler for unmatched routes
-app.use(notFoundMiddleware);
-
-// Add global error handler
-app.use(errorHandler);
+app.use(notFoundHandler);
+app.use(jsonParseErrorHandler);
+app.use(genericErrorHandler);
 ```
 
 ### Using Custom Error Classes
@@ -97,32 +103,28 @@ app.use(errorHandler);
 
 ## Error Response Format
 
-All error responses follow a consistent structure:
+Responses use a flat JSON envelope:
 
 ```json
 {
   "success": false,
-  "error": {
-    "message": "Error message",
-    "code": "ERROR_CODE",
-    "timestamp": "2024-01-01T00:00:00.000Z"
-  }
+  "code": "ERROR_CODE",
+  "message": "Error message",
+  "error": "Error message",
+  "timestamp": "2024-01-01T00:00:00.000Z",
+  "requestId": "req_..."
 }
 ```
 
-In development, stack traces may be included:
+`requestId`, `details`, and `stack` are optional. `createErrorHandler()` includes
+stack traces by default outside production; the application's
+`genericErrorHandler` preserves the application's existing response shape and
+does not include stacks. Unknown errors handled by `createErrorHandler()` use
+the configured safe text in `error` and omit `message`.
 
-```json
-{
-  "success": false,
-  "error": {
-    "message": "Error message",
-    "code": "ERROR_CODE",
-    "timestamp": "2024-01-01T00:00:00.000Z",
-    "stack": "Error stack trace..."
-  }
-}
-```
+Unmatched routes use the message format `Route not found: METHOD /path`.
+Malformed JSON returns `400 MALFORMED_JSON`; oversized JSON returns
+`413 PAYLOAD_TOO_LARGE`.
 
 ## Available Error Classes
 
@@ -140,7 +142,7 @@ In development, stack traces may be included:
 
 ## Security Considerations
 
-1. **Production Safety**: Internal error details and stack traces are hidden in production
+1. **Production Safety**: Unknown error details and stack traces are hidden in production
 2. **Operational Errors**: Custom errors with `isOperational=true` are safe to expose to clients
 3. **Non-Operational Errors**: Unexpected errors (e.g., database connection failures) are logged but clients receive generic messages
 
@@ -167,8 +169,8 @@ The middleware should be registered last in the middleware chain:
 ```typescript
 app.use(cors());
 app.use(express.json());
-// ... other middleware ...
-// ... your routes ...
-app.use(notFoundMiddleware);  // Must be before error handler
-app.use(errorHandler);          // Must be last
+// ... other middleware and routes ...
+app.use(notFoundHandler);
+app.use(jsonParseErrorHandler);
+app.use(genericErrorHandler);
 ```

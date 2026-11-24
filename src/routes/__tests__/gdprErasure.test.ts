@@ -17,6 +17,7 @@ jest.mock("../../middleware/rateLimiter.js", () => ({
 
 import express from "express";
 import request from "supertest";
+import { createApp } from "../../app.js";
 import { createGdprErasureRouter } from "../../routes/gdprErasure.js";
 import { createTestAuthorization } from "../../../test/auth.js";
 
@@ -24,7 +25,11 @@ import { createTestAuthorization } from "../../../test/auth.js";
 import {
   InMemoryErasureEventLog,
 } from "../../services/gdprErasure/eventLog.js";
-import type { LegalHoldChecker, DbPool } from "../../services/gdprErasure/GdprErasureOrchestrator.js";
+import {
+  GdprErasureOrchestrator,
+  type LegalHoldChecker,
+  type DbPool,
+} from "../../services/gdprErasure/GdprErasureOrchestrator.js";
 
 // ─── App factory ──────────────────────────────────────────────────────────────
 
@@ -76,6 +81,78 @@ function asAuditor() {
 function asCustomer() {
   return { Authorization: createTestAuthorization("customer-1", "customer") };
 }
+
+// ─── createApp route mounting ─────────────────────────────────────────────────
+
+describe("POST /api/v1/gdpr/erase — createApp mount", () => {
+  let app: ReturnType<typeof createApp>;
+  let eraseSpy: jest.SpiedFunction<GdprErasureOrchestrator["erase"]>;
+
+  beforeEach(() => {
+    eraseSpy = jest.spyOn(GdprErasureOrchestrator.prototype, "erase").mockResolvedValue({
+      receipt: {
+        receiptId: "receipt-1",
+        subjectId: "user-123",
+        erasedAt: "2026-01-01T00:00:00.000Z",
+        tablesAffected: [],
+        totalRowsAffected: 0,
+        dryRun: true,
+        requestedBy: "admin-user-1",
+      },
+      tableResults: [],
+    });
+    app = createApp({ enableDocs: false, enableContentNegotiation: false });
+  });
+
+  afterEach(() => {
+    eraseSpy.mockRestore();
+  });
+
+  it("returns 401 when no auth headers are provided", async () => {
+    const res = await request(app)
+      .post("/api/v1/gdpr/erase")
+      .send({ subjectId: "user-123" });
+
+    expect(res.status).toBe(401);
+    expect(eraseSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 for a supplier", async () => {
+    const res = await request(app)
+      .post("/api/v1/gdpr/erase")
+      .set({ Authorization: createTestAuthorization("supplier-1", "supplier") })
+      .send({ subjectId: "user-123" });
+
+    expect(res.status).toBe(403);
+    expect(eraseSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 when an auditor attempts live erasure", async () => {
+    const res = await request(app)
+      .post("/api/v1/gdpr/erase")
+      .set(asAuditor())
+      .send({ subjectId: "user-123", dryRun: false });
+
+    expect(res.status).toBe(403);
+    expect(eraseSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows an admin dry-run through the mounted router", async () => {
+    const res = await request(app)
+      .post("/api/v1/gdpr/erase")
+      .set(asAdmin())
+      .send({ subjectId: "user-123", dryRun: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.receipt.dryRun).toBe(true);
+    expect(eraseSpy).toHaveBeenCalledWith({
+      subjectId: "user-123",
+      requestedBy: "admin-user-1",
+      dryRun: true,
+    });
+  });
+});
 
 // ─── Authentication & authorization ──────────────────────────────────────────
 

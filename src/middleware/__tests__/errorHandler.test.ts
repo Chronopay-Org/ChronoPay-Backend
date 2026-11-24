@@ -1,5 +1,5 @@
 /**
- * Focused behavior coverage for `src/middleware/errorHandler.ts`.
+ * Focused behavior coverage for the canonical `src/middleware/errorHandler.ts`.
  *
  * Exercises the public surface of the module:
  *   - `ErrorHandlerOptions` (logError / includeStackTrace / unknownErrorMessage)
@@ -9,9 +9,7 @@
  *   - representative invalid inputs (non-Error throws, duck-typed errors,
  *     stack-less errors, empty request ids, custom status codes)
  *
- * No production code is modified: the assertions below pin the contract that
- * already ships, including the boundaries where the handler is intentionally
- * (or historically) permissive.
+ * The assertions pin the public behavior of the global error middleware.
  */
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, jest } from "@jest/globals";
@@ -88,12 +86,14 @@ function makeReq(
     requestId: string;
     id: string;
     method: string;
+    path: string;
     url: string;
     originalUrl: string;
   }> = {},
 ): Request {
   return {
     method: "GET",
+    path: "/api/v1/widgets",
     url: "/api/v1/widgets",
     originalUrl: "/api/v1/widgets",
     ...overrides,
@@ -106,7 +106,7 @@ const makeNext = () =>
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /** Keys the unknown-error envelope must never carry. */
-const UNKNOWN_ENVELOPE_ABSENT_KEYS = Object.freeze(["message", "details", "requestId", "stack"]);
+const UNKNOWN_ENVELOPE_ABSENT_KEYS = Object.freeze(["details", "stack"]);
 
 function restoreNodeEnv(value: string | undefined): void {
   if (value === undefined) {
@@ -169,6 +169,7 @@ describe("ErrorHandlerOptions", () => {
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.INTERNAL_ERROR.code,
+      message: "An unexpected error occurred",
       error: "An unexpected error occurred",
       timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       ...(process.env.NODE_ENV !== "production" ? { stack: err.stack } : {}),
@@ -555,14 +556,21 @@ describe("createErrorHandler — unknown error transitions", () => {
     const err = new Error("kaboom");
     const res = makeRes();
 
-    createErrorHandler({ includeStackTrace: false })(err, makeReq(), res, makeNext());
+    createErrorHandler({ includeStackTrace: false })(
+      err,
+      makeReq({ requestId: "req_unknown" }),
+      res,
+      makeNext(),
+    );
 
     expect(res.statusCode).toBe(500);
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.INTERNAL_ERROR.code,
+      message: "An unexpected error occurred",
       error: "An unexpected error occurred",
       timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+      requestId: "req_unknown",
     });
     for (const key of UNKNOWN_ENVELOPE_ABSENT_KEYS) {
       expect(res.body).not.toHaveProperty(key);
@@ -693,6 +701,7 @@ describe("createErrorHandler — invalid and boundary inputs", () => {
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.INTERNAL_ERROR.code,
+      message: "An unexpected error occurred",
       error: "An unexpected error occurred",
       timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
     });
@@ -973,23 +982,27 @@ describe("notFoundHandler", () => {
     expect(notFoundMiddleware).toBe(notFoundHandler);
   });
 
-  it("delegates a 404 AppError to next instead of writing the response", () => {
+  it("writes the app's canonical 404 envelope directly", () => {
     const next = makeNext();
     const res = makeRes();
 
-    notFoundHandler(makeReq({ method: "GET", originalUrl: "/api/v1/missing?page=2" }), res, next);
+    notFoundHandler(
+      makeReq({
+        method: "GET",
+        path: "/api/v1/missing",
+        originalUrl: "/api/v1/missing?page=2",
+      }),
+      res,
+    );
 
-    expect(res.calls).toEqual([]);
-    expect(next).toHaveBeenCalledTimes(1);
-
-    const err = (next as unknown as jest.Mock<(...args: unknown[]) => unknown>).mock
-      .calls[0][0] as AppError;
-    expect(err).toBeInstanceOf(AppError);
-    expect(err.statusCode).toBe(ERROR_CODES.NOT_FOUND.status);
-    expect(err.code).toBe(ERROR_CODES.NOT_FOUND.code);
-    expect(err.isOperational).toBe(true);
-    expect(err.message).toBe("Route GET /api/v1/missing?page=2 not found");
-    expect(err.details).toBeUndefined();
+    expect(res.statusCode).toBe(ERROR_CODES.NOT_FOUND.status);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: ERROR_CODES.NOT_FOUND.code,
+      message: "Route not found: GET /api/v1/missing",
+      error: "Route not found: GET /api/v1/missing",
+    });
+    expect(next).not.toHaveBeenCalled();
   });
 });
 
@@ -1038,8 +1051,8 @@ describe("errorHandler + notFoundMiddleware over Express", () => {
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.NOT_FOUND.code,
-      message: "Route GET /api/v1/missing?page=2 not found",
-      error: "Route GET /api/v1/missing?page=2 not found",
+      message: "Route not found: GET /api/v1/missing",
+      error: "Route not found: GET /api/v1/missing",
       timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       requestId: "req_integration_0001",
     });
@@ -1078,6 +1091,7 @@ describe("errorHandler + notFoundMiddleware over Express", () => {
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.INTERNAL_ERROR.code,
+      message: "An unexpected error occurred",
       error: "An unexpected error occurred",
       timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       requestId: expect.any(String),
@@ -1148,6 +1162,7 @@ describe("createErrorHandler — deterministic timestamps", () => {
     expect(res.body).toEqual({
       success: false,
       code: ERROR_CODES.INTERNAL_ERROR.code,
+      message: "An unexpected error occurred",
       error: "An unexpected error occurred",
       timestamp: "2024-01-02T03:04:05.678Z",
     });

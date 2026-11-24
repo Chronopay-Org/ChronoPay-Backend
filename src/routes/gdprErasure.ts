@@ -77,6 +77,46 @@ export function createGdprErasureRouter(opts?: GdprErasureRouterOptions): Router
    *
    * Erase (or dry-run preview) PII for the given `subjectId`.
    * Access: admin (live + dry-run), auditor (dry-run only).
+   *
+   * @openapi
+   * /api/v1/gdpr/erase:
+   *   post:
+   *     tags: [GDPR]
+   *     summary: Erase or preview erasure of personal data
+   *     description: >
+   *       Erases personal data for the given subject. Admins may perform live
+   *       erasure or a dry-run; auditors may only request a dry-run.
+   *     security:
+   *       - bearerAuth: []
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [subjectId]
+   *             properties:
+   *               subjectId:
+   *                 type: string
+   *                 minLength: 1
+   *                 description: ID of the data subject to erase.
+   *               dryRun:
+   *                 type: boolean
+   *                 default: false
+   *                 description: Return the planned actions without applying mutations.
+   *     responses:
+   *       200:
+   *         description: Erasure completed or dry-run plan returned.
+   *       400:
+   *         description: Missing or invalid subjectId.
+   *       401:
+   *         description: Missing or invalid authentication.
+   *       403:
+   *         description: Insufficient role or auditor attempting live erasure.
+   *       409:
+   *         description: Subject is under a legal hold.
+   *       500:
+   *         description: Unexpected server error.
    */
   router.post(
     "/",

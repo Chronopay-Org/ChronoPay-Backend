@@ -24,6 +24,9 @@ import {
   outboxCompactionSafetyBrakeTriggers,
   outboxCompactionDurationMs,
 } from "../metrics.js";
+import type { InMemoryOutboxStore, OutboxEvent } from "../services/outboxRelay.js";
+
+export { InMemoryOutboxStore } from "../services/outboxRelay.js";
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
 
@@ -32,52 +35,7 @@ import {
  * Real implementations back this with the `outbox_events` table; tests use
  * an in-memory store.
  */
-export interface OutboxRow {
-  id: string;
-  event_type: string;
-  aggregate_id: string;
-  payload: unknown;
-  created_at: Date;
-  /** Set by the relay after the downstream consumer acks the event. */
-  acked_at: Date | null;
-}
-
-// ─── In-memory store (used in tests and as a reference implementation) ────────
-
-/**
- * Minimal in-memory store that backs the outbox compaction worker in tests.
- *
- * Production code would replace this with a real database implementation via
- * dependency injection.
- */
-export class InMemoryOutboxStore {
-  private readonly rows = new Map<string, OutboxRow>();
-
-  /** Insert or replace a row. */
-  upsert(row: OutboxRow): void {
-    this.rows.set(row.id, { ...row });
-  }
-
-  /** Return all rows currently in the store. */
-  list(): OutboxRow[] {
-    return [...this.rows.values()];
-  }
-
-  /** Permanently remove a row by id.  No-op if the id is unknown. */
-  delete(id: string): void {
-    this.rows.delete(id);
-  }
-
-  /** Delete every row.  Used in tests to reset state. */
-  clear(): void {
-    this.rows.clear();
-  }
-
-  /** Return the current number of rows. */
-  size(): number {
-    return this.rows.size;
-  }
-}
+export type OutboxRow = OutboxEvent;
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 

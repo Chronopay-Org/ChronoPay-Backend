@@ -408,6 +408,43 @@ describe("impersonationRecorder middleware", () => {
       expect(hashBody(0)).toBe(hashBody("0"));
       expect(hashBody({ hello: "world" })).toBe(hashBody('{"hello":"world"}'));
     });
+
+    it("should hash objects canonically regardless of key order", () => {
+      const first = { b: 2, a: 1, nested: { z: true, y: false } };
+      const second = { nested: { y: false, z: true }, a: 1, b: 2 };
+
+      expect(hashBody(first)).toBe(hashBody(second));
+      expect(hashBody(first)).toBe(
+        hashBody('{"a":1,"b":2,"nested":{"y":false,"z":true}}'),
+      );
+    });
+
+    it("should preserve array order while canonicalizing nested objects", () => {
+      const ordered = [
+        { b: 2, a: 1 },
+        { d: 4, c: 3 },
+      ];
+      const reorderedKeys = [
+        { a: 1, b: 2 },
+        { c: 3, d: 4 },
+      ];
+      const reversedElements = [
+        { c: 3, d: 4 },
+        { a: 1, b: 2 },
+      ];
+
+      expect(hashBody(ordered)).toBe(hashBody(reorderedKeys));
+      expect(hashBody(ordered)).not.toBe(hashBody(reversedElements));
+    });
+
+    it("should handle unknown edge inputs without throwing", () => {
+      const withUndefined = { a: undefined, b: [undefined, 1] };
+
+      expect(() => hashBody(withUndefined)).not.toThrow();
+      expect(hashBody(withUndefined)).toBe(hashBody('{"b":[null,1]}'));
+      expect(hashBody(true)).toBe(hashBody("true"));
+      expect(hashBody(123)).toBe(hashBody("123"));
+    });
   });
 
   // ── Abort detection ───────────────────────────────────────────────────────

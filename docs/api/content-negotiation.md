@@ -13,7 +13,7 @@ ChronoPay API enforces consistent handling of `Content-Type` and `Accept` header
 
 ### Files Modified:
 - `src/errors/AppError.ts` - Added `ContentNegotiationError` class
-- `src/middleware/errorHandling.ts` - Updated to handle 415/406 error envelopes
+- `src/middleware/errorHandler.ts` - Updated to handle 415/406 error envelopes
 - `src/app.ts` - Wired middleware + added Content-Type response header + updated `AppFactoryOptions`
 - `src/index.ts` - Cleaned up to properly use `createApp()` from `src/app.ts`
 - `jest.config.cjs` - Fixed module mapper for Jest tests
@@ -195,7 +195,7 @@ const app = createApp({
 
 5. **Middleware order:** Content negotiation runs BEFORE `express.json()` middleware in `src/app.ts`. This ensures invalid Content-Type requests are rejected before body parsing, preventing potential issues with body parsers.
 
-6. **Error propagation:** Uses `ContentNegotiationError` (extends `AppError`) passed to `next()`, handled by `genericErrorHandler` in `src/middleware/errorHandling.ts`.
+6. **Error propagation:** Uses `ContentNegotiationError` (extends `AppError`) passed to `next()`, handled by `genericErrorHandler` in `src/middleware/errorHandler.ts`.
 
 ## Architecture Changes
 
@@ -214,7 +214,7 @@ export class ContentNegotiationError extends AppError {
 }
 ```
 
-Updated `genericErrorHandler` in `src/middleware/errorHandling.ts` to handle these errors:
+Updated `genericErrorHandler` in `src/middleware/errorHandler.ts` to handle these errors:
 ```typescript
 if (
   err instanceof Error &&
@@ -292,7 +292,7 @@ The implementation includes 30 comprehensive tests in `src/__tests__/contentNego
 |------|--------|---------|
 | `src/middleware/contentNegotiation.ts` | Created | Core middleware implementation |
 | `src/errors/AppError.ts` | Modified | Added `ContentNegotiationError` class |
-| `src/middleware/errorHandling.ts` | Modified | Error envelope handling for 415/406 |
+| `src/middleware/errorHandler.ts` | Modified | Error envelope handling for 415/406 |
 | `src/app.ts` | Modified | Middleware registration, Content-Type header, AppFactoryOptions |
 | `src/index.ts` | Modified | Cleaned up to use createApp() properly |
 | `src/__tests__/contentNegotiation.test.ts` | Created | 30 comprehensive tests |

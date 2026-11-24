@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * quotaEnforcement.ts
  *
@@ -13,10 +12,37 @@
  *   5. Increments the counter.
  */
 
-import { Request, Response, NextFunction } from "express";
-import { checkAndConsume, SqlQuotaStore } from "../services/partnerQuotaService.js";
+import type { Request, Response, NextFunction } from "express";
+import {
+  checkAndConsume,
+  SqlQuotaStore,
+  type QuotaStore,
+} from "../services/partnerQuotaService.js";
 import { getPool } from "../db/connection.js";
 import { logger } from "../utils/logger.js";
+import { configService } from "../config/config.service.js";
+import { partnerQuotaCheckFailures } from "../metrics.js";
+
+const QUOTA_RETRY_AFTER_SECONDS = 30;
+
+export type QuotaStoreFactory = () => QuotaStore;
+
+let storeFactory: QuotaStoreFactory = () => new SqlQuotaStore(getPool());
+let store: QuotaStore | null = null;
+
+/** Returns the process-wide quota store, creating it on first use. */
+function getStore(): QuotaStore {
+  if (!store) {
+    store = storeFactory();
+  }
+  return store;
+}
+
+/** Test hook: replace the store factory and discard the cached store. */
+export function setQuotaStoreFactory(factory: QuotaStoreFactory): void {
+  storeFactory = factory;
+  store = null;
+}
 
 export async function enforceQuota(
   req: Request,
@@ -33,9 +59,7 @@ export async function enforceQuota(
   }
 
   try {
-    const pool = getPool();
-    const store = new SqlQuotaStore(pool);
-    const result = await checkAndConsume(tokenId, store);
+    const result = await checkAndConsume(tokenId, getStore());
 
     if (!result.allowed) {
       const limitType = result.exceeded === "daily" ? "daily" : "monthly";
@@ -62,9 +86,19 @@ export async function enforceQuota(
 
     next();
   } catch (err) {
-    // If quota check itself fails, allow the request through (fail open)
-    // but log the error for observability.
-    logger.error("[quota-enforcement] Failed to check quota:", err instanceof Error ? err.message : String(err));
+    const mode = configService.quotaFailMode;
+    partnerQuotaCheckFailures.labels(mode).inc();
+    logger.error({ err }, "quota check failed; allowing request");
+    if (mode === "closed") {
+      res.setHeader("Retry-After", String(QUOTA_RETRY_AFTER_SECONDS));
+      res.status(503).json({
+        success: false,
+        code: "DEPENDENCY_UNAVAILABLE",
+        error: "Partner quota service is currently unavailable",
+      });
+      return;
+    }
+
     next();
   }
 }

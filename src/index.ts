@@ -20,6 +20,74 @@ const lifecycle = new ApplicationLifecycle(
 );
 lifecycle.registerStop("reminders", stopScheduler);
 
+// ─── Recurrence Occurrence Materializer ──────────────────────────────────────
+// Rolls active recurrence series forward to the configured horizon.
+(async () => {
+  if (process.env.OCCURRENCE_MATERIALIZER_DISABLED === "true") {
+    logger.info("occurrence-materializer disabled via OCCURRENCE_MATERIALIZER_DISABLED");
+    return;
+  }
+
+  const { createOccurrenceMaterializerScheduler } = await import(
+    "./scheduler/occurrenceMaterializerScheduler.js"
+  );
+  if (lifecycle.isShuttingDown) return;
+
+  const scheduler = createOccurrenceMaterializerScheduler({
+    intervalMs: Number(process.env.OCCURRENCE_MATERIALIZER_INTERVAL_MS) || undefined,
+    isShuttingDown: () => lifecycle.isShuttingDown,
+  });
+  lifecycle.registerStop("occurrence-materializer", () => scheduler.stop());
+  scheduler.start();
+})();
+
+// Evaluates supplier tier alerts hourly when the alert service is enabled.
+(async () => {
+  if (process.env.TIER_ALERT_SCHEDULER_DISABLED === "true") {
+    logger.info("tier-alert-scheduler disabled via TIER_ALERT_SCHEDULER_DISABLED");
+    return;
+  }
+
+  const { defaultSupplierTierAlertService } = await import(
+    "./services/supplierTierAlertService.js"
+  );
+  if (!defaultSupplierTierAlertService.isEnabled()) {
+    logger.info("tier-alert-scheduler skipped: supplier tier alert service is disabled");
+    return;
+  }
+
+  const { createTierAlertScheduler } = await import("./scheduler/tierAlertScheduler.js");
+  if (lifecycle.isShuttingDown) return;
+  const scheduler = createTierAlertScheduler({
+    runIntervalMs: Number(process.env.TIER_ALERT_INTERVAL_MS) || undefined,
+    onAlert: (alert) => {
+      logger.warn(
+        { supplierId: alert.supplierId, tier: alert.toTier },
+        "supplier tier alert",
+      );
+    },
+  });
+  lifecycle.registerStop("tier-alert-scheduler", () => scheduler.stop());
+  scheduler.start();
+  logger.info("tier-alert-scheduler started");
+})();
+
+// Runs the SOC2 access-review worker; set ACCESS_REVIEW_WORKER_DISABLED=true to skip.
+(async () => {
+  if (process.env.ACCESS_REVIEW_WORKER_DISABLED === "true") {
+    logger.info("access-review-worker disabled via ACCESS_REVIEW_WORKER_DISABLED");
+    return;
+  }
+
+  const { startAccessReviewWorker, stopAccessReviewWorker } = await import(
+    "./scheduler/accessReviewWorker.js"
+  );
+  if (lifecycle.isShuttingDown) return;
+  lifecycle.registerStop("access-review", stopAccessReviewWorker);
+  startAccessReviewWorker();
+  logger.info("access-review-worker started");
+})();
+
 // Validate pinned escrow contract hash on startup
 const pinnedHash = escrowMigrationState.getPinnedHash();
 if (pinnedHash) {
@@ -64,8 +132,8 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   const { startDisputeDeadlineScheduler, stopDisputeDeadlineScheduler } =
     await import("./scheduler/disputeDeadlineScheduler.js");
 
-  // Dynamically import admin routes to get the disputes map.
-  const { getDisputes } = await import("./routes/admin.js");
+  // Dynamically import the disputes router to get its in-memory state.
+  const { getDisputes } = await import("./routes/adminDisputes.js");
 
   if (lifecycle.isShuttingDown) return;
   lifecycle.registerStop("dispute-deadline", stopDisputeDeadlineScheduler);
@@ -164,6 +232,23 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   logger.info("outbox-relay worker started");
 })();
 
+// ─── Hold Auto-Refund Worker (#1414) ─────────────────────────────────────────
+// Polls for refundable holds whose holdUntilMs has elapsed and issues automatic
+// refunds. Set HOLD_AUTO_REFUND_DISABLED=true to skip (e.g. for read-only
+// replicas or single-shot scripts). Shares the process-wide booking-intent
+// repository with the HTTP routes so worker-issued refunds are visible through
+// the API immediately.
+(async () => {
+  if (process.env.HOLD_AUTO_REFUND_DISABLED === "true") {
+    logger.info("hold-auto-refund worker disabled via HOLD_AUTO_REFUND_DISABLED");
+    return;
+  }
+
+  const { createHoldAutoRefundWorker } = await import(
+    "./scheduler/holdAutoRefundWorker.js"
+  );
+  const { bookingIntentContainer } = await import(
+    "./modules/booking-intents/bookingIntentContainer.js"
 // ─── Expiry Cleanup Worker (#1425) ──────────────────────────────────────────
 // Expires stale pending booking intents and soft-expires / deletes checkout
 // sessions whose TTL has passed.  Set EXPIRY_CLEANUP_DISABLED=true to skip.
@@ -184,6 +269,21 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
 
   if (lifecycle.isShuttingDown) return;
 
+  const worker = createHoldAutoRefundWorker(
+    {
+      bookingIntentService: bookingIntentContainer.bookingIntentService,
+      bookingIntentRepository: bookingIntentContainer.bookingIntentRepository,
+    },
+    {
+      intervalMs: Number(process.env.HOLD_AUTO_REFUND_INTERVAL_MS) || undefined,
+      batchSize: Number(process.env.HOLD_AUTO_REFUND_BATCH_SIZE) || undefined,
+      safetyThreshold: Number(process.env.HOLD_AUTO_REFUND_SAFETY_THRESHOLD) || undefined,
+    },
+  );
+
+  lifecycle.registerStop("hold-auto-refund", () => worker.stop());
+  worker.start();
+  logger.info("hold-auto-refund worker started");
   const bookingIntentRepository = new InMemoryBookingIntentRepository();
   const slotRepository = new InMemorySlotRepository();
   const bookingIntentService = new BookingIntentService(bookingIntentRepository, slotRepository);
