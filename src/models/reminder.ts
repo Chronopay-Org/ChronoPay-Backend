@@ -1,8 +1,40 @@
 export type ReminderStatus = "pending" | "sent" | "failed";
 
+/**
+ * Identifier of the slot a reminder belongs to.
+ *
+ * Reminders created through the reminder API use positive integers. Slots
+ * themselves are identified by strings (`slot-<uuid>` in memory, UUIDs in
+ * Postgres), so reminders scheduled by `BundleExpiryService` carry the slot's
+ * real string id.
+ */
+export type ReminderSlotId = number | string;
+
+/**
+ * Canonical form of a slot id. A canonical decimal string (digits only, no
+ * leading zeros) that fits in a safe integer becomes a number, so legacy
+ * integer reminders round-trip as numbers; anything else stays a string.
+ * Every repository uses this so they return identical values for the same
+ * input.
+ */
+export function normalizeReminderSlotId(slotId: ReminderSlotId): ReminderSlotId {
+  if (typeof slotId === "string" && /^(0|[1-9]\d*)$/.test(slotId)) {
+    const asNumber = Number(slotId);
+    if (Number.isSafeInteger(asNumber)) {
+      return asNumber;
+    }
+  }
+  return slotId;
+}
+
+/** Whether two slot ids refer to the same slot (`12` and `"12"` do). */
+export function isSameReminderSlot(a: ReminderSlotId, b: ReminderSlotId): boolean {
+  return String(a) === String(b);
+}
+
 export interface Reminder {
   id: string;
-  slotId: number;
+  slotId: ReminderSlotId;
   triggerAt: number;
   status: ReminderStatus;
   attempts: number;
@@ -13,13 +45,18 @@ export interface Reminder {
 }
 
 export interface CreateReminderInput {
-  slotId: number;
+  slotId: ReminderSlotId;
   triggerAt: number;
 }
 
 export interface ReminderRepository {
   create(input: CreateReminderInput): Promise<Reminder>;
   findById(id: string): Promise<Reminder | null>;
+  /**
+   * Returns the reminder for this slot and trigger time, in any status, or
+   * null. Used to keep scheduling idempotent.
+   */
+  findBySlotAndTrigger(slotId: ReminderSlotId, triggerAt: number): Promise<Reminder | null>;
   getDueReminders(now: number, limit?: number): Promise<Reminder[]>;
   markSent(id: string, sentAt?: number): Promise<Reminder | null>;
   recordAttempt(id: string, attemptedAt?: number): Promise<Reminder | null>;
@@ -36,7 +73,7 @@ export class InMemoryReminderRepository implements ReminderRepository {
     const now = Date.now();
     const reminder: Reminder = {
       id: `reminder-${reminderIdCounter++}`,
-      slotId: input.slotId,
+      slotId: normalizeReminderSlotId(input.slotId),
       triggerAt: input.triggerAt,
       status: "pending",
       attempts: 0,
@@ -50,6 +87,16 @@ export class InMemoryReminderRepository implements ReminderRepository {
 
   async findById(id: string): Promise<Reminder | null> {
     const reminder = inMemoryReminders.find((entry) => entry.id === id);
+    return reminder ? cloneReminder(reminder) : null;
+  }
+
+  async findBySlotAndTrigger(
+    slotId: ReminderSlotId,
+    triggerAt: number,
+  ): Promise<Reminder | null> {
+    const reminder = inMemoryReminders.find(
+      (entry) => isSameReminderSlot(entry.slotId, slotId) && entry.triggerAt === triggerAt,
+    );
     return reminder ? cloneReminder(reminder) : null;
   }
 
