@@ -9,7 +9,13 @@ import { QueryBudgetExceededError } from "../errors/AppError.js";
  * If it is missing, we throw an error to fail fast.
  */
 if (!process.env.POSTGRESQL_URL) {
-  throw new Error("FATAL: POSTGRESQL_URL environment variable is missing.");
+  // Fall back to DATABASE_URL (set by docker-compose for local dev) so the pool
+  // can be configured from either variable name.
+  if (process.env.DATABASE_URL) {
+    process.env.POSTGRESQL_URL = process.env.DATABASE_URL;
+  } else {
+    throw new Error("FATAL: POSTGRESQL_URL environment variable is missing.");
+  }
 }
 
 /**

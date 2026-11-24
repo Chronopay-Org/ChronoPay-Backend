@@ -8,6 +8,7 @@ for (const key of [
   "SUBSCRIPTION_SLOT_GENERATOR_DISABLED",
   "OUTBOX_RELAY_DISABLED",
   "SETTLEMENT_RECONCILER_DISABLED",
+  "OCCURRENCE_MATERIALIZER_DISABLED",
 ])
   delete process.env[key];
 process.env.FRAUD_DRIFT_ENABLED = "true";
@@ -24,7 +25,7 @@ const workersReady = new Promise<void>((resolve) => {
 });
 function start(name: string) {
   started.add(name);
-  if (started.size === 5) allStarted();
+  if (started.size === 6) allStarted();
 }
 const stop = (name: string) => () => {
   stopped.push(name);
@@ -49,6 +50,12 @@ jest.unstable_mockModule("../db/pool.js", () => ({ closePool: close("legacy-db")
 jest.unstable_mockModule("../cache/redisClient.js", () => ({ closeRedisClient: close("redis") }));
 jest.unstable_mockModule("../scheduler/reminderScheduler.js", () => ({
   stopScheduler: stop("reminders"),
+}));
+jest.unstable_mockModule("../scheduler/occurrenceMaterializerScheduler.js", () => ({
+  createOccurrenceMaterializerScheduler: () => ({
+    start: () => start("occurrence-materializer"),
+    stop: stop("occurrence-materializer"),
+  }),
 }));
 jest.unstable_mockModule("../services/fraudDriftDetector.js", () => ({
   getFraudDriftDetector: () => ({ startDetector: () => 1, stopDetector: stop("fraud") }),
@@ -115,6 +122,7 @@ it("wires every enabled worker and both pools plus Redis into the real entry poi
     "disputes",
     "flags",
     "fraud",
+    "occurrence-materializer",
     "outbox",
     "reminders",
     "settlements",

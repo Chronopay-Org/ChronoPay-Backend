@@ -21,7 +21,7 @@ import { logger } from "../utils/logger.js";
 
 export const SLOT_CACHE_TTL_SECONDS = parseInt(process.env.REDIS_SLOT_TTL_SECONDS ?? "60", 10);
 
-const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+const REDIS_URL = process.env.REDIS_URL ?? "redis://redis:6379";
 const require = createRequire(import.meta.url);
 
 /**
@@ -35,6 +35,9 @@ export interface RedisClient {
   keys(pattern: string): Promise<string[]>;
   ping(): Promise<string>;
   quit(): Promise<unknown>;
+  incr?(key: string): Promise<number>;
+  hset?(key: string, field: string, value: string): Promise<number>;
+  expire?(key: string, seconds: number): Promise<number>;
 }
 
 let _client: RedisClient | null = null;

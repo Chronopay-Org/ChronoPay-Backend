@@ -128,12 +128,14 @@ export async function runHoldAutoRefundWorker(
   signal: AbortSignal,
   dependencies: HoldAutoRefundDependencies,
   configOverrides: HoldAutoRefundWorkerConfig = {},
+  onResult?: (result: HoldAutoRefundResult) => void,
 ): Promise<void> {
   const config = resolveConfig(configOverrides);
 
   while (!signal.aborted) {
     try {
-      await processHoldAutoRefundOnce(dependencies, configOverrides);
+      const result = await processHoldAutoRefundOnce(dependencies, configOverrides);
+      onResult?.(result);
     } catch (err) {
       logger.error({ err }, "[hold-auto-refund] cycle failed");
     }
@@ -154,7 +156,9 @@ export function createHoldAutoRefundWorker(
     start() {
       if (running) return;
       running = true;
-      void runHoldAutoRefundWorker(controller.signal, dependencies, configOverrides)
+      void runHoldAutoRefundWorker(controller.signal, dependencies, configOverrides, (result) => {
+        lastResult = result;
+      })
         .catch((err) => {
           logger.error({ err }, "[hold-auto-refund] worker failed");
         })
