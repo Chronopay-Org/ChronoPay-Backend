@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { isFieldRedacted, getPolicyFields } from "./redactionPolicy.js";
 
 /**
@@ -60,12 +59,23 @@ const DEFAULT_MASK_PATTERN = (value: string): string => {
 };
 
 /**
+ * Auth-token spellings that are always masked. These are kept outside the
+ * hot-reloadable policy because they are credentials rather than PII and the
+ * historical contract did not include every casing variant.
+ */
+const _AUTH_TOKEN_FIELDS = new Set(["auth_token", "authtoken"]);
+
+/**
  * Checks if a field name should be redacted (case-insensitive)
  * Reads from the current hot-reloadable policy.
  */
 const isSensitiveField = (fieldName: string): boolean => {
   const normalized = fieldName.toLowerCase();
-  return _PII_FIELDS.has(normalized) || isFieldRedacted(normalized);
+  return (
+    _PII_FIELDS.has(normalized) ||
+    _AUTH_TOKEN_FIELDS.has(normalized) ||
+    isFieldRedacted(normalized)
+  );
 };
 
 /**
@@ -78,70 +88,176 @@ const maskValue = (value: unknown): string => {
   return "***";
 };
 
+type UnknownRecord = Record<string, unknown>;
+
+const CIRCULAR_REFERENCE = "[Circular]";
+
+const isObject = (value: unknown): value is object =>
+  typeof value === "object" && value !== null;
+
 /**
- * Recursively redacts sensitive data from an object
- *
- * @param obj - The object to redact (or any value)
- * @param visited - Set of objects already visited (for circular reference detection)
- * @returns A new object with sensitive fields masked
+ * Identifies records we can safely walk. Uses toString instead of a
+ * constructor check to avoid cross-realm issues (e.g., structuredClone in
+ * Jest's VM sandbox creates objects with a different Object constructor).
+ * Other built-ins keep their previous pass-through behavior.
  */
-export const redact = (
-  obj: unknown,
-  visited: WeakSet<any> = new WeakSet()
+const isRecordObject = (value: object): boolean =>
+  Object.prototype.toString.call(value) === "[object Object]";
+
+/**
+ * Redacts a single key/value pair from an object-like container.
+ * Nested objects are always walked first so their sensitive fields are
+ * masked; only primitive values under a sensitive key are replaced.
+ */
+const redactProperty = (
+  key: string,
+  value: unknown,
+  visited: WeakSet<object>,
 ): unknown => {
-  // Handle null and undefined
-  if (obj === null || obj === undefined) {
-    return obj;
+  if (isObject(value) && !(value instanceof Date)) {
+    return redactValue(value, visited);
+  }
+  if (isSensitiveField(key)) {
+    return maskValue(value);
+  }
+  return value;
+};
+
+const redactArray = (value: unknown[], visited: WeakSet<object>): unknown[] =>
+  value.map((item) => redactValue(item, visited));
+
+const redactMap = (
+  value: ReadonlyMap<unknown, unknown>,
+  visited: WeakSet<object>,
+): Map<unknown, unknown> => {
+  const redacted = new Map<unknown, unknown>();
+
+  for (const [key, entryValue] of value) {
+    const redactedKey = isObject(key) ? redactValue(key, visited) : key;
+    const redactedValue =
+      typeof key === "string"
+        ? redactProperty(key, entryValue, visited)
+        : redactValue(entryValue, visited);
+    redacted.set(redactedKey, redactedValue);
   }
 
-  // Handle primitives
-  if (typeof obj !== "object") {
-    return obj;
+  return redacted;
+};
+
+const redactSet = (
+  value: ReadonlySet<unknown>,
+  visited: WeakSet<object>,
+): Set<unknown> => {
+  const redacted = new Set<unknown>();
+
+  for (const member of value) {
+    redacted.add(redactValue(member, visited));
+  }
+
+  return redacted;
+};
+
+const redactError = (error: Error, visited: WeakSet<object>): Error => {
+  // Preserve the original prototype so instanceof checks keep working.
+  const redacted = Object.create(Object.getPrototypeOf(error)) as Error;
+  const target = redacted as unknown as UnknownRecord;
+  const source = error as unknown as UnknownRecord;
+
+  for (const key of ["name", "message", "stack"] as const) {
+    const property = source[key];
+    if (typeof property === "string") {
+      target[key] = property;
+    }
+  }
+
+  if ("cause" in error) {
+    target.cause = redactProperty("cause", source.cause, visited);
+  }
+
+  // Own enumerable properties include custom fields attached to the error.
+  for (const key of Object.keys(error)) {
+    if (key === "cause") {
+      continue;
+    }
+    target[key] = redactProperty(key, source[key], visited);
+  }
+
+  return redacted;
+};
+
+const redactRecord = (
+  record: UnknownRecord,
+  visited: WeakSet<object>,
+): UnknownRecord => {
+  // Preserve class instances (prototype methods/getters) while walking only
+  // own enumerable properties.
+  const redacted = Object.create(
+    Object.getPrototypeOf(record),
+  ) as UnknownRecord;
+
+  for (const key of Object.keys(record)) {
+    redacted[key] = redactProperty(key, record[key], visited);
+  }
+
+  return redacted;
+};
+
+const redactValue = (value: unknown, visited: WeakSet<object>): unknown => {
+  // Handle null, undefined and primitives
+  if (!isObject(value)) {
+    return value;
+  }
+
+  // Dates and regular expressions are immutable containers with no loggable
+  // own fields; keep the original reference.
+  if (value instanceof Date || value instanceof RegExp) {
+    return value;
   }
 
   // Handle circular references
-  if (visited.has(obj)) {
-    return "[Circular]";
+  if (visited.has(value)) {
+    return CIRCULAR_REFERENCE;
   }
 
-  // Mark this object as visited
-  visited.add(obj);
+  // Mark this object as visited before recursing into its children
+  visited.add(value);
 
-  // Handle arrays
-  if (Array.isArray(obj)) {
-    return obj.map((item) => redact(item, visited));
+  if (Array.isArray(value)) {
+    return redactArray(value, visited);
   }
 
-  // Handle Date objects
-  if (obj instanceof Date) {
-    return obj;
+  if (value instanceof Map) {
+    return redactMap(value, visited);
   }
 
-  // Handle plain objects
-  // Use toString instead of constructor check to avoid cross-realm issues
-  // (e.g., structuredClone in Jest's VM sandbox creates objects with a
-  // different Object constructor)
-  if (Object.prototype.toString.call(obj) === "[object Object]") {
-    const redacted: Record<string, unknown> = {};
+  if (value instanceof Set) {
+    return redactSet(value, visited);
+  }
 
-    for (const [key, value] of Object.entries(obj)) {
-      // Always recurse into nested objects/arrays first
-      if (typeof value === "object" && value !== null && !(value instanceof Date)) {
-        redacted[key] = redact(value, visited);
-      } else if (isSensitiveField(key)) {
-        // Redact sensitive primitive values
-        redacted[key] = maskValue(value);
-      } else {
-        // Keep non-sensitive primitive values as-is
-        redacted[key] = value;
-      }
-    }
+  if (value instanceof Error) {
+    return redactError(value, visited);
+  }
 
-    return redacted;
+  if (isRecordObject(value)) {
+    return redactRecord(value as UnknownRecord, visited);
   }
 
   // For other object types, return as-is
-  return obj;
+  return value;
+};
+
+/**
+ * Recursively redacts sensitive data from an object
+ *
+ * @param value - The value to redact
+ * @param visited - Set of objects already visited (for circular reference detection)
+ * @returns A new value of the same type with sensitive fields masked
+ */
+export const redact = <T>(
+  value: T,
+  visited: WeakSet<object> = new WeakSet(),
+): T => {
+  return redactValue(value, visited) as T;
 };
 
 /**
