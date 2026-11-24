@@ -15,7 +15,7 @@
  * to re-walk the history from genesis.
  */
 
-import { getRedisClient } from "../utils/redis.js";
+import { getRedisClient, type RedisClient } from "../cache/redisClient.js";
 
 export interface CursorStore {
   /** Returns the last applied ledger sequence, or null if none exists yet. */
@@ -32,6 +32,14 @@ export function cursorKey(instanceId: string): string {
   return `escrow:listener:cursor:${instanceId}`;
 }
 
+function requireRedisClient(): RedisClient {
+  const client = getRedisClient();
+  if (!client) {
+    throw new Error("Redis client is not available");
+  }
+  return client;
+}
+
 export class RedisCursorStore implements CursorStore {
   private readonly ttlSeconds: number;
 
@@ -43,7 +51,7 @@ export class RedisCursorStore implements CursorStore {
   }
 
   async get(instanceId: string): Promise<number | null> {
-    const raw = await getRedisClient().get(cursorKey(instanceId));
+    const raw = await requireRedisClient().get(cursorKey(instanceId));
     if (raw == null) return null;
     const parsed = Number(raw);
     if (!Number.isInteger(parsed) || parsed < 0) {
@@ -66,7 +74,7 @@ export class RedisCursorStore implements CursorStore {
         `Cursor cannot regress for instance '${instanceId}': current=${current} attempted=${value}`,
       );
     }
-    await getRedisClient().set(
+    await requireRedisClient().set(
       cursorKey(instanceId),
       String(value),
       "EX",

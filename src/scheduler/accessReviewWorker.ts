@@ -24,7 +24,6 @@ import {
   ACCESS_REVIEW_LOOKBACK_MAX,
   ACCESS_REVIEW_LOOKBACK_MIN,
 } from "../constants/accessReview.js";
-import { accessReviewService } from "../services/accessReviewService.js";
 import { logger } from "../utils/logger.js";
 import { accessReviewService, computeQuarterLabel } from "../services/accessReviewService.js";
 

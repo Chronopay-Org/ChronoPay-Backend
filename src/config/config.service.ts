@@ -136,6 +136,10 @@ export class ConfigService {
     return this.envConfig.appUrl;
   }
 
+  public get idempotencyRedisEncryption() {
+    return this.envConfig.idempotencyRedisEncryption;
+  }
+
   private async loadSecretsFromProvider(): Promise<void> {
     this.secrets.clear();
 

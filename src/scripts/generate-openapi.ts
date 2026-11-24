@@ -1,7 +1,12 @@
 // src/scripts/generate-openapi.ts
+import { createRequire } from "node:module";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import swaggerJsdoc from "swagger-jsdoc";
 import { mergeOpenApiExamples } from "../docs/openapiExamples.js";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../../package.json") as { version: string };
 
 // Options matching the ones used in src/app.ts registerSwaggerDocs
 const options = {
@@ -9,7 +14,7 @@ const options = {
     openapi: "3.0.0",
     info: {
       title: "ChronoPay API",
-      version: "1.0.0",
+      version,
       description: "API for ChronoPay payment and scheduling platform",
     },
   },
@@ -138,10 +143,8 @@ for (const [pathKey, pathItem] of Object.entries(fallbackExamples)) {
 // If a file path is provided as an argument, write to that file, otherwise print to stdout
 const outputPath = process.argv[2];
 if (outputPath) {
-  import("node:fs").then((fs) => {
-    fs.writeFileSync(path.resolve(process.cwd(), outputPath), JSON.stringify(spec, null, 2));
-    console.log(`OpenAPI spec written to ${outputPath}`);
-  });
+  writeFileSync(path.resolve(process.cwd(), outputPath), JSON.stringify(spec, null, 2));
+  console.log(`OpenAPI spec written to ${outputPath}`);
 } else {
   console.log(JSON.stringify(spec, null, 2));
 }

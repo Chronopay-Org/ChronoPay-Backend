@@ -13,7 +13,7 @@ import {
   genericErrorHandler,
   jsonParseErrorHandler,
   notFoundHandler,
-} from "./middleware/errorHandling.js";
+} from "./middleware/errorHandler.js";
 
 import { tracingMiddleware } from "./tracing/middleware.js";
 import { featureFlagContextMiddleware } from "./middleware/featureFlags.js";
@@ -58,6 +58,7 @@ import fraudModelsRouter from "./routes/fraudModels.js";
 import flagRolloutsRouter from "./routes/flagRollouts.js";
 import redactionPolicyRouter from "./routes/redactionPolicy.js";
 import { gdprExportRouter } from "./routes/gdprExport.js";
+import { gdprErasureRouter } from "./routes/gdprErasure.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
 import reputationRouter from "./routes/reputation.js";
 import partnerQuotaRouter from "./routes/partnerQuota.js";
@@ -505,6 +506,9 @@ export function createApp(options: AppFactoryOptions = {}) {
 
   // 3c. GDPR Export Routes
   app.use("/api/v1/gdpr/export", gdprExportRouter);
+
+  // 3c-i. GDPR Erasure Routes
+  app.use("/api/v1/gdpr/erase", gdprErasureRouter);
   
   // 3c. Legal Holds Routes
   app.use("/api/v1/admin", legalHoldRouter);

@@ -1,6 +1,5 @@
 import "express";
 import type { ChronoPayRole } from "../middleware/auth.js";
-import type { FeatureFlagAccessor } from "../flags/types.js";
 import { AuthenticatedUser } from "../middleware/auth.middleware.js";
 
 declare module "express-serve-static-core" {
@@ -42,5 +41,10 @@ declare module "express-serve-static-core" {
      * When set, `createAuthAwareRateLimiter` skips rate limiting for this request.
      */
     internalBypassActor?: string;
+    /**
+     * Partner API token id attached by apiKeyAuth. Present only on routes
+     * protected by that middleware.
+     */
+    apiKeyId?: string;
   }
 }

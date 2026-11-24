@@ -9,8 +9,7 @@
  * - Case-insensitive key matching works properly
  */
 
-// @ts-expect-error - Auto-fixed by script
-import { redact, wouldBeRedacted, getSensitiveFields } from "../redact";
+import { redact, wouldBeRedacted, getSensitiveFields } from "../redact.js";
 
 describe("redact utility", () => {
   describe("basic functionality", () => {
@@ -704,7 +703,6 @@ describe("redact utility", () => {
 
       it("should return lowercase field names", () => {
         const fields = getSensitiveFields();
-        // @ts-expect-error - Auto-fixed by script
         fields.forEach((field) => {
           expect(field).toBe(field.toLowerCase());
         });
@@ -735,6 +733,168 @@ describe("redact utility", () => {
 
       expect(result.password).toBe("se***56");
       expect(result.password).toBe((redact(obj) as any).password);
+    });
+  });
+
+  describe("special runtime structures", () => {
+    describe("Error objects", () => {
+      it("preserves error fields and redacts sensitive custom properties", () => {
+        const error = new Error("authentication failed");
+        error.name = "AuthenticationError";
+        error.stack = "AuthenticationError: authentication failed\n    at test";
+        const withSecrets = error as unknown as Record<string, unknown>;
+        withSecrets.password = "super-secret-password";
+        withSecrets.apiKey = "sk-1234567890abcdef";
+
+        const result = redact(error) as Error & Record<string, unknown>;
+
+        expect(result).toBeInstanceOf(Error);
+        expect(result.name).toBe("AuthenticationError");
+        expect(result.message).toBe("authentication failed");
+        expect(result.stack).toBe(error.stack);
+        expect(result.password).toBe("su***rd");
+        expect(result.apiKey).toBe("sk***ef");
+        // The original error must not be mutated.
+        expect(withSecrets.password).toBe("super-secret-password");
+      });
+
+      it("redacts sensitive fields inside an error cause", () => {
+        const cause = { reason: "bad credentials", token: "abc123def456ghi789" };
+        const error = new Error("wrapped", { cause });
+
+        const result = redact(error) as Error & {
+          cause: Record<string, unknown>;
+        };
+
+        expect(result.cause.reason).toBe("bad credentials");
+        expect(result.cause.token).toBe("ab***89");
+      });
+    });
+
+    describe("Map values", () => {
+      it("redacts sensitive entries and nested objects", () => {
+        const map = new Map<string, unknown>([
+          ["password", "super-secret-password"],
+          ["API_KEY", "sk-1234567890abcdef"],
+          ["user", { name: "john", token: "abc123def456ghi789" }],
+          ["safe", "visible"],
+        ]);
+
+        const result = redact(map);
+
+        expect(result).toBeInstanceOf(Map);
+        expect(result.get("password")).toBe("su***rd");
+        expect(result.get("API_KEY")).toBe("sk***ef");
+        const user = result.get("user") as Record<string, unknown>;
+        expect(user.name).toBe("john");
+        expect(user.token).toBe("ab***89");
+        expect(result.get("safe")).toBe("visible");
+      });
+
+      it("redacts object keys and nested secret values", () => {
+        const key = { username: "john", password: "super-secret-password" };
+        const map = new Map<unknown, unknown>([
+          [key, { token: "abc123def456ghi789" }],
+        ]);
+
+        const result = redact(map);
+        const [[redactedKey, redactedValue]] = [...result.entries()];
+
+        expect((redactedKey as Record<string, unknown>).username).toBe("john");
+        expect((redactedKey as Record<string, unknown>).password).toBe("su***rd");
+        expect((redactedValue as Record<string, unknown>).token).toBe("ab***89");
+      });
+    });
+
+    describe("Set members", () => {
+      it("redacts nested objects while preserving primitive members", () => {
+        const set = new Set<unknown>([
+          { username: "john", password: "super-secret-password" },
+          "plain",
+          42,
+          { token: "abc123def456ghi789" },
+        ]);
+
+        const result = redact(set);
+        const members = [...result];
+
+        expect(result).toBeInstanceOf(Set);
+        expect(members[0]).toEqual({
+          username: "john",
+          password: "su***rd",
+        });
+        expect(members[1]).toBe("plain");
+        expect(members[2]).toBe(42);
+        expect((members[3] as Record<string, unknown>).token).toBe("ab***89");
+      });
+    });
+
+    describe("class instances", () => {
+      class Credentials {
+        public username = "john";
+        public password = "super-secret-password";
+        public apiKey = "sk-1234567890abcdef";
+        public profile = { email: "john@example.com", name: "John" };
+      }
+
+      it("preserves the prototype and redacts sensitive fields", () => {
+        const credentials = new Credentials();
+        const result = redact(credentials);
+
+        expect(result).toBeInstanceOf(Credentials);
+        expect(result.username).toBe("john");
+        expect(result.password).toBe("su***rd");
+        expect(result.apiKey).toBe("sk***ef");
+        expect(result.profile.name).toBe("John");
+        expect(result.profile.email).toBe("jo***om");
+      });
+
+      it("does not mutate the original class instance", () => {
+        const credentials = new Credentials();
+        redact(credentials);
+
+        expect(credentials.password).toBe("super-secret-password");
+        expect(credentials.apiKey).toBe("sk-1234567890abcdef");
+      });
+    });
+
+    describe("array cycles", () => {
+      it("handles a self-referencing array", () => {
+        const array: unknown[] = [];
+        array.push(array);
+
+        const result = redact(array);
+
+        expect(result[0]).toBe("[Circular]");
+      });
+
+      it("handles an array/object cycle", () => {
+        const node: Record<string, unknown> = { password: "secret" };
+        const array: unknown[] = [node];
+        node.children = array;
+
+        const result = redact(array);
+        const redactedNode = result[0] as Record<string, unknown>;
+
+        expect(redactedNode.password).toBe("se***et");
+        expect(redactedNode.children).toBe("[Circular]");
+      });
+    });
+  });
+
+  describe("case-insensitive matching for credential aliases", () => {
+    it("redacts API_KEY, authToken and mixed-case variants", () => {
+      const result = redact({
+        API_KEY: "sk-1234567890abcdef",
+        authToken: "abc123def456ghi789",
+        AuthToken: "abc123def456ghi789",
+        AUTH_TOKEN: "abc123def456ghi789",
+      });
+
+      expect(result.API_KEY).toBe("sk***ef");
+      expect(result.authToken).toBe("ab***89");
+      expect(result.AuthToken).toBe("ab***89");
+      expect(result.AUTH_TOKEN).toBe("ab***89");
     });
   });
 });

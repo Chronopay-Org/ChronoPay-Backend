@@ -2,7 +2,7 @@ import { createTestAuthorization } from "../../test/auth.js";
 import express from "express";
 import request from "supertest";
 import { BadRequestError } from "../errors/AppError.js";
-import { genericErrorHandler } from "../middleware/errorHandling.js";
+import { genericErrorHandler } from "../middleware/errorHandler.js";
 import { createBookingIntentsRouter } from "../routes/booking-intents.js";
 import checkoutRouter from "../routes/checkout.js";
 import slotsRouter from "../routes/slots.js";
