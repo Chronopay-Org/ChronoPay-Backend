@@ -7,8 +7,59 @@
  */
 import crypto from "crypto";
 
-// In production this secret should be loaded from a secure env var.
-const SECRET = process.env.PSEUDONYMIZER_SECRET ?? "change-me-to-secure-secret";
+/**
+ * Placeholder secret used ONLY outside production (development & test).
+ * In production a real secret of at least {@link MIN_SECRET_LENGTH} characters
+ * must be provided via the `PSEUDONYMIZER_SECRET` environment variable.
+ */
+const DEV_FALLBACK_SECRET = "change-me-to-secure-secret";
+
+/** Minimum acceptable secret length in production. */
+const MIN_SECRET_LENGTH = 32;
+
+/**
+ * Lazily resolves the HMAC secret from the `PSEUDONYMIZER_SECRET` env var.
+ *
+ * **Production (`NODE_ENV=production`)** — throws when the secret is:
+ *   - unset / empty,
+ *   - the placeholder {@link DEV_FALLBACK_SECRET}, or
+ *   - shorter than {@link MIN_SECRET_LENGTH} characters.
+ *
+ * **Development / test** — falls back to {@link DEV_FALLBACK_SECRET} so that
+ * local development and the test suite work without extra configuration.
+ *
+ * The secret is resolved on every call (not at import time) so that the
+ * production guard fires on first use rather than at module load.
+ */
+export function getSecret(): string {
+  const envSecret = process.env.PSEUDONYMIZER_SECRET;
+  const isProduction = process.env.NODE_ENV === "production";
+
+  if (isProduction) {
+    if (envSecret === undefined || envSecret.trim().length === 0) {
+      throw new Error(
+        "PSEUDONYMIZER_SECRET must be set in production. " +
+          'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"',
+      );
+    }
+    if (envSecret === DEV_FALLBACK_SECRET) {
+      throw new Error(
+        "PSEUDONYMIZER_SECRET must not be the default placeholder in production. " +
+          "Set a unique secret of at least 32 characters.",
+      );
+    }
+    if (envSecret.length < MIN_SECRET_LENGTH) {
+      throw new Error(
+        `PSEUDONYMIZER_SECRET must be at least ${MIN_SECRET_LENGTH} characters long in production ` +
+          `(got ${envSecret.length}).`,
+      );
+    }
+    return envSecret;
+  }
+
+  // Development / test — use the provided secret or the clearly-labelled fallback.
+  return envSecret && envSecret.trim().length > 0 ? envSecret : DEV_FALLBACK_SECRET;
+}
 
 /** Versioned prefix marking a value as a pseudonym produced by {@link pseudonymize}. */
 export const PSEUDONYM_PREFIX = "ps1_";
@@ -30,7 +81,7 @@ export const LEGACY_PSEUDONYM_MIGRATION_LIST: ReadonlySet<string> = new Set<stri
 export function pseudonymize(value: string): string {
   if (!value) return value;
   if (isPseudonymized(value)) return value;
-  const hmac = crypto.createHmac("sha256", SECRET);
+  const hmac = crypto.createHmac("sha256", getSecret());
   hmac.update(value);
   // Use url‑safe base64 without padding
   return PSEUDONYM_PREFIX + hmac.digest("base64url");

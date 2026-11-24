@@ -245,3 +245,27 @@ Tests cover:
 - Auditors are restricted to dry-run mode — they cannot commit mutations.
 - Every erasure is audit-logged with actor ID and timestamp.
 - The receipt hash allows post-hoc verification that a specific field was erased.
+
+## Pseudonymizer Secret (`PSEUDONYMIZER_SECRET`)
+
+The pseudonymizer (`src/utils/pseudonymizer.ts`) produces deterministic
+HMAC-SHA256 pseudonyms that replace PII during erasure. The HMAC is keyed by
+the `PSEUDONYMIZER_SECRET` environment variable.
+
+**Production requirements** — when `NODE_ENV=production` the application
+refuses to produce pseudonyms (first call throws) unless the secret:
+
+  - is set and non-empty,
+  - is **not** the placeholder `change-me-to-secure-secret`, and
+  - is at least **32 characters** long.
+
+Generate a secure value with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+**Development / test** — when `NODE_ENV` is `development` or `test` (or unset)
+the pseudonymizer falls back to the clearly-labelled placeholder
+`change-me-to-secure-secret` so that local development and the test suite work
+without extra configuration. This fallback is never accepted in production.
