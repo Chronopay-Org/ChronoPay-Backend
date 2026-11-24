@@ -72,6 +72,22 @@ lifecycle.registerStop("reminders", stopScheduler);
   logger.info("tier-alert-scheduler started");
 })();
 
+// Runs the SOC2 access-review worker; set ACCESS_REVIEW_WORKER_DISABLED=true to skip.
+(async () => {
+  if (process.env.ACCESS_REVIEW_WORKER_DISABLED === "true") {
+    logger.info("access-review-worker disabled via ACCESS_REVIEW_WORKER_DISABLED");
+    return;
+  }
+
+  const { startAccessReviewWorker, stopAccessReviewWorker } = await import(
+    "./scheduler/accessReviewWorker.js"
+  );
+  if (lifecycle.isShuttingDown) return;
+  lifecycle.registerStop("access-review", stopAccessReviewWorker);
+  startAccessReviewWorker();
+  logger.info("access-review-worker started");
+})();
+
 // Validate pinned escrow contract hash on startup
 const pinnedHash = escrowMigrationState.getPinnedHash();
 if (pinnedHash) {

@@ -2,6 +2,7 @@ import { jest } from "@jest/globals";
 import {
   startAccessReviewWorker,
   stopAccessReviewWorker,
+  isAccessReviewWorkerRunning,
 } from "../accessReviewWorker.js";
 import { accessReviewService } from "../../services/accessReviewService.js";
 import { logger } from "../../utils/logger.js";
@@ -106,5 +107,13 @@ describe("accessReviewWorker", () => {
     await Promise.resolve();
 
     expect(createSnapshotSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports running state accurately across start and stop", () => {
+    expect(isAccessReviewWorkerRunning()).toBe(false);
+    startAccessReviewWorker(60_000);
+    expect(isAccessReviewWorkerRunning()).toBe(true);
+    stopAccessReviewWorker();
+    expect(isAccessReviewWorkerRunning()).toBe(false);
   });
 });
