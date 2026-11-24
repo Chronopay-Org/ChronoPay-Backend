@@ -1,8 +1,59 @@
+# Start the full local stack (API + Postgres + Redis):
+#   docker compose up -d --build
+# Run database migrations once the stack is up (first run / after schema changes):
+#   docker compose run --rm api npm run migrate up
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=chronopay
+      - POSTGRES_PASSWORD=chronopay_dev
+      - POSTGRES_DB=chronopay
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chronopay -d chronopay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
   api:
     build: .
     ports:
       - "3001:3001"
     environment:
       - NODE_ENV=production
+      # Dev-only defaults; override via a local .env file for anything real.
+      - DATABASE_URL=postgresql://chronopay:chronopay_dev@postgres:5432/chronopay
+      - POSTGRESQL_URL=postgresql://chronopay:chronopay_dev@postgres:5432/chronopay
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=dev-only-insecure-jwt-secret-change-me
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
