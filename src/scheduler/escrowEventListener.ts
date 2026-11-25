@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Escrow Event Listener
  * ---------------------
@@ -121,7 +120,6 @@ export async function runEscrowListenerTick(
   const freshnessSloSeconds =
     options.freshnessSloSeconds ?? ESCROW_LISTENER_FRESHNESS_SLO_SECONDS;
   const allowList = options.contractAddressAllowList ?? [];
-  const _sleep = options._sleep ?? defaultSleep;
   const now = options.now ?? (() => Date.now());
 
   if (!Number.isInteger(pageLimit) || pageLimit <= 0) {
@@ -134,7 +132,7 @@ export async function runEscrowListenerTick(
   escrowListenerRollup.recordTick();
 
   // ── Cursor before ──────────────────────────────────────────────────────────
-  const cursorBefore = await options.cursorStore.get(instanceId);
+  const cursorBefore: number | null = await options.cursorStore.get(instanceId);
 
   // ── Tip from contract ─────────────────────────────────────────────────────
   let tipLedgerSeq: number;

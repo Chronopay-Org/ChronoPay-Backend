@@ -3,7 +3,10 @@ import {
   InMemoryBookingIntentRepository,
 } from "../modules/booking-intents/booking-intent-repository.js";
 import { EscrowStateProjector } from "../scheduler/escrowStateProjector.js";
-import { runEscrowListenerTick } from "../scheduler/escrowEventListener.js";
+import {
+  DEFAULT_PAGE_LIMIT,
+  runEscrowListenerTick,
+} from "../scheduler/escrowEventListener.js";
 import { InMemoryCursorStore } from "../scheduler/escrowCursorStore.js";
 import { InMemoryIdempotencyStore } from "../scheduler/escrowIdempotencyStore.js";
 import {
@@ -162,6 +165,8 @@ describe("runEscrowListenerTick — finality window", () => {
       projector: h.projector,
     });
     expect(first.appliedEvents).toBe(0);
+    expect(first.tipLedgerSeq).toBe(100);
+    expect(first.safeTipLedgerSeq).toBe(98);
     // Nothing observed past safeTipSeq → maxProcessedSeq stays at the seed
     // (null cursor coerces to 0). No set call. cursorAfter=0 is correct.
     expect(first.cursorAfter).toBe(0);
@@ -178,7 +183,92 @@ describe("runEscrowListenerTick — finality window", () => {
     // Held applies (pending → confirmed), then Released applies
     // (confirmed → cancelled). Both are "applied" outcomes.
     expect(second.appliedEvents).toBe(2);
+    expect(second.safeTipLedgerSeq).toBe(103);
     expect(second.cursorAfter).toBe(101);
+  });
+});
+
+describe("runEscrowListenerTick — page boundaries", () => {
+  it("uses the default page limit and leaves later events for the next tick", async () => {
+    const h = buildHarness([]);
+    const events = makeSeries({
+      count: DEFAULT_PAGE_LIMIT + 1,
+      kind: "Held",
+      slotId: SLOT_ID,
+      ledgerSeq: 100,
+      ledgerStep: 1,
+    });
+    for (const event of events) h.client.enqueue(event.ledgerSeq, event);
+    h.client.advanceTip(300);
+
+    const first = await runEscrowListenerTick({
+      instanceId: "test",
+      contractClient: h.client,
+      cursorStore: h.cursor,
+      idempotencyStore: h.idempotency,
+      projector: h.projector,
+    });
+
+    expect(first.fetchedEvents).toBe(DEFAULT_PAGE_LIMIT);
+    expect(first.cursorAfter).toBe(199);
+
+    const second = await runEscrowListenerTick({
+      instanceId: "test",
+      contractClient: h.client,
+      cursorStore: h.cursor,
+      idempotencyStore: h.idempotency,
+      projector: h.projector,
+    });
+    expect(second.fetchedEvents).toBe(1);
+    expect(second.cursorAfter).toBe(200);
+  });
+
+  it("does not advance the cursor for an empty page", async () => {
+    const h = buildHarness();
+    h.cursor.seed("test", 90);
+    h.client.advanceTip(100);
+
+    const result = await runEscrowListenerTick({
+      instanceId: "test",
+      contractClient: h.client,
+      cursorStore: h.cursor,
+      idempotencyStore: h.idempotency,
+      projector: h.projector,
+    });
+
+    expect(result.fetchedEvents).toBe(0);
+    expect(result.cursorBefore).toBe(90);
+    expect(result.cursorAfter).toBe(90);
+    expect(await h.cursor.get("test")).toBe(90);
+  });
+});
+
+describe("runEscrowListenerTick — cursor monotonicity", () => {
+  it("never moves the cursor backwards when a page contains an older event", async () => {
+    const h = buildHarness([]);
+    h.cursor.seed("test", 105);
+    h.client.advanceTip(110);
+    const oldEvent = makeEvent({
+      kind: "Held",
+      slotId: SLOT_ID,
+      ledgerSeq: 104,
+    });
+    h.client.getEvents = async () => ({
+      events: [oldEvent],
+      latestLedgerSeq: 110,
+    });
+
+    const result = await runEscrowListenerTick({
+      instanceId: "test",
+      contractClient: h.client,
+      cursorStore: h.cursor,
+      idempotencyStore: h.idempotency,
+      projector: h.projector,
+    });
+
+    expect(result.cursorAfter).toBe(105);
+    expect(result.cursorAfter).toBeGreaterThanOrEqual(result.cursorBefore ?? 0);
+    expect(await h.cursor.get("test")).toBe(105);
   });
 });
 
