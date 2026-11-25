@@ -672,6 +672,18 @@ export const escrowDriftOverridesApplied = createBudgetedCounter({
   registers: [register],
 });
 
+/**
+ * Counter incremented each time an escrow reader drops a malformed event
+ * returned by Soroban RPC getEvents.
+ */
+export const escrowReaderMalformedEventsTotal = createBudgetedCounter({
+  name: "escrow_reader_malformed_events_total",
+  help: "Total number of malformed escrow events dropped by readers",
+  labels: ["reader_id"],
+  budget: 8,
+  registers: [register],
+});
+
 // ─── Fair Queue Rate Limiter metrics ──────────────────────────────────────────
 
 /**

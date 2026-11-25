@@ -1,0 +1,38 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "latestLedger": 12405,
+    "cursor": "0000053030086971392-0000000000",
+    "events": [
+      {
+        "type": "contract",
+        "ledger": 12360,
+        "ledgerClosedAt": "2026-01-15T10:00:50Z",
+        "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        "id": "0000053030086971392-0000000000",
+        "pagingToken": "0000053030086971392-0000000000",
+        "txHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "topic": [
+          "AAAADwAAAAhSZWZ1bmRlZA==",
+          "AAAADgAAAClzbG90LTIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMgAAAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAADAAAADgAAAAZhbW91bnQAAAAAAA4AAAAIMjUwMDAwMDAAAAAOAAAAD2Jvb2tpbmdJbnRlbnRJZAAAAAAOAAAACmludGVudC0wMDIAAAAAAA4AAAAGc2xvdElkAAAAAAAOAAAAKXNsb3QtMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyAAAA"
+      },
+      {
+        "type": "contract",
+        "ledger": 12361,
+        "ledgerClosedAt": "2026-01-15T10:00:55Z",
+        "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        "id": "0000053034381938688-0000000001",
+        "pagingToken": "0000053034381938688-0000000001",
+        "txHash": "not-a-valid-tx-hash",
+        "topic": [
+          "AAAADwAAAAxVbmtub3duRXZlbnQ=",
+          "AAAADgAAAClzbG90LTIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMgAAAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAADAAAADgAAAAZhbW91bnQAAAAAAA4AAAAIMjUwMDAwMDAAAAAOAAAAD2Jvb2tpbmdJbnRlbnRJZAAAAAAOAAAACmludGVudC0wMDIAAAAAAA4AAAAGc2xvdElkAAAAAAAOAAAAKXNsb3QtMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyAAAA"
+      }
+    ]
+  }
+}
