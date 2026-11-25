@@ -204,25 +204,15 @@ if (process.env.FRAUD_DRIFT_ENABLED === "true") {
   }
 
   const { runOutboxRelayWorker, SqlOutboxStore } = await import("./services/outboxRelay.js");
+  const { createOutboxPublisherFromEnv } = await import("./services/outboxPublisher.js");
   const { getPool } = await import("./db/connection.js");
 
   if (lifecycle.isShuttingDown) return;
   const pool = getPool();
   const store = new SqlOutboxStore(pool);
 
-  // Default publish callback: log the event (production deployments replace
-  // this with a real publisher, e.g. Kafka producer or webhook dispatcher).
-  const publish = async (event: {
-    id: string;
-    event_type: string;
-    aggregate_id: string;
-    payload: unknown;
-  }) => {
-    logger.info(
-      { eventId: event.id, eventType: event.event_type, aggregateId: event.aggregate_id },
-      "outbox relay: publishing event",
-    );
-  };
+  const publisher = createOutboxPublisherFromEnv();
+  const publish = (event: Parameters<typeof publisher.publish>[0]) => publisher.publish(event);
 
   const controller = new AbortController();
   const worker = runOutboxRelayWorker(controller.signal, store, publish).catch((err: Error) => {
