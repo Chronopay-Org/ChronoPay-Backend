@@ -212,3 +212,4 @@ describe("HorizonEscrowReader.fetchEvents", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
