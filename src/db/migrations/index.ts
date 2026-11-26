@@ -58,6 +58,7 @@ import { migration as migration039 } from "./028_add_booking_intent_hold_snapsho
 import { migration as migration040 } from "./040_create_discount_curves.js";
 import { migration as migration040 } from "./040_create_payout_quarantine.js";
 import { migration as migration040 } from "./029_widen_reminders_slot_id.js";
+import { migration as migration041 } from "./041_add_outbox_attempts_and_dead_letter.js";
 
 export const migrations: Migration[] = [
   migration001,
@@ -100,6 +101,7 @@ export const migrations: Migration[] = [
   migration038,
   migration039,
   migration040,
+  migration041,
 ];
 
 // ─── Duplicate-ID guard ───────────────────────────────────────────────────────

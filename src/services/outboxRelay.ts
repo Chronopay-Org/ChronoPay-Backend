@@ -35,6 +35,9 @@ export interface OutboxEvent {
   payload: unknown;
   created_at: Date | number;
   acked_at: Date | null;
+  attempts?: number;
+  failed_at?: Date | null;
+  last_error?: string | null;
 }
 
 function timestampMilliseconds(value: Date | number): number {
@@ -89,6 +92,12 @@ export interface OutboxStore {
   fetchUnacked(limit: number): Promise<OutboxEvent[]>;
   /** Mark a single event as acknowledged by its id. */
   markAcked(id: string): Promise<void>;
+  /**
+   * Record a delivery failure for an event, incrementing its attempt counter
+   * and marking it permanently failed (dead-lettered) once `attempts >= maxAttempts`.
+   * Returns true if the event was dead-lettered.
+   */
+  recordFailure?(id: string, error: string, maxAttempts: number): Promise<boolean>;
 }
 
 /**
@@ -103,6 +112,7 @@ export class SqlOutboxStore implements OutboxStore {
          SELECT id
          FROM outbox_events
          WHERE acked_at IS NULL
+           AND failed_at IS NULL
            AND (claimed_until IS NULL OR claimed_until <= NOW())
          ORDER BY created_at ASC
          LIMIT $1
@@ -113,7 +123,8 @@ export class SqlOutboxStore implements OutboxStore {
        FROM candidates
        WHERE events.id = candidates.id
        RETURNING events.id, events.event_type, events.aggregate_id,
-                 events.payload, events.created_at, events.acked_at`,
+                 events.payload, events.created_at, events.acked_at,
+                 events.attempts, events.failed_at, events.last_error`,
       [limit, OUTBOX_CLAIM_LEASE_MS],
     );
     return result.rows.sort(compareCreatedAt);
@@ -126,6 +137,20 @@ export class SqlOutboxStore implements OutboxStore {
        WHERE id = $1 AND acked_at IS NULL`,
       [id],
     );
+  }
+
+  async recordFailure(id: string, error: string, maxAttempts: number): Promise<boolean> {
+    const result = await this.pool.query<{ dead_lettered: boolean }>(
+      `UPDATE outbox_events
+       SET attempts = attempts + 1,
+           last_error = $2,
+           failed_at = CASE WHEN attempts + 1 >= $3 THEN NOW() ELSE failed_at END,
+           claimed_until = CASE WHEN attempts + 1 >= $3 THEN NULL ELSE claimed_until END
+       WHERE id = $1 AND acked_at IS NULL AND failed_at IS NULL
+       RETURNING failed_at IS NOT NULL AS dead_lettered`,
+      [id, error, maxAttempts],
+    );
+    return result.rows[0]?.dead_lettered ?? false;
   }
 }
 
@@ -141,7 +166,12 @@ export class InMemoryOutboxStore implements OutboxStore {
   ) {}
 
   upsert(row: OutboxEvent): void {
-    this.rows.set(row.id, { ...row });
+    this.rows.set(row.id, {
+      attempts: 0,
+      failed_at: null,
+      last_error: null,
+      ...row,
+    });
     this.claimedUntil.delete(row.id);
   }
 
@@ -151,6 +181,7 @@ export class InMemoryOutboxStore implements OutboxStore {
       .filter(
         (row) =>
           row.acked_at === null &&
+          (row.failed_at ?? null) === null &&
           (this.claimedUntil.get(row.id) ?? 0) <= now,
       )
       .sort(compareCreatedAt)
@@ -168,6 +199,22 @@ export class InMemoryOutboxStore implements OutboxStore {
       row.acked_at = new Date();
       this.claimedUntil.delete(id);
     }
+  }
+
+  async recordFailure(id: string, error: string, maxAttempts: number): Promise<boolean> {
+    const row = this.rows.get(id);
+    if (!row || row.acked_at !== null || (row.failed_at ?? null) !== null) {
+      return false;
+    }
+    const nextAttempts = (row.attempts ?? 0) + 1;
+    row.attempts = nextAttempts;
+    row.last_error = error;
+    if (nextAttempts >= maxAttempts) {
+      row.failed_at = new Date();
+      this.claimedUntil.delete(id);
+      return true;
+    }
+    return false;
   }
 
   list(): OutboxEvent[] {
@@ -202,6 +249,11 @@ export interface OutboxRelayConfig {
    * Defaults to 3 000 ms / 3 seconds (OUTBOX_RELAY_INTERVAL_MS env var).
    */
   intervalMs?: number;
+  /**
+   * Maximum delivery attempts before an event is marked failed (dead-lettered).
+   * Defaults to 5 (OUTBOX_RELAY_MAX_ATTEMPTS env var).
+   */
+  maxAttempts?: number;
 }
 
 function parsePositiveInteger(value: string | undefined, defaultValue: number): number {
@@ -221,6 +273,9 @@ function resolveConfig(
     intervalMs:
       overrides.intervalMs ??
       parsePositiveInteger(process.env.OUTBOX_RELAY_INTERVAL_MS, 3_000),
+    maxAttempts:
+      overrides.maxAttempts ??
+      parsePositiveInteger(process.env.OUTBOX_RELAY_MAX_ATTEMPTS, 5),
   };
 }
 
@@ -272,9 +327,20 @@ export async function relayOutboxOnce(
     } catch (err) {
       failed += 1;
       outboxRelayPublishErrors.inc();
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const deadLettered = store.recordFailure
+        ? await store.recordFailure(event.id, errorMessage, cfg.maxAttempts)
+        : false;
       logger.error(
-        { eventId: event.id, eventType: event.event_type, error: err instanceof Error ? err.message : String(err) },
-        "outbox relay: failed to publish event",
+        {
+          eventId: event.id,
+          eventType: event.event_type,
+          error: errorMessage,
+          deadLettered,
+        },
+        deadLettered
+          ? "outbox relay: event exhausted max attempts and marked failed"
+          : "outbox relay: failed to publish event",
       );
     }
   }
