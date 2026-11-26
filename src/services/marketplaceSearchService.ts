@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Marketplace Search Service
  *
@@ -20,8 +19,8 @@ import {
   validateSearchQuery,
 } from "../validation/marketplaceSearchSchema.js";
 import {
-
-
+  LtrEventEmitter,
+  LtrReranker,
   NUM_FEATURES,
 } from "./ltr/index.js";
 import { isFeatureEnabled } from "../flags/index.js";
@@ -76,11 +75,41 @@ const DEFAULT_DIVERSIFICATION_CONFIG: Required<DiversificationConfig> = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// SQL parameter builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Tracks placeholder indices while building a parameterized SQL fragment.
+ * Each call to `add` appends a value and returns the `$N` placeholder string.
+ * The final `params` array and `nextIndex` are always consistent.
+ */
+class ParamList {
+  readonly params: unknown[] = [];
+  private idx: number;
+
+  constructor(startIdx = 1) {
+    this.idx = startIdx;
+  }
+
+  /** Append a value and return its placeholder (e.g. `$3`). */
+  add(value: unknown): string {
+    this.params.push(value);
+    return `$${this.idx++}`;
+  }
+
+  /** Current next index (equals params.length + startIdx). */
+  get nextIndex(): number {
+    return this.idx;
+  }
+}
+
 export class MarketplaceSearchService {
   private facetCache: FacetCountsCache;
   private diversificationConfig: Required<DiversificationConfig>;
   private reranker: LtrReranker | undefined;
   private eventEmitter: LtrEventEmitter | undefined;
+  private queryTracker: SearchQueryTracker | undefined;
 
   constructor(
     private pool: Pool,
@@ -178,43 +207,46 @@ export class MarketplaceSearchService {
     try {
       const normalizedBase64 = cursorStr.replace(/-/g, "+").replace(/_/g, "/");
       const raw = Buffer.from(normalizedBase64, "base64").toString("utf-8");
-      const data = JSON.parse(raw);
+      const data: unknown = JSON.parse(raw);
 
-      if (typeof data !== "object" || data === null) {
+      if (typeof data !== "object" || data === null || Array.isArray(data)) {
         throw new Error("Cursor payload must be an object");
       }
 
-      if (typeof data.id !== "number" || !Number.isInteger(data.id) || data.id < 0) {
+      const obj = data as Record<string, unknown>;
+
+      if (typeof obj["id"] !== "number" || !Number.isInteger(obj["id"]) || (obj["id"] as number) < 0) {
         throw new Error("Cursor id must be a non-negative integer");
       }
 
-      if (data.sortBy !== expectedSortBy) {
-        throw new Error(`Cursor sortBy mismatch (expected ${expectedSortBy}, got ${data.sortBy})`);
+      if (obj["sortBy"] !== expectedSortBy) {
+        throw new Error(`Cursor sortBy mismatch (expected ${expectedSortBy}, got ${String(obj["sortBy"])})`);
       }
 
       if (expectedSortBy === "rating" || expectedSortBy === "relevance") {
-        if (typeof data.rating !== "number" || isNaN(data.rating)) {
+        if (typeof obj["rating"] !== "number" || isNaN(obj["rating"] as number)) {
           throw new Error("Cursor rating must be a valid number");
         }
       }
 
       if (expectedSortBy === "price" || expectedSortBy === "relevance") {
-        if (typeof data.price !== "number" || isNaN(data.price)) {
+        if (typeof obj["price"] !== "number" || isNaN(obj["price"] as number)) {
           throw new Error("Cursor price must be a valid number");
         }
       }
 
       return {
-        sortBy: data.sortBy,
-        id: data.id,
-        rating: data.rating,
-        price: data.price,
+        sortBy: obj["sortBy"] as CursorData["sortBy"],
+        id: obj["id"] as number,
+        rating: typeof obj["rating"] === "number" ? obj["rating"] : undefined,
+        price: typeof obj["price"] === "number" ? obj["price"] : undefined,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof MarketplaceSearchError) {
         throw error;
       }
-      throw new MarketplaceSearchError(error.message || "Invalid or malformed cursor", 400);
+      const message = error instanceof Error ? error.message : "Invalid or malformed cursor";
+      throw new MarketplaceSearchError(message, 400);
     }
   }
 
@@ -235,8 +267,11 @@ export class MarketplaceSearchService {
       return [...slots];
     }
 
-    const remaining = slots.map((s, i) => ({ slot: s, originalIndex: i }));
-    const result: typeof remaining = [];
+    const remaining: Array<{ slot: Slot; originalIndex: number }> = slots.map((s, i) => ({
+      slot: s,
+      originalIndex: i,
+    }));
+    const result: Array<{ slot: Slot; originalIndex: number }> = [];
     const recentSuppliers: string[] = [];
 
     while (remaining.length > 0) {
@@ -285,7 +320,8 @@ export class MarketplaceSearchService {
     if (query.supplierCap !== undefined && query.supplierCap !== null) {
       return query.supplierCap;
     }
-    const bySortMode = this.diversificationConfig.capBySortMode[query.sortBy];
+    const sortKey = query.sortBy as keyof typeof this.diversificationConfig.capBySortMode;
+    const bySortMode = this.diversificationConfig.capBySortMode[sortKey];
     if (bySortMode !== undefined) {
       return bySortMode;
     }
@@ -295,61 +331,53 @@ export class MarketplaceSearchService {
   /**
    * Build SQL WHERE clause and parameters for search filters.
    * Uses parameterized queries to prevent SQL injection.
+   * Returns params typed as `unknown[]` — values are set by this method and
+   * consumed by `pool.query` which accepts `any[]`; callers must not mutate
+   * the array members.
    */
   private buildFilterClause(query: MarketplaceSearchQuery): {
     whereClause: string;
-    params: any[];
+    params: unknown[];
     paramCount: number;
   } {
     const conditions: string[] = [];
-    const params: any[] = [];
-    let paramCount = 1;
+    const list = new ParamList(1);
 
     if (query.categories && query.categories.length > 0) {
-      const placeholders = query.categories
-        .map(() => `$${paramCount++}`)
-        .join(", ");
+      const placeholders = query.categories.map((cat) => list.add(cat)).join(", ");
       conditions.push(`category IN (${placeholders})`);
-      params.push(...query.categories);
     }
 
     if (query.priceRange) {
       if (query.priceRange.min !== undefined) {
-        conditions.push(`price_cents >= $${paramCount++}`);
-        params.push(query.priceRange.min);
+        conditions.push(`price_cents >= ${list.add(query.priceRange.min)}`);
       }
       if (query.priceRange.max !== undefined) {
-        conditions.push(`price_cents <= $${paramCount++}`);
-        params.push(query.priceRange.max);
+        conditions.push(`price_cents <= ${list.add(query.priceRange.max)}`);
       }
     }
 
     if (query.ratingRange) {
       if (query.ratingRange.min !== undefined) {
-        conditions.push(`supplier_rating >= $${paramCount++}`);
-        params.push(query.ratingRange.min);
+        conditions.push(`supplier_rating >= ${list.add(query.ratingRange.min)}`);
       }
       if (query.ratingRange.max !== undefined) {
-        conditions.push(`supplier_rating <= $${paramCount++}`);
-        params.push(query.ratingRange.max);
+        conditions.push(`supplier_rating <= ${list.add(query.ratingRange.max)}`);
       }
     }
 
     if (query.timeWindow) {
       if (query.timeWindow.startTime !== undefined) {
         const startTimestamp = new Date(query.timeWindow.startTime).toISOString();
-        conditions.push(`start_time >= $${paramCount++}`);
-        params.push(startTimestamp);
+        conditions.push(`start_time >= ${list.add(startTimestamp)}`);
       }
       if (query.timeWindow.endTime !== undefined) {
         const endTimestamp = new Date(query.timeWindow.endTime).toISOString();
-        conditions.push(`end_time <= $${paramCount++}`);
-        params.push(endTimestamp);
+        conditions.push(`end_time <= ${list.add(endTimestamp)}`);
       }
     }
 
-    conditions.push(`status = $${paramCount++}`);
-    params.push("available");
+    conditions.push(`status = ${list.add("available")}`);
 
     // Geo-radius prefilter: H3 tile set (fast, indexed). This narrows the
     // candidate rows down to the neighborhood of the query point; the exact
@@ -363,8 +391,7 @@ export class MarketplaceSearchService {
         query.geo.lng,
         query.geo.radiusKm
       );
-      conditions.push(`h3_cell_res7 = ANY($${paramCount++}::text[])`);
-      params.push(candidateCells);
+      conditions.push(`h3_cell_res7 = ANY(${list.add(candidateCells)}::text[])`);
     }
     // Suppress slots that are currently under an active refundable hold.
     // A hold is active when holds.released_at IS NULL and holds.expires_at > NOW().
@@ -382,7 +409,7 @@ export class MarketplaceSearchService {
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    return { whereClause, params, paramCount };
+    return { whereClause, params: list.params, paramCount: list.nextIndex };
   }
 
   /**
@@ -403,37 +430,37 @@ export class MarketplaceSearchService {
 
   /**
    * Build cursor comparison predicate for deterministic pagination.
+   *
+   * @param cursorData Decoded cursor from the previous page
+   * @param startParamIndex The next available `$N` index (1-based)
+   * @returns SQL condition, typed parameter values, and the next free index
    */
   private buildCursorPredicate(
     cursorData: CursorData,
     startParamIndex: number
-  ): { conditionSql: string; cursorParams: any[]; nextParamIndex: number } {
-    let p = startParamIndex;
-    const cursorParams: any[] = [];
+  ): { conditionSql: string; cursorParams: unknown[]; nextParamIndex: number } {
+    const list = new ParamList(startParamIndex);
 
     switch (cursorData.sortBy) {
       case "rating": {
-        const pRating = `$${p++}`;
-        const pId = `$${p++}`;
-        cursorParams.push(cursorData.rating, cursorData.id);
+        const pRating = list.add(cursorData.rating);
+        const pId = list.add(cursorData.id);
         const conditionSql = `(supplier_rating < ${pRating} OR (supplier_rating = ${pRating} AND id > ${pId}))`;
-        return { conditionSql, cursorParams, nextParamIndex: p };
+        return { conditionSql, cursorParams: list.params, nextParamIndex: list.nextIndex };
       }
       case "price": {
-        const pPrice = `$${p++}`;
-        const pId = `$${p++}`;
-        cursorParams.push(cursorData.price, cursorData.id);
+        const pPrice = list.add(cursorData.price);
+        const pId = list.add(cursorData.id);
         const conditionSql = `(price_cents > ${pPrice} OR (price_cents = ${pPrice} AND id > ${pId}))`;
-        return { conditionSql, cursorParams, nextParamIndex: p };
+        return { conditionSql, cursorParams: list.params, nextParamIndex: list.nextIndex };
       }
       case "relevance":
       default: {
-        const pRating = `$${p++}`;
-        const pPrice = `$${p++}`;
-        const pId = `$${p++}`;
-        cursorParams.push(cursorData.rating, cursorData.price, cursorData.id);
+        const pRating = list.add(cursorData.rating);
+        const pPrice = list.add(cursorData.price);
+        const pId = list.add(cursorData.id);
         const conditionSql = `(supplier_rating < ${pRating} OR (supplier_rating = ${pRating} AND price_cents > ${pPrice}) OR (supplier_rating = ${pRating} AND price_cents = ${pPrice} AND id > ${pId}))`;
-        return { conditionSql, cursorParams, nextParamIndex: p };
+        return { conditionSql, cursorParams: list.params, nextParamIndex: list.nextIndex };
       }
     }
   }
@@ -475,15 +502,15 @@ export class MarketplaceSearchService {
       const orderByClause = this.buildOrderByClause(query);
 
       const countQuery = `SELECT COUNT(*) as total FROM slots ${baseWhereClause}`;
-      const countResult = await this.pool.query(countQuery, filterParams);
+      const countResult = await this.pool.query(countQuery, filterParams as unknown[]);
       const total = parseInt(countResult.rows[0].total, 10);
 
       let mainWhereClause = baseWhereClause;
-      const mainQueryParams = [...filterParams];
+      const mainQueryParams: unknown[] = [...filterParams];
       let currentParamIndex = paramCount;
 
       if (query.cursor) {
-        const cursorData = this.decodeCursor(query.cursor, query.sortBy);
+        const cursorData = this.decodeCursor(query.cursor, query.sortBy as "rating" | "price" | "relevance");
         const { conditionSql, cursorParams, nextParamIndex } = this.buildCursorPredicate(
           cursorData,
           currentParamIndex
@@ -534,19 +561,19 @@ export class MarketplaceSearchService {
         ${paginationClause}
       `;
 
-      const result = await this.pool.query(mainQuery, mainQueryParams);
+      const result = await this.pool.query(mainQuery, mainQueryParams as unknown[]);
 
-      const slots: Slot[] = result.rows.map((row) => ({
-        id: row.id,
-        professional: row.professional,
-        startTime: new Date(row.startTime).getTime(),
-        endTime: new Date(row.endTime).getTime(),
-        category: row.category,
-        price_cents: row.price_cents,
-        supplier_rating: row.supplier_rating,
+      const slots: Slot[] = result.rows.map((row: Record<string, unknown>) => ({
+        id: row["id"] as number,
+        professional: row["professional"] as string,
+        startTime: new Date(row["startTime"] as string | number).getTime(),
+        endTime: new Date(row["endTime"] as string | number).getTime(),
+        category: row["category"] as string | undefined,
+        price_cents: row["price_cents"] as number | undefined,
+        supplier_rating: row["supplier_rating"] as number | undefined,
         // Only present when suppressHeld=false AND showHeldReleaseEta=true
-        ...(row.held_release_eta != null
-          ? { heldReleaseEta: new Date(row.held_release_eta).getTime() }
+        ...(row["held_release_eta"] != null
+          ? { heldReleaseEta: new Date(row["held_release_eta"] as string | number).getTime() }
           : {}),
       }));
 
@@ -579,6 +606,7 @@ export class MarketplaceSearchService {
             }
           }
         } catch {
+          // LTR errors are non-fatal; fall back to SQL-ordered results
         }
 
         if (this.eventEmitter && featureVectors) {
@@ -601,6 +629,7 @@ export class MarketplaceSearchService {
               })),
             });
           } catch {
+            // Impression event errors are non-fatal
           }
         }
       }
@@ -627,7 +656,7 @@ export class MarketplaceSearchService {
       let nextCursor: string | null = null;
       if (slotsOrdered.length === query.limit) {
         const lastSlot = slotsOrdered[slotsOrdered.length - 1];
-        nextCursor = this.encodeCursor(lastSlot, query.sortBy);
+        nextCursor = this.encodeCursor(lastSlot, query.sortBy as "rating" | "price" | "relevance");
       }
 
       let facets: FacetCounts | undefined;
@@ -635,7 +664,7 @@ export class MarketplaceSearchService {
         try {
           facets = await this.facetCache.getFacetCounts(query, this.pool);
         } catch (err) {
-          logger.warn("Failed to compute facet counts:", err instanceof Error ? err.message : err);
+          logger.warn({ err }, "Failed to compute facet counts");
         }
       }
 
@@ -656,8 +685,8 @@ export class MarketplaceSearchService {
 
       if (cache) {
         const ttlMs = 60 * 1000;
-        await cache.set(cacheKey, searchResult, ttlMs).catch((err) => {
-          logger.warn("Failed to cache marketplace search result:", err.message);
+        await cache.set(cacheKey, searchResult, ttlMs).catch((err: Error) => {
+          logger.warn({ err }, "Failed to cache marketplace search result");
         });
       }
 
@@ -750,6 +779,7 @@ export class MarketplaceSearchService {
 
     try {
       const { whereClause, params, paramCount } = this.buildFilterClause(query);
+      const limitPlaceholder = `$${paramCount}`;
       const candidateQuery = `
         SELECT
           id,
@@ -765,25 +795,30 @@ export class MarketplaceSearchService {
           longitude
         FROM slots
         ${whereClause}
-        LIMIT $${paramCount}
+        LIMIT ${limitPlaceholder}
       `;
-      const result = await this.pool.query(candidateQuery, [...params, MAX_GEO_CANDIDATES]);
+      const result = await this.pool.query(candidateQuery, [...(params as unknown[]), MAX_GEO_CANDIDATES]);
 
       const candidates: Array<{ slot: Slot; distanceKm: number }> = [];
-      for (const row of result.rows) {
-        const dKm = distanceKm(geo.lat, geo.lng, Number(row.latitude), Number(row.longitude));
+      for (const row of result.rows as Array<Record<string, unknown>>) {
+        const dKm = distanceKm(
+          geo.lat,
+          geo.lng,
+          Number(row["latitude"]),
+          Number(row["longitude"])
+        );
         if (dKm <= geo.radiusKm) {
           candidates.push({
             slot: {
-              id: row.id,
-              professional: row.professional,
-              startTime: new Date(row.startTime).getTime(),
-              endTime: new Date(row.endTime).getTime(),
-              category: row.category,
-              price_cents: row.price_cents,
-              supplier_rating: row.supplier_rating,
-              latitude: Number(row.latitude),
-              longitude: Number(row.longitude),
+              id: row["id"] as number,
+              professional: row["professional"] as string,
+              startTime: new Date(row["startTime"] as string | number).getTime(),
+              endTime: new Date(row["endTime"] as string | number).getTime(),
+              category: row["category"] as string | undefined,
+              price_cents: row["price_cents"] as number | undefined,
+              supplier_rating: row["supplier_rating"] as number | undefined,
+              latitude: Number(row["latitude"]),
+              longitude: Number(row["longitude"]),
             },
             distanceKm: dKm,
           });
@@ -814,8 +849,8 @@ export class MarketplaceSearchService {
 
       if (cache) {
         const ttlMs = 60 * 1000;
-        await cache.set(cacheKey, searchResult, ttlMs).catch((err) => {
-          logger.warn("Failed to cache marketplace geo search result:", err.message);
+        await cache.set(cacheKey, searchResult, ttlMs).catch((err: Error) => {
+          logger.warn({ err }, "Failed to cache marketplace geo search result");
         });
       }
 
@@ -847,12 +882,12 @@ export class MarketplaceSearchService {
   private extractFeatureVectors(
     slots: Slot[],
     query: MarketplaceSearchQuery,
-  ) {
+  ): Array<{ slotId: number; features: number[] }> {
     const now = Date.now();
     const queryCategorySet = new Set(query.categories ?? []);
 
     return slots.map((slot) => {
-      const features = new Array(NUM_FEATURES).fill(0);
+      const features = new Array<number>(NUM_FEATURES).fill(0);
 
       features[0] = Math.min(1, Math.max(0, (slot.supplier_rating ?? 0) / 5));
 
@@ -865,15 +900,16 @@ export class MarketplaceSearchService {
         features[3] = queryCategorySet.has(slot.category) ? 1 : 0;
       }
 
-      const createdTime = (slot as any).created_at
-        ? new Date((slot as any).created_at).getTime()
+      const slotWithCreatedAt = slot as Slot & { created_at?: unknown };
+      const createdTime = slotWithCreatedAt.created_at
+        ? new Date(slotWithCreatedAt.created_at as string | number).getTime()
         : null;
       if (createdTime) {
         const daysSinceCreation = (now - createdTime) / (1000 * 60 * 60 * 24);
         features[4] = Math.max(0, 1 - daysSinceCreation / 30);
       }
 
-      const slotTime = slot.startTime ?? now;
+      const slotTime = typeof slot.startTime === "number" ? slot.startTime : now;
       const hoursUntilSlot = (slotTime - now) / (1000 * 60 * 60);
       features[5] = Math.max(0, 1 - Math.abs(hoursUntilSlot) / (24 * 7));
 
