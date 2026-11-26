@@ -81,6 +81,17 @@ describe('generateRateLimitKey', () => {
     expect(generateRateLimitKey(req)).toBe(expected);
   });
 
+  it('uses one anonymous key for different raw forwarding headers', () => {
+    const first = generateRateLimitKey({
+      headers: { 'x-forwarded-for': '203.0.113.14' },
+    });
+    const second = generateRateLimitKey({
+      headers: { 'x-forwarded-for': '203.0.113.15', 'x-real-ip': '203.0.113.16' },
+    });
+    expect(first).toBe(generateRateLimitKey({}));
+    expect(second).toBe(first);
+  });
+
   it('handles missing or malformed values deterministically', () => {
     const anonymousHash = createHash('sha256').update('anonymous', 'utf8').digest('hex');
 
