@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { jest } from "@jest/globals";
 import request from "supertest";
 import {
@@ -333,5 +334,35 @@ describe("checkRedis", () => {
     // @ts-expect-error - Auto-fixed by script
     const result = await checkRedis(mockRedis(false));
     expect(result).toBe(false);
+  });
+});
+
+describe("liveness metadata and shutdown readiness", () => {
+  it("starts ready and switches to 503 when shutdown begins", async () => {
+    const { createApp } = await import("../app.js");
+    let shuttingDown = false;
+    const app = createApp({
+      enableDocs: false,
+      isShuttingDown: () => shuttingDown,
+    });
+
+    const ready = await request(app).get("/ready").expect(200);
+    expect(ready.body.status).toBe("ready");
+
+    shuttingDown = true;
+    const draining = await request(app).get("/ready").expect(503);
+    expect(draining.body).toEqual({ status: "draining" });
+  });
+
+  it("reports the package version and preserves strict health output", async () => {
+    const { createApp } = await import("../app.js");
+    const app = createApp({ enableDocs: false });
+    const { version } = createRequire(import.meta.url)("../../package.json") as { version: string };
+
+    const health = await request(app).get("/health").expect(200);
+    expect(health.body.version).toBe(version);
+
+    const strict = await request(app).get("/health").set("x-strict-health", "1").expect(200);
+    expect(strict.body).toEqual({ status: "ok", service: "chronopay-backend" });
   });
 });
