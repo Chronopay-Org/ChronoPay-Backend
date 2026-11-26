@@ -16,7 +16,6 @@ import {
 } from "./middleware/errorHandler.js";
 
 import { tracingMiddleware } from "./tracing/middleware.js";
-import { featureFlagContextMiddleware } from "./middleware/featureFlags.js";
 import { register, metricsMiddleware } from "./metrics.js";
 import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
 import { createRequestLogger } from "./middleware/requestLogger.js";
@@ -26,8 +25,6 @@ import { createBookingIntentsRouter } from "./routes/booking-intents.js";
 import { AmountUtils } from "./utils/amount.js";
 import checkoutRouter from "./routes/checkout.js";
 import discountCurvesRouter from "./routes/discountCurves.js";
-import { createContentNegotiationMiddleware } from "./middleware/contentNegotiation.js";
-import { createRequestLogger } from "./middleware/requestLogger.js";
 import type { Pool } from "pg";
 import type { RedisClient } from "./cache/redisClient.js";
 import { checkReadiness, checkDb, checkRedis } from "./health/readiness.js";
@@ -40,7 +37,6 @@ function isTruthyEnvValue(value: string | undefined): boolean {
 }
 
 // Import routers
-import checkoutRouter from "./routes/checkout.js";
 import {
   setCheckoutPaymentProvider,
 } from "./services/checkout.js";
@@ -76,6 +72,7 @@ import {
 // Import modules
 export interface AppFactoryOptions {
   requestTracker?: express.RequestHandler;
+  isShuttingDown?: () => boolean;
   apiKey?: string;
   enableDocs?: boolean;
   enableTestRoutes?: boolean;
@@ -87,6 +84,15 @@ export interface AppFactoryOptions {
   horizonContractService?: ContractService;
   kycProvider?: import("./services/kycProvider.js").KycProvider;
 }
+
+const packageVersion = (() => {
+  try {
+    const metadata = createRequire(import.meta.url)("../package.json") as { version?: unknown };
+    return typeof metadata.version === "string" ? metadata.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+})();
 
 let cachedSwaggerSpec: unknown | null = null;
 
@@ -314,7 +320,7 @@ export function createApp(options: AppFactoryOptions = {}) {
     const responseBody: Record<string, unknown> = {
       ...health,
       timestamp: new Date().toISOString(),
-      version: "1.0.0",
+      version: packageVersion,
     };
 
     if (options.horizonContractService) {
@@ -332,7 +338,10 @@ export function createApp(options: AppFactoryOptions = {}) {
   });
 
   app.get("/ready", (_req, res) => {
-    res.json({
+    if (options.isShuttingDown?.()) {
+      return res.status(503).json({ status: "draining" });
+    }
+    return res.json({
       status: "ready",
       service: "chronopay-backend",
       timestamp: new Date().toISOString(),

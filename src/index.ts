@@ -103,6 +103,7 @@ if (pinnedHash) {
 
 const app = createApp({
   requestTracker: lifecycle.trackRequests,
+  isShuttingDown: () => lifecycle.isShuttingDown,
   enableDocs: true,
   // Test-only routes (/__test__/explode, /api/v1/test/auth) are available in
   // the automated test environment. Every other environment — staging and
