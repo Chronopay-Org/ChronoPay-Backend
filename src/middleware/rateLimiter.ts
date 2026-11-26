@@ -27,7 +27,7 @@ import { fairQueueBurnRateTotal, fairQueueWaitTimeSeconds } from "../metrics.js"
  *   - Keys are namespaced and identifiable in Redis
  *   - IP fallback works when auth headers are absent
  */
-export function generateRateLimitKey(req: Request | null | undefined): string {
+export function generateRateLimitKey(req: Partial<Request> | null | undefined): string {
   const safeReq = req && typeof req === 'object' ? (req as Partial<Request> & { auth?: { userId?: unknown }; user?: { sub?: unknown; id?: unknown }; apiKeyId?: unknown }) : undefined;
 
   // Header-based identity (x-chronopay-user-id) — highest priority
@@ -50,7 +50,7 @@ export function generateRateLimitKey(req: Request | null | undefined): string {
 
   // IP address fallback — hash to avoid IPv6 detection and ensure consistent length.
   // Blank and malformed values fall back to a stable anonymous identity instead of crashing.
-  const ip = getClientIp(safeReq as any);
+  const ip = getClientIp(safeReq);
   const ipHash = createHash('sha256').update(ip, 'utf8').digest('hex');
   return `rl:ip:${ipHash}`;
 }
@@ -68,23 +68,13 @@ function isNonEmptyValue(value: unknown): boolean {
   return true;
 }
 
-// Helper to extract IP without referencing `req.ip` directly in the main function.
+// Express incorporates forwarded addresses into req.ip only through trust proxy.
 function getClientIp(req: Partial<Request> | undefined): string {
-  const anyReq = req as any;
-  const candidateIp = anyReq?.ip ?? anyReq?.socket?.remoteAddress ?? anyReq?.headers?.['x-forwarded-for'] ?? anyReq?.headers?.['x-real-ip'];
-
-  if (typeof candidateIp === 'string') {
-    const trimmed = candidateIp.trim();
-    return trimmed.length > 0 ? trimmed : 'anonymous';
-  }
-
-  if (Array.isArray(candidateIp) && candidateIp.length > 0) {
-    const first = candidateIp[0];
-    if (typeof first === 'string' && first.trim().length > 0) {
-      return first.trim();
+  for (const candidate of [req?.ip, req?.socket?.remoteAddress]) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
     }
   }
-
   return 'anonymous';
 }
 

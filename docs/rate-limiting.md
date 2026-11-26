@@ -132,7 +132,9 @@ Different principal types are isolated: a user cannot switch to an API key mid-s
 
 ### Trust Proxy and IP Spoofing
 
-When `TRUST_PROXY=true`, the application uses `X-Forwarded-For` to determine client IP. Ensure this setting is enabled **only** if you are behind a trusted load balancer that sanitizes the header. Otherwise, clients can spoof their IP to bypass limits.
+Set `TRUST_PROXY=true` when deploying behind a trusted load balancer that
+replaces incoming forwarding headers. Express then resolves `req.ip` through
+the trusted proxy. The limiter uses that value or the socket address directly.
 
 ### Shared Store Across Instances
 
