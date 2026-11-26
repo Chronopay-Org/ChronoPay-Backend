@@ -97,6 +97,25 @@ describe("GraphQL Persisted Query Allowlist", () => {
     expect(res.body.success).toBe(true);
   });
 
+  it("should reject an over-budget query with 403 and expose cost metrics on /metrics", async () => {
+    // Build a deeply nested query that exceeds DEFAULT_BUDGET.maxQueryCost (100)
+    const fields = Array.from({ length: 60 }, (_, i) => `f${i}`).join(" ");
+    const expensiveQuery = `query Expensive { a { b { ${fields} } } }`;
+
+    const res = await request(app)
+      .post("/api/v1/graphql")
+      .send({ query: expensiveQuery });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("GRAPHQL_COST_EXCEEDED");
+    expect(res.body.cost).toBeGreaterThan(res.body.budget);
+
+    const metricsRes = await request(app).get("/metrics");
+    expect(metricsRes.status).toBe(200);
+    expect(metricsRes.text).toContain("graphql_cost_rejection_total");
+    expect(metricsRes.text).toContain("graphql_query_cost");
+  });
+
   it("should handle a completely invalid request", async () => {
     const res = await request(app)
       .post("/api/v1/graphql")

@@ -251,3 +251,12 @@ export class TreasuryBalancePoller {
     }
   }
 }
+
+export {
+  createHorizonBalanceProvider,
+  decimalBalanceToStroops,
+  type HorizonAccountBalancesResponse,
+  type HorizonBalanceProviderOptions,
+  type HorizonBalanceRecord,
+  type HorizonHostManagerLike,
+} from "./horizonBalanceProvider.js";
