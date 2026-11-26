@@ -260,7 +260,9 @@ describe("createApp", () => {
 
     it("does not throw when enableTestRoutes is false in production", async () => {
       const originalNodeEnv = process.env.NODE_ENV;
+      const originalAllowMockKyc = process.env.ALLOW_MOCK_KYC;
       process.env.NODE_ENV = "production";
+      process.env.ALLOW_MOCK_KYC = "true";
       jest.resetModules();
 
       const { createApp } = await import("../app.js");
@@ -275,6 +277,11 @@ describe("createApp", () => {
       expect(testRes.status).toBe(404);
 
       process.env.NODE_ENV = originalNodeEnv;
+      if (originalAllowMockKyc === undefined) {
+        delete process.env.ALLOW_MOCK_KYC;
+      } else {
+        process.env.ALLOW_MOCK_KYC = originalAllowMockKyc;
+      }
     });
   });
 

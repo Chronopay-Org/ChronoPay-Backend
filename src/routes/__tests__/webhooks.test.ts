@@ -1,11 +1,12 @@
 // @ts-nocheck
-import { jest, beforeAll, beforeEach } from "@jest/globals";
+import { jest, beforeAll, beforeEach, afterEach } from "@jest/globals";
 import { createHmac } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { registerWebhookRoutes, _resetProcessedTransactions } from "../webhooks.js";
 import { _settlements } from "../../services/settlementReconciler.js";
 import { WebhookIdempotencyStore } from "../../services/webhookIdempotencyStore.js";
+import { logger } from "../../utils/logger.js";
 
 const SECRET = "test-webhook-secret";
 
@@ -307,6 +308,89 @@ describe("POST /api/v1/webhooks/settlements", () => {
 
       expect(res.status).toBe(200);
       expect(_settlements.has("txn-001")).toBe(false);
+    });
+  });
+
+  // ── KYC provider production guard (#1493) ────────────────────────────────
+
+  describe("registerWebhookRoutes KYC provider guard", () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalAllowMockKyc = process.env.ALLOW_MOCK_KYC;
+    let infoSpy: ReturnType<typeof jest.spyOn> | undefined;
+
+    afterEach(() => {
+      if (originalNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+      if (originalAllowMockKyc === undefined) {
+        delete process.env.ALLOW_MOCK_KYC;
+      } else {
+        process.env.ALLOW_MOCK_KYC = originalAllowMockKyc;
+      }
+      infoSpy?.mockRestore();
+      infoSpy = undefined;
+    });
+
+    it("uses MockKycProvider by default in non-production and logs provider name", () => {
+      process.env.NODE_ENV = "development";
+      delete process.env.ALLOW_MOCK_KYC;
+      infoSpy = jest.spyOn(logger, "info").mockImplementation(() => logger);
+
+      const devApp = express();
+      expect(() => registerWebhookRoutes(devApp, { signingSecret: SECRET })).not.toThrow();
+      expect(infoSpy).toHaveBeenCalledWith(
+        { provider: "MockKycProvider" },
+        "KYC webhook provider registered: MockKycProvider",
+      );
+    });
+
+    it("throws in production when no kycProvider is supplied", () => {
+      process.env.NODE_ENV = "production";
+      delete process.env.ALLOW_MOCK_KYC;
+
+      const prodApp = express();
+      expect(() => registerWebhookRoutes(prodApp, { signingSecret: SECRET })).toThrow(
+        /KYC webhook provider must be configured in production/,
+      );
+    });
+
+    it("allows MockKycProvider in production when ALLOW_MOCK_KYC=true", () => {
+      process.env.NODE_ENV = "production";
+      process.env.ALLOW_MOCK_KYC = "true";
+      infoSpy = jest.spyOn(logger, "info").mockImplementation(() => logger);
+
+      const stagingApp = express();
+      expect(() => registerWebhookRoutes(stagingApp, { signingSecret: SECRET })).not.toThrow();
+      expect(infoSpy).toHaveBeenCalledWith(
+        { provider: "MockKycProvider" },
+        "KYC webhook provider registered: MockKycProvider",
+      );
+    });
+
+    it("accepts an explicit kycProvider in production and logs its name", () => {
+      process.env.NODE_ENV = "production";
+      delete process.env.ALLOW_MOCK_KYC;
+      infoSpy = jest.spyOn(logger, "info").mockImplementation(() => logger);
+
+      const prodApp = express();
+      const customProvider = {
+        name: "SumsubKycProvider",
+        parseWebhook: () => ({
+          supplierId: "s1",
+          kycRef: "ref-1",
+          status: "verified" as const,
+        }),
+      };
+
+      expect(() =>
+        registerWebhookRoutes(prodApp, { signingSecret: SECRET, kycProvider: customProvider }),
+      ).not.toThrow();
+      expect(infoSpy).toHaveBeenCalledWith(
+        { provider: "SumsubKycProvider" },
+        "KYC webhook provider registered: SumsubKycProvider",
+      );
     });
   });
 });

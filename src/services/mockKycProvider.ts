@@ -8,6 +8,14 @@ const KYC_REF_MAX_LENGTH = 255;
 export class MockKycProvider implements KycProvider {
   name = "MockKycProvider";
 
+  constructor() {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_MOCK_KYC !== "true") {
+      throw new Error(
+        "MockKycProvider cannot be used in production unless ALLOW_MOCK_KYC=true is set",
+      );
+    }
+  }
+
   parseWebhook(body: any): KycWebhookPayload {
     if (!body || typeof body !== "object") {
       throw new KycInvalidPayloadError("Missing required fields");
