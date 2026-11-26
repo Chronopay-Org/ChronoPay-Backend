@@ -11,7 +11,16 @@
  * mutate state — that responsibility belongs to the EscrowDriftReconciler.
  */
 
-import type { EscrowEvent, EscrowEventKind, EscrowLedgerInfo } from "../scheduler/escrowEventTypes.js";
+import { xdr, scValToNative } from "@stellar/stellar-sdk";
+import {
+  EscrowEventValidationError,
+  validateEscrowEventBatch,
+  type EscrowEvent,
+  type EscrowEventKind,
+  type EscrowLedgerInfo,
+} from "../scheduler/escrowEventTypes.js";
+import { escrowReaderMalformedEventsTotal } from "../metrics.js";
+import { logger } from "../utils/logger.js";
 
 export type { EscrowLedgerInfo } from "../scheduler/escrowEventTypes.js";
 
@@ -82,7 +91,46 @@ export interface HorizonEscrowReaderOptions {
   id: string;
   /** Full Horizon API base URL (e.g. https://horizon.stellar.org). */
   horizonUrl: string;
+  /** Soroban JSON-RPC endpoint URL for getEvents queries. */
+  sorobanRpcUrl?: string;
+  /** Soroban C-address of the escrow contract to filter events for. */
+  contractId?: string;
+  /** Maximum number of getEvents pages to fetch per read. Default 10. */
+  maxPages?: number;
+  /** Page size (pagination.limit) per getEvents request. Default 100. */
+  pageLimit?: number;
+  /** Optional fetch implementation (primarily for testing). */
+  fetchFn?: typeof fetch;
 }
+
+interface SorobanRpcRawEvent {
+  type?: string;
+  ledger?: number;
+  ledgerClosedAt?: string;
+  contractId?: string;
+  id?: string;
+  pagingToken?: string;
+  txHash?: string;
+  eventIndex?: number;
+  topic?: unknown[];
+  value?: unknown;
+}
+
+interface SorobanRpcGetEventsResult {
+  events?: SorobanRpcRawEvent[];
+  latestLedger?: number;
+  cursor?: string;
+}
+
+interface SorobanRpcResponse<T> {
+  jsonrpc: string;
+  id: number | string;
+  result?: T;
+  error?: { code: number; message: string; data?: unknown };
+}
+
+const DEFAULT_MAX_PAGES = 10;
+const DEFAULT_PAGE_LIMIT = 100;
 
 /**
  * Horizon-backed implementation of IEscrowReader.
@@ -94,10 +142,20 @@ export interface HorizonEscrowReaderOptions {
 export class HorizonEscrowReader implements IEscrowReader {
   public readonly id: string;
   private readonly horizonUrl: string;
+  private readonly sorobanRpcUrl?: string;
+  private readonly contractId?: string;
+  private readonly maxPages: number;
+  private readonly pageLimit: number;
+  private readonly fetchFn: typeof fetch;
 
   constructor(options: HorizonEscrowReaderOptions) {
     this.id = options.id;
     this.horizonUrl = options.horizonUrl.replace(/\/$/, "");
+    this.sorobanRpcUrl = options.sorobanRpcUrl?.replace(/\/$/, "");
+    this.contractId = options.contractId;
+    this.maxPages = Math.max(1, options.maxPages ?? DEFAULT_MAX_PAGES);
+    this.pageLimit = Math.max(1, options.pageLimit ?? DEFAULT_PAGE_LIMIT);
+    this.fetchFn = options.fetchFn ?? fetch;
   }
 
   async getSlotEvents(slotId: string, startLedger?: number): Promise<EscrowEvent[]> {
@@ -178,15 +236,171 @@ export class HorizonEscrowReader implements IEscrowReader {
 
   // ─── Private helpers ───────────────────────────────────────────────────────
 
-  private async fetchEvents(_startLedger: number): Promise<EscrowEvent[]> {
-    // TODO: Wire to Soroban RPC getEvents when the escrow contract event
-    // index is available. A production deployment MUST replace this stub
-    // with a real RPC call that fetches, validates, and returns events.
-    return [];
+  private async fetchEvents(startLedger: number): Promise<EscrowEvent[]> {
+    if (!this.sorobanRpcUrl) {
+      return [];
+    }
+
+    const collected: EscrowEvent[] = [];
+    let cursor: string | undefined;
+
+    for (let page = 0; page < this.maxPages; page++) {
+      const params: Record<string, unknown> = cursor
+        ? { pagination: { cursor, limit: this.pageLimit } }
+        : { startLedger, pagination: { limit: this.pageLimit } };
+
+      if (this.contractId) {
+        params.filters = [{ type: "contract", contractIds: [this.contractId] }];
+      }
+
+      const rpcResponse = await this.postJsonRpc<SorobanRpcGetEventsResult>(
+        this.sorobanRpcUrl,
+        "getEvents",
+        params,
+      );
+
+      if (rpcResponse.error) {
+        throw new Error(
+          `[${this.id}] Soroban RPC getEvents error (${rpcResponse.error.code}): ${rpcResponse.error.message}`,
+        );
+      }
+
+      const result = rpcResponse.result;
+      if (!result || !Array.isArray(result.events)) {
+        throw new Error(`[${this.id}] Soroban RPC getEvents returned invalid result payload`);
+      }
+
+      if (result.events.length === 0) {
+        break;
+      }
+
+      const latestLedgerSeq = result.latestLedger ?? 0;
+      const mapped = result.events.map((raw, idx) => this.mapRawRpcEvent(raw, idx));
+
+      collected.push(...this.validatePageEvents(mapped, latestLedgerSeq));
+
+      if (!result.cursor || result.cursor === cursor) {
+        break;
+      }
+      cursor = result.cursor;
+    }
+
+    collected.sort((a, b) => a.ledgerSeq - b.ledgerSeq || a.eventIndex - b.eventIndex);
+    return collected;
+  }
+
+  private validatePageEvents(
+    candidates: Record<string, unknown>[],
+    latestLedgerSeq: number,
+  ): EscrowEvent[] {
+    try {
+      return validateEscrowEventBatch({ events: candidates, latestLedgerSeq }).events;
+    } catch (err) {
+      if (!(err instanceof EscrowEventValidationError)) {
+        throw err;
+      }
+    }
+
+    const valid: EscrowEvent[] = [];
+    for (const candidate of candidates) {
+      try {
+        const parsed = validateEscrowEventBatch({
+          events: [candidate],
+          latestLedgerSeq,
+        });
+        valid.push(...parsed.events);
+      } catch (err) {
+        if (err instanceof EscrowEventValidationError) {
+          escrowReaderMalformedEventsTotal.labels(this.id).inc();
+          logger.warn(
+            { readerId: this.id, field: err.field, error: err.message },
+            `[${this.id}] Dropping malformed escrow event from RPC response`,
+          );
+          continue;
+        }
+        throw err;
+      }
+    }
+    return valid;
+  }
+
+  private mapRawRpcEvent(raw: SorobanRpcRawEvent, fallbackIndex: number): Record<string, unknown> {
+    const decodedTopics = Array.isArray(raw.topic) ? raw.topic.map(decodeScVal) : [];
+    const decodedValue = decodeScVal(raw.value);
+    const valueRecord =
+      decodedValue && typeof decodedValue === "object" && !Array.isArray(decodedValue)
+        ? (decodedValue as Record<string, unknown>)
+        : {};
+
+    const rawKind = decodedTopics[0] ?? valueRecord.kind;
+    const kind = normalizeEventKind(rawKind);
+
+    const slotId =
+      valueRecord.slotId ??
+      valueRecord.slot_id ??
+      decodedTopics[1];
+
+    const bookingIntentId =
+      valueRecord.bookingIntentId ??
+      valueRecord.booking_intent_id ??
+      decodedTopics[2];
+
+    const rawAmount = valueRecord.amount;
+    const amount =
+      rawAmount !== undefined && rawAmount !== null ? String(rawAmount) : undefined;
+
+    const eventIndex =
+      raw.eventIndex !== undefined
+        ? raw.eventIndex
+        : parseEventIndexFromId(raw.id ?? raw.pagingToken, fallbackIndex);
+
+    return {
+      kind,
+      txHash: raw.txHash,
+      eventIndex,
+      ledgerSeq: raw.ledger,
+      closeTime: raw.ledgerClosedAt,
+      contractAddress: raw.contractId ?? this.contractId,
+      slotId,
+      bookingIntentId:
+        typeof bookingIntentId === "string" && bookingIntentId.length > 0
+          ? bookingIntentId
+          : undefined,
+      amount,
+    };
+  }
+
+  private async postJsonRpc<T>(
+    url: string,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<SorobanRpcResponse<T>> {
+    const response = await this.fetchFn(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": `chronopay-escrow-reader/${this.id}`,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `[${this.id}] Soroban RPC HTTP ${response.status}: ${await response.text().catch(() => "unknown error")}`,
+      );
+    }
+
+    return (await response.json()) as SorobanRpcResponse<T>;
   }
 
   private async fetchJson<T>(url: string): Promise<T> {
-    const response = await fetch(url, {
+    const response = await this.fetchFn(url, {
       headers: {
         Accept: "application/json",
         "User-Agent": `chronopay-escrow-reader/${this.id}`,
@@ -201,4 +415,37 @@ export class HorizonEscrowReader implements IEscrowReader {
 
     return (await response.json()) as T;
   }
+}
+
+function decodeScVal(raw: unknown): unknown {
+  if (typeof raw !== "string" || raw.length === 0) {
+    return raw;
+  }
+  try {
+    const scVal = xdr.ScVal.fromXDR(raw, "base64");
+    return scValToNative(scVal);
+  } catch {
+    return raw;
+  }
+}
+
+function normalizeEventKind(raw: unknown): unknown {
+  if (typeof raw !== "string" || raw.length === 0) {
+    return raw;
+  }
+  const trimmed = raw.trim();
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+function parseEventIndexFromId(id: string | undefined, fallback: number): number {
+  if (typeof id === "string") {
+    const dash = id.lastIndexOf("-");
+    if (dash !== -1) {
+      const parsed = Number.parseInt(id.slice(dash + 1), 10);
+      if (Number.isInteger(parsed) && parsed >= 0) {
+        return parsed;
+      }
+    }
+  }
+  return fallback;
 }
