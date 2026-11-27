@@ -1,25 +1,25 @@
-// @ts-nocheck
-/**
+﻿/**
  * quotaEnforcement.test.ts
  *
  * Focused unit tests for the enforceQuota middleware.
  *
  * Strategy:
- *  - Mock all external dependencies (checkAndConsume, SqlQuotaStore,
- *    getPool, logger) using jest.unstable_mockModule so the tests work
+ *  - Mock all external dependencies (checkAndConsume, getQuotaStore,
+ *    logger) using jest.unstable_mockModule so the tests work
  *    under Jest's experimental ESM support.
+ *  - Use setQuotaStoreFactory() to inject a fake store per test.
  *  - Exercise every branch documented in quotaEnforcement.ts:
- *      1. No apiKeyId  → passes through silently (next() called, no 429)
- *      2. Allowed      → quota headers attached + next()
- *      3. Blocked daily  → 429 with daily error message
- *      4. Blocked monthly → 429 with monthly error message
- *      5. checkAndConsume throws → fail-open (next() called), error logged
+ *      1. No apiKeyId  -> passes through silently (next() called, no 429)
+ *      2. Allowed      -> quota headers attached + next()
+ *      3. Blocked daily  -> 429 with daily error message
+ *      4. Blocked monthly -> 429 with monthly error message
+ *      5. checkAndConsume throws -> fail-open (next() called), error logged
  */
 
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import type { Request, Response, NextFunction } from "express";
 
-// ─── Shared mock state (mutated per test in beforeEach) ───────────────────────
+// --- Shared mock state (mutated per test in beforeEach) ----------------------
 
 const mockCheckAndConsume = jest.fn();
 const mockGetPool = jest.fn();
@@ -27,18 +27,19 @@ const mockLoggerError = jest.fn();
 const mockQuotaCheckFailureInc = jest.fn();
 let mockQuotaFailMode: "open" | "closed" = "open";
 
-// SqlQuotaStore constructor — we capture the args to verify pool is passed in
+// SqlQuotaStore constructor -- we capture the args to verify pool is passed in
 let lastStoreArg: unknown = undefined;
 let storeConstructorCount = 0;
 
-// ─── Module mocks ─────────────────────────────────────────────────────────────
+// --- Module mocks ------------------------------------------------------------
 
 jest.unstable_mockModule("../../services/partnerQuotaService.js", () => ({
   checkAndConsume: mockCheckAndConsume,
+  getQuotaStore: jest.fn(() => ({})),
   SqlQuotaStore: function (pool: unknown) {
     storeConstructorCount += 1;
     lastStoreArg = pool;
-    return {}; // return a plain object as the store
+    return {};
   },
 }));
 
@@ -73,7 +74,7 @@ jest.unstable_mockModule("../../metrics.js", () => ({
 const { enforceQuota, setQuotaStoreFactory } = await import("../quotaEnforcement.js");
 const { SqlQuotaStore } = await import("../../services/partnerQuotaService.js");
 
-// ─── Shared fixture builders ──────────────────────────────────────────────────
+// --- Shared fixture builders -------------------------------------------------
 
 const BASE_STATUS = {
   tokenId: "tok_test",
@@ -121,17 +122,17 @@ function makeRes() {
   return res;
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// --- Tests -------------------------------------------------------------------
 
 describe("enforceQuota middleware", () => {
   let next: NextFunction;
   const fakePool = { _fake: "pool" };
 
   beforeEach(() => {
-    next = jest.fn();
+    next = jest.fn() as unknown as NextFunction;
     lastStoreArg = undefined;
     storeConstructorCount = 0;
-    setQuotaStoreFactory(() => new SqlQuotaStore(mockGetPool()));
+    setQuotaStoreFactory(() => new (SqlQuotaStore as any)(mockGetPool()));
     mockGetPool.mockReturnValue(fakePool);
     mockCheckAndConsume.mockResolvedValue(makeAllowedResult());
     mockLoggerError.mockReset();
@@ -143,7 +144,7 @@ describe("enforceQuota middleware", () => {
     jest.clearAllMocks();
   });
 
-  // ── Branch 1: no apiKeyId ──────────────────────────────────────────────────
+  // -- Branch 1: no apiKeyId --------------------------------------------------
 
   describe("when req.apiKeyId is absent", () => {
     it("calls next() without touching checkAndConsume", async () => {
@@ -153,7 +154,7 @@ describe("enforceQuota middleware", () => {
       await enforceQuota(req as Request, res as Response, next);
 
       expect(next).toHaveBeenCalledTimes(1);
-      expect(next).toHaveBeenCalledWith(); // called with no error argument
+      expect(next).toHaveBeenCalledWith();
       expect(mockCheckAndConsume).not.toHaveBeenCalled();
     });
 
@@ -188,7 +189,7 @@ describe("enforceQuota middleware", () => {
     });
   });
 
-  // ── Branch 2: request allowed ─────────────────────────────────────────────
+  // -- Branch 2: request allowed ----------------------------------------------
 
   describe("when checkAndConsume returns allowed = true", () => {
     it("calls next() with no arguments", async () => {
@@ -291,7 +292,7 @@ describe("enforceQuota middleware", () => {
     });
   });
 
-  // ── Branch 3: daily quota exceeded ────────────────────────────────────────
+  // -- Branch 3: daily quota exceeded -----------------------------------------
 
   describe("when daily quota is exceeded", () => {
     beforeEach(() => {
@@ -328,7 +329,7 @@ describe("enforceQuota middleware", () => {
       expect(body.error).toMatch(/daily/i);
     });
 
-    it("embeds quota status data (dailyUsed, dailyLimit, monthlyUsed, etc.) in response", async () => {
+    it("embeds quota status data in response", async () => {
       const req = makeReq("tok_abc");
       const res = makeRes();
 
@@ -364,7 +365,7 @@ describe("enforceQuota middleware", () => {
     });
   });
 
-  // ── Branch 4: monthly quota exceeded ──────────────────────────────────────
+  // -- Branch 4: monthly quota exceeded ---------------------------------------
 
   describe("when monthly quota is exceeded", () => {
     beforeEach(() => {
@@ -415,7 +416,7 @@ describe("enforceQuota middleware", () => {
     });
   });
 
-  // ── Branch 5: checkAndConsume throws (fail-open) ──────────────────────────
+  // -- Branch 5: checkAndConsume throws (fail-open) ---------------------------
 
   describe("when checkAndConsume throws an error", () => {
     it("calls next() to fail open so the request is not dropped", async () => {
@@ -434,8 +435,8 @@ describe("enforceQuota middleware", () => {
       await enforceQuota(makeReq("tok_abc") as Request, makeRes() as Response, next);
 
       expect(mockQuotaCheckFailureInc).toHaveBeenCalledTimes(1);
-      expect((await import("../../metrics.js")).partnerQuotaCheckFailures.labels)
-        .toHaveBeenCalledWith("open");
+      const { partnerQuotaCheckFailures } = await import("../../metrics.js");
+      expect(partnerQuotaCheckFailures.labels).toHaveBeenCalledWith("open");
     });
 
     it("does not send any HTTP response when failing open", async () => {
@@ -475,8 +476,8 @@ describe("enforceQuota middleware", () => {
         await enforceQuota(makeReq("tok_abc") as Request, makeRes() as Response, next);
 
         expect(mockQuotaCheckFailureInc).toHaveBeenCalledTimes(1);
-        expect((await import("../../metrics.js")).partnerQuotaCheckFailures.labels)
-          .toHaveBeenCalledWith("closed");
+        const { partnerQuotaCheckFailures } = await import("../../metrics.js");
+        expect(partnerQuotaCheckFailures.labels).toHaveBeenCalledWith("closed");
       });
     });
 
@@ -509,7 +510,7 @@ describe("enforceQuota middleware", () => {
       );
     });
 
-    it("handles non-Error throws (string) gracefully — still fails open", async () => {
+    it("handles non-Error throws (string) gracefully -- still fails open", async () => {
       mockCheckAndConsume.mockRejectedValue("quota store unavailable");
       const req = makeReq("tok_abc");
       const res = makeRes();
@@ -534,10 +535,10 @@ describe("enforceQuota middleware", () => {
     });
   });
 
-  // ── Boundary / edge cases ─────────────────────────────────────────────────
+  // -- Boundary / edge cases --------------------------------------------------
 
   describe("boundary and edge cases", () => {
-    it("treats exceeded = 'both' as 'monthly' (source uses ternary: !== 'daily' → monthly)", async () => {
+    it("treats exceeded = 'both' as 'monthly' (ternary: !== 'daily' -> monthly)", async () => {
       mockCheckAndConsume.mockResolvedValue({
         allowed: false,
         exceeded: "both",

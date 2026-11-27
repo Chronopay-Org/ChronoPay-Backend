@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * partnerQuotaService.ts
  *
@@ -18,6 +17,7 @@
 
 import { partnerQuotaApproachingLimit, partnerQuotaExceededTotal } from "../metrics.js";
 import { logger } from "../utils/logger.js";
+import { getPool } from "../db/connection.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -244,6 +244,34 @@ export class SqlQuotaStore implements QuotaStore {
       [tokenId],
     );
   }
+}
+
+// ─── Singleton quota store ────────────────────────────────────────────────────
+
+/**
+ * Returns a lazily created, process-wide SqlQuotaStore singleton.
+ *
+ * Both the route handler and the enforcement middleware call this instead of
+ * constructing their own store, so only one SqlQuotaStore is ever built per
+ * process (one pool, one set of prepared-statement caches).
+ *
+ * Call resetQuotaStore() in tests to inject a fresh store (e.g. InMemoryQuotaStore).
+ */
+let _quotaStore: QuotaStore | undefined;
+
+export function getQuotaStore(): QuotaStore {
+  if (!_quotaStore) {
+    _quotaStore = new SqlQuotaStore(getPool());
+  }
+  return _quotaStore;
+}
+
+/**
+ * Replace the singleton (for testing or pool-injection).
+ * Pass undefined to clear and allow lazy re-creation on the next call.
+ */
+export function resetQuotaStore(store?: QuotaStore): void {
+  _quotaStore = store;
 }
 
 // ─── In-memory store (for testing) ────────────────────────────────────────────

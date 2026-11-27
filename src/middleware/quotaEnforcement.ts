@@ -12,37 +12,40 @@
  *   5. Increments the counter.
  */
 
-import type { Request, Response, NextFunction } from "express";
-import {
-  checkAndConsume,
-  SqlQuotaStore,
-  type QuotaStore,
-} from "../services/partnerQuotaService.js";
-import { getPool } from "../db/connection.js";
+import { Request, Response, NextFunction } from "express";
+import { checkAndConsume, getQuotaStore, QuotaStore } from "../services/partnerQuotaService.js";
 import { logger } from "../utils/logger.js";
 import { configService } from "../config/config.service.js";
 import { partnerQuotaCheckFailures } from "../metrics.js";
 
 const QUOTA_RETRY_AFTER_SECONDS = 30;
 
-export type QuotaStoreFactory = () => QuotaStore;
+// ─── Store factory (overridable for tests) ────────────────────────────────────
 
-let storeFactory: QuotaStoreFactory = () => new SqlQuotaStore(getPool());
-let store: QuotaStore | null = null;
+type StoreFactory = () => QuotaStore;
 
-/** Returns the process-wide quota store, creating it on first use. */
-function getStore(): QuotaStore {
-  if (!store) {
-    store = storeFactory();
+let _storeFactory: StoreFactory = getQuotaStore;
+
+/**
+ * Override the store factory used by enforceQuota.
+ * Call this in test setup to inject a fake or in-memory store.
+ * Resets the cached singleton so the next request uses the new factory.
+ */
+export function setQuotaStoreFactory(factory: StoreFactory): void {
+  _storeFactory = factory;
+  _cachedStore = undefined;
+}
+
+let _cachedStore: QuotaStore | undefined;
+
+function resolveStore(): QuotaStore {
+  if (!_cachedStore) {
+    _cachedStore = _storeFactory();
   }
-  return store;
+  return _cachedStore;
 }
 
-/** Test hook: replace the store factory and discard the cached store. */
-export function setQuotaStoreFactory(factory: QuotaStoreFactory): void {
-  storeFactory = factory;
-  store = null;
-}
+// ─── Middleware ───────────────────────────────────────────────────────────────
 
 export async function enforceQuota(
   req: Request,
@@ -59,7 +62,8 @@ export async function enforceQuota(
   }
 
   try {
-    const result = await checkAndConsume(tokenId, getStore());
+    const store = resolveStore();
+    const result = await checkAndConsume(tokenId, store);
 
     if (!result.allowed) {
       const limitType = result.exceeded === "daily" ? "daily" : "monthly";
