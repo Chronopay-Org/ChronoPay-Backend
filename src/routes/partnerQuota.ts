@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * partnerQuota.ts
  *
@@ -12,8 +11,7 @@
  */
 
 import { Router, Request, Response } from "express";
-import { getQuotaStatus, SqlQuotaStore } from "../services/partnerQuotaService.js";
-import { getPool } from "../db/connection.js";
+import { getQuotaStatus, getQuotaStore } from "../services/partnerQuotaService.js";
 
 const router = Router();
 
@@ -68,21 +66,21 @@ const router = Router();
  *       401:
  *         description: Missing or invalid API key
  */
-router.get("/quota", async (req: Request, res: Response) => {
+router.get("/quota", async (req: Request, res: Response): Promise<void> => {
   try {
     // The apiKeyAuth middleware populates req.apiKeyId.
     // If not present, the request must identify via other means (header-based auth).
-    const tokenId = req.apiKeyId ?? req.auth?.userId;
+    const tokenId: string | undefined = req.apiKeyId ?? req.auth?.userId;
 
     if (!tokenId) {
-      return res.status(401).json({
+      res.status(401).json({
         success: false,
         error: "Authentication required. Provide an API key via x-api-key header.",
       });
+      return;
     }
 
-    const pool = getPool();
-    const store = new SqlQuotaStore(pool);
+    const store = getQuotaStore();
     const status = await getQuotaStatus(tokenId, store);
 
     res.json({

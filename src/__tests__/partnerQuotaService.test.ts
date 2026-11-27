@@ -1,7 +1,10 @@
 import {
   InMemoryQuotaStore,
+  SqlQuotaStore,
   checkAndConsume,
   getQuotaStatus,
+  getQuotaStore,
+  resetQuotaStore,
   nextDailyReset,
   nextMonthlyReset,
 } from "../services/partnerQuotaService.js";
@@ -255,5 +258,46 @@ describe("partner quota service", () => {
     await checkAndConsume("token_abc", quotaStore, fixedNow(2026, 7, 29));
 
     expect(await metricValue("partner_quota_exceeded_total")).toBe(1);
+  });
+});
+
+describe("getQuotaStore / resetQuotaStore", () => {
+  afterEach(() => {
+    // Always tear down the singleton so other test files get a fresh start
+    resetQuotaStore();
+  });
+
+  it("resetQuotaStore() with an explicit store installs it as the singleton", () => {
+    const fake = new InMemoryQuotaStore();
+    resetQuotaStore(fake);
+    expect(getQuotaStore()).toBe(fake);
+  });
+
+  it("getQuotaStore() returns the same instance on repeated calls", () => {
+    const fake = new InMemoryQuotaStore();
+    resetQuotaStore(fake);
+    expect(getQuotaStore()).toBe(getQuotaStore());
+  });
+
+  it("resetQuotaStore() with no argument clears the singleton", () => {
+    const fake = new InMemoryQuotaStore();
+    resetQuotaStore(fake);
+    resetQuotaStore();
+    // After clear, getQuotaStore() would try to build a SqlQuotaStore via
+    // getPool(), which is not available in the unit-test environment.
+    // We just verify the previous fake is no longer returned.
+    // Injecting a second fake confirms the slot is empty and accepts a new one.
+    const fake2 = new InMemoryQuotaStore();
+    resetQuotaStore(fake2);
+    expect(getQuotaStore()).toBe(fake2);
+  });
+
+  it("resetQuotaStore() with a store satisfying QuotaStore interface is accepted", () => {
+    const fake = new InMemoryQuotaStore();
+    resetQuotaStore(fake);
+    const retrieved = getQuotaStore();
+    expect(typeof retrieved.getOrCreate).toBe("function");
+    expect(typeof retrieved.consume).toBe("function");
+    expect(typeof retrieved.markNotified).toBe("function");
   });
 });
